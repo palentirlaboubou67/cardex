@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Cardex</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="ball"></span>Cardex</div>
+    <button class="icon-btn" id="btn-backup" aria-label="Sauvegarde">
+      <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <!-- SCANNER -->
+    <section class="view active" id="view-scan">
+      <div class="camera">
+        <video id="video" playsinline muted></video>
+        <div class="guide" id="guide">
+          <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+          <div class="scanline"></div>
+        </div>
+        <div class="camera-hint" id="camera-hint">Place la carte dans le cadre, bien à plat et éclairée</div>
+        <div class="camera-off" id="camera-off">
+          <div class="camera-off-icon">
+            <svg viewBox="0 0 24 24"><path d="M3 8a2 2 0 012-2h2l2-2h6l2 2h2a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </div>
+          <p id="camera-off-text">Scanne tes cartes avec la caméra</p>
+          <button class="btn primary" id="btn-start-cam">Activer la caméra</button>
+        </div>
+      </div>
+      <div class="scan-actions">
+        <label class="round-btn" for="file-input" aria-label="Choisir une photo">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+        </label>
+        <input type="file" id="file-input" accept="image/*" capture="environment" hidden>
+        <button class="shutter" id="btn-shutter" aria-label="Scanner"><span></span></button>
+        <button class="round-btn" id="btn-torch" aria-label="Lampe" disabled>
+          <svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>
+        </button>
+      </div>
+      <div class="scan-status" id="scan-status"></div>
+      <div id="scan-results"></div>
+    </section>
+
+    <!-- RECHERCHE -->
+    <section class="view" id="view-search">
+      <h1>Rechercher</h1>
+      <div class="searchbox">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input id="search-input" type="search" placeholder="Nom de la carte (ex. Dracaufeu)" autocomplete="off">
+      </div>
+      <div class="grid" id="search-results"></div>
+    </section>
+
+    <!-- COLLECTION -->
+    <section class="view" id="view-collection">
+      <h1>Ma collection</h1>
+      <div class="stats" id="stats"></div>
+      <div class="toolbar">
+        <div class="searchbox small">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <input id="col-filter" type="search" placeholder="Filtrer" autocomplete="off">
+        </div>
+        <select id="col-sort">
+          <option value="recent">Récentes</option>
+          <option value="name">Nom</option>
+          <option value="set">Série</option>
+          <option value="price">Valeur</option>
+        </select>
+      </div>
+      <div class="grid" id="col-grid"></div>
+    </section>
+
+    <!-- SÉRIES -->
+    <section class="view" id="view-sets">
+      <h1>Séries</h1>
+      <div class="toolbar">
+        <div class="searchbox small">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <input id="sets-filter" type="search" placeholder="Chercher une série" autocomplete="off">
+        </div>
+        <label class="toggle"><input type="checkbox" id="sets-mine"><span>Les miennes</span></label>
+      </div>
+      <div class="set-list" id="set-list"></div>
+    </section>
+
+    <!-- DÉTAIL D'UNE SÉRIE -->
+    <section class="view" id="view-set">
+      <button class="back" id="set-back">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Séries
+      </button>
+      <div id="set-head"></div>
+      <div class="chips" id="set-chips">
+        <button class="chip active" data-f="all">Toutes</button>
+        <button class="chip" data-f="owned">Possédées</button>
+        <button class="chip" data-f="missing">Manquantes</button>
+      </div>
+      <div class="grid" id="set-grid"></div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab active" data-view="scan">
+      <svg viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 012-2h2M16 4h2a2 2 0 012 2v2M20 16v2a2 2 0 01-2 2h-2M8 20H6a2 2 0 01-2-2v-2M4 12h16"/></svg>Scanner
+    </button>
+    <button class="tab" data-view="search">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Recherche
+    </button>
+    <button class="tab" data-view="collection">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="9" rx="1.5"/><rect x="3" y="15" width="7" height="6" rx="1.5"/><rect x="14" y="15" width="7" height="6" rx="1.5"/></svg>Collection
+    </button>
+    <button class="tab" data-view="sets">
+      <svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Séries
+    </button>
+  </nav>
+
+  <div class="backdrop" id="backdrop"></div>
+  <div class="sheet" id="sheet"><div class="sheet-grip"></div><div id="sheet-body"></div></div>
+  <div class="toast" id="toast"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
