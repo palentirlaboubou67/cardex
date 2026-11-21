@@ -8,6 +8,9 @@ Appli web (installable sur téléphone) pour scanner ses cartes Pokémon et suiv
 - **Séries** : progression de chaque série, cartes possédées et manquantes.
 - **Envies** : alertes prix. On fixe une fourchette ; Cardex prévient quand l'offre la moins chère sur Cardmarket y entre
   (vérification en arrière-plan toutes les ~12 h sur Chrome Android avec l'appli installée, sinon à chaque ouverture).
+- **Decks** : les meilleurs decks de la méta actuelle et des saisons passées (Limitless TCG), avec le prix
+  (cote Cardmarket), les cartes déjà dans la collection et celles à acheter. `data/decks.json` est reconstruit
+  par `python tools/build_decks.py`, et automatiquement chaque lundi par une GitHub Action.
 - **Sauvegarde** : automatique sur l'appareil, plus export/import d'un fichier `.json` (bouton en haut à droite).
 
 Les données des cartes viennent de l'API gratuite [TCGdex](https://tcgdex.dev), en français.

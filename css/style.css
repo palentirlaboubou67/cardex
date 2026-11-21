@@ -174,7 +174,9 @@ select option { background: var(--bg2); }
   background: var(--accent2); color: #1a1300; font-weight: 800; font-size: 13px; display: grid; place-items: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
 }
-.tile.missing .img { filter: grayscale(1) brightness(.55); opacity: .55; }
+/* Cartes manquantes : image grisée, mais la brillance reste visible pour repérer les versions brillantes. */
+.tile.missing .img img, .tile.missing .img .noimg { filter: grayscale(1) brightness(.5); opacity: .6; }
+.tile.missing .fxl { opacity: .7; }
 .empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 50px 20px; }
 .empty b { display: block; color: var(--text); font-size: 18px; margin-bottom: 6px; }
 
@@ -221,7 +223,7 @@ select option { background: var(--bg2); }
   background: rgba(11, 16, 32, 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--border);
 }
-.tab { flex: 1; background: none; border: 0; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 11px; font-weight: 500; }
+.tab { flex: 1; min-width: 0; background: none; border: 0; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 10.5px; font-weight: 500; padding: 0 2px; }
 .tab.active { color: var(--text); }
 .tab.active svg { color: var(--accent); filter: drop-shadow(0 0 8px rgba(255, 77, 94, .6)); }
 
@@ -424,6 +426,47 @@ select option { background: var(--bg2); }
 .wish-form small { color: var(--muted); }
 .alert-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(61, 220, 151, .08); border: 1px solid rgba(61, 220, 151, .25); font-size: 14px; }
 .alert-item button { background: none; border: 0; color: #ff8a94; font-weight: 600; }
+
+/* ---------- Decks ---------- */
+.deck-list { display: grid; gap: 12px; }
+@media (min-width: 700px) { .deck-list { grid-template-columns: 1fr 1fr; } }
+.season-title { grid-column: 1 / -1; margin: 14px 0 0; font-size: 18px; }
+.deck {
+  display: flex; gap: 14px; align-items: center; padding: 12px; cursor: pointer; text-align: left; width: 100%;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.deck.ready { border-color: rgba(61, 220, 151, .55); background: linear-gradient(135deg, rgba(61, 220, 151, .12), rgba(255, 255, 255, .03)); }
+.deck-art { position: relative; width: 74px; height: 92px; flex: none; }
+.deck-art img { position: absolute; width: 58px; border-radius: 5px; box-shadow: 0 4px 12px rgba(0, 0, 0, .5); }
+.deck-art img:nth-child(1) { left: 0; top: 6px; transform: rotate(-8deg); }
+.deck-art img:nth-child(2) { left: 16px; top: 0; transform: rotate(6deg); }
+.deck .body { flex: 1; min-width: 0; }
+.deck .title { font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deck .meta { font-size: 12px; color: var(--muted); margin: 2px 0 6px; }
+.deck .nums { display: flex; justify-content: space-between; font-size: 13px; margin-top: 6px; gap: 8px; }
+.deck .nums b { color: var(--accent2); }
+.deck.ready .nums .have { color: var(--ok); font-weight: 700; }
+.credits { color: var(--muted); font-size: 12px; text-align: center; margin-top: 20px; }
+.deck-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+.deck-summary .stat .v { font-size: 20px; }
+.deck-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.deck-group { margin-bottom: 18px; }
+.deck-row {
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 12px; cursor: pointer;
+  border-left: 4px solid #ff4d5e; background: var(--surface); margin-bottom: 6px;
+}
+.deck-row.ok { border-left-color: var(--ok); }
+.deck-row.part { border-left-color: var(--accent2); }
+.deck-row img, .deck-row .ph { width: 38px; aspect-ratio: 63 / 88; border-radius: 4px; object-fit: cover; background: #1d2547; flex: none; }
+.deck-row .n { font-weight: 800; width: 26px; text-align: right; flex: none; }
+.deck-row .nm { flex: 1; min-width: 0; }
+.deck-row .nm div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deck-row .nm small { color: var(--muted); font-size: 11px; }
+.deck-row .own { font-size: 13px; font-weight: 700; text-align: right; flex: none; }
+.deck-row .own small { display: block; font-weight: 500; color: var(--muted); }
+.poke-link { margin: -6px 0 14px; }
+.added-line { font-size: 13px; color: var(--ok); margin-top: 8px; }
+.added-line button { background: none; border: 0; color: var(--accent2); font-weight: 700; padding: 0; text-decoration: underline; }
 
 /* ---------- Toast & chargement ---------- */
 .toast {

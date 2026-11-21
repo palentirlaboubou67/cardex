@@ -1,9 +1,9 @@
 // Service worker : l'appli marche hors-ligne et garde les images de cartes déjà vues.
 importScripts('js/wishdb.js');
 
-const SHELL = 'cardex-shell-v3';
+const SHELL = 'cardex-shell-v4';
 const IMAGES = 'cardex-images-v1';
-const FILES = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/api.js', 'js/store.js', 'js/scanner.js', 'js/wishdb.js', 'data/logos.json', 'data/pokedex.json', 'icon.svg', 'manifest.webmanifest'];
+const FILES = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/api.js', 'js/store.js', 'js/scanner.js', 'js/wishdb.js', 'data/logos.json', 'data/pokedex.json', 'data/decks.json', 'icon.svg', 'manifest.webmanifest'];
 
 // Vérification des prix en arrière-plan (Chrome Android, appli installée).
 self.addEventListener('periodicsync', e => {
@@ -48,7 +48,7 @@ self.addEventListener('fetch', e => {
 
   // Fichiers de l'appli : réseau d'abord (pour les mises à jour), cache si hors-ligne.
   if (url.origin === location.origin) {
-    e.respondWith(fetch(e.request)
+    e.respondWith(fetch(e.request, { cache: 'no-cache' }) // revalide : évite de mélanger deux versions des fichiers
       .then(res => { caches.open(SHELL).then(c => c.put(e.request, res.clone())); return res; })
       .catch(() => caches.match(e.request)));
   }

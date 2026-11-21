@@ -108,6 +108,26 @@ async function setVariants(setId) {
   return map;
 }
 
+// Finitions standard de toutes les cartes d'un Pokémon (gardées une semaine : de nouvelles cartes sortent).
+export async function dexFinishes(n) {
+  const key = `cardex.dexfin.${n}`;
+  const c = readLS(key);
+  if (c && Date.now() - c.t < 7 * 86400000) return c.map;
+  const map = {};
+  for (let page = 1; page < 10; page++) {
+    const query = `{ cards(filters:{dexId:${n | 0}}, pagination:{page:${page},count:100}) { id variants { normal reverse holo firstEdition } } }`;
+    const r = await fetch(GRAPHQL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
+    const cards = (await r.json())?.data?.cards || [];
+    for (const x of cards) {
+      const f = STD.filter(k => x.variants?.[k]);
+      map[x.id] = f.length ? f : ['normal'];
+    }
+    if (cards.length < 100) break;
+  }
+  writeLS(key, { t: Date.now(), map });
+  return map;
+}
+
 const finKey = id => `cardex.fin.${id}`;
 export const finishesDeep = id => !!readLS(finKey(id))?.deep;
 

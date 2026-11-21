@@ -148,6 +148,39 @@
       <div class="wish-list" id="wish-list"></div>
     </section>
 
+    <!-- DECKS DE LA MÉTA -->
+    <section class="view" id="view-decks">
+      <h1>Decks</h1>
+      <div class="segment" id="deck-period">
+        <button class="active" data-p="current">Méta actuelle</button>
+        <button data-p="past">Saisons passées</button>
+      </div>
+      <div class="toolbar">
+        <div class="chips" id="deck-chips" style="margin:0;flex:1">
+          <button class="chip active" data-f="all">Tous</button>
+          <button class="chip" data-f="ready">Jouables</button>
+          <button class="chip" data-f="close">Presque</button>
+        </div>
+        <select id="deck-sort">
+          <option value="meta">Les plus joués</option>
+          <option value="owned">Les plus complets</option>
+          <option value="missing">Moins cher à finir</option>
+          <option value="price">Prix total</option>
+        </select>
+      </div>
+      <div class="deck-list" id="deck-list"></div>
+      <p class="credits" id="deck-credits"></p>
+    </section>
+
+    <!-- DÉTAIL D'UN DECK -->
+    <section class="view" id="view-deck">
+      <button class="back" id="deck-back">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Decks
+      </button>
+      <div id="deck-head"></div>
+      <div id="deck-cards"></div>
+    </section>
+
     <!-- DÉTAIL D'UNE SÉRIE -->
     <section class="view" id="view-set">
       <button class="back" id="set-back">
@@ -155,8 +188,8 @@
       </button>
       <div id="set-head"></div>
       <div class="segment" id="set-mode">
-        <button class="active" data-m="base">Set de base</button>
-        <button data-m="master">Master set</button>
+        <button class="active" data-m="master">Toutes les versions</button>
+        <button data-m="base">Une par carte</button>
       </div>
       <div id="set-deep"></div>
       <div class="chips" id="set-chips">
@@ -180,6 +213,9 @@
     </button>
     <button class="tab" data-view="sets">
       <svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>Séries
+    </button>
+    <button class="tab" data-view="decks">
+      <svg viewBox="0 0 24 24"><rect x="7" y="3" width="12" height="16" rx="2"/><path d="M4 7v12a2 2 0 002 2h9"/></svg>Decks
     </button>
     <button class="tab" data-view="wishlist">
       <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0"/></svg>Envies<i class="tab-dot" id="tab-dot"></i>
