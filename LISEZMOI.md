@@ -6,6 +6,8 @@ Appli web (installable sur téléphone) pour scanner ses cartes Pokémon et suiv
 - **Recherche** : par nom, si le scan ne trouve pas.
 - **Collection** : quantités par variante (normale, reverse, holo, 1re édition), valeur estimée (cote Cardmarket).
 - **Séries** : progression de chaque série, cartes possédées et manquantes.
+- **Envies** : alertes prix. On fixe une fourchette ; Cardex prévient quand l'offre la moins chère sur Cardmarket y entre
+  (vérification en arrière-plan toutes les ~12 h sur Chrome Android avec l'appli installée, sinon à chaque ouverture).
 - **Sauvegarde** : automatique sur l'appareil, plus export/import d'un fichier `.json` (bouton en haut à droite).
 
 Les données des cartes viennent de l'API gratuite [TCGdex](https://tcgdex.dev), en français.
@@ -17,9 +19,8 @@ Double-clic sur `lancer.bat` (il faut Python), puis ouvrir http://localhost:8000
 
 ## Sur le téléphone
 
-La caméra en direct exige une adresse **https**. Le plus simple : héberger le dossier
-gratuitement (GitHub Pages, Netlify…), ouvrir l'adresse sur le téléphone, puis
-« Ajouter à l'écran d'accueil ». Sans https, le bouton photo marche quand même.
+En ligne sur **https://palentirlaboubou67.github.io/cardex/** (GitHub Pages, mis à jour à chaque `git push`).
+L'ouvrir sur le téléphone puis « Ajouter à l'écran d'accueil ».
 
 ## Conseils de scan
 
