@@ -276,6 +276,46 @@ select option { background: var(--bg2); }
 .backup p { color: var(--muted); margin-top: 0; }
 .backup .btn { margin-bottom: 10px; }
 
+/* ---------- Envies / alertes de prix ---------- */
+.tab { position: relative; }
+.tab-dot { position: absolute; top: 10px; left: calc(50% + 8px); width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); display: none; }
+.tab-dot.on { display: block; }
+.notif-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; font-size: 14px; color: var(--muted); }
+.notif-box b { color: var(--text); }
+.notif-box .btn { margin-top: 10px; }
+.checked { font-size: 13px; color: var(--muted); }
+.wish-list { display: grid; gap: 10px; }
+@media (min-width: 700px) { .wish-list { grid-template-columns: 1fr 1fr; } }
+.wish-row {
+  display: flex; gap: 12px; align-items: center; padding: 10px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--border);
+}
+.wish-row.ok { border-color: rgba(61, 220, 151, .55); background: linear-gradient(135deg, rgba(61, 220, 151, .14), rgba(61, 220, 151, .03)); }
+.wish-row img, .wish-row .ph { width: 58px; aspect-ratio: 63 / 88; border-radius: 6px; object-fit: cover; cursor: pointer; background: #1d2547; flex: none; }
+.wish-row .body { flex: 1; min-width: 0; }
+.wish-row .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wish-row .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wish-row .prices { display: flex; gap: 10px; align-items: baseline; margin-top: 4px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.wish-row .now { font-size: 18px; font-weight: 800; color: var(--text); }
+.wish-row.ok .now { color: var(--ok); }
+.badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 8px; background: var(--surface2); color: var(--muted); white-space: nowrap; }
+.wish-row.ok .badge { background: var(--ok); color: #04281a; }
+.wish-row .acts { display: flex; flex-direction: column; gap: 6px; }
+.wish-row .acts a, .wish-row .acts button {
+  width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+  background: var(--surface2); border: 0; color: var(--text);
+}
+.wish-row .acts svg { width: 18px; height: 18px; }
+.wish-form { background: var(--surface); border-radius: 14px; padding: 12px; margin-bottom: 16px; display: grid; gap: 10px; }
+.wish-form .range { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wish-form label { font-size: 12px; color: var(--muted); display: grid; gap: 4px; }
+.wish-form input, .wish-form select {
+  height: 44px; border-radius: 11px; border: 1px solid var(--border); background: rgba(0, 0, 0, .25); padding: 0 12px; font-size: 16px; width: 100%;
+}
+.wish-form small { color: var(--muted); }
+.alert-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(61, 220, 151, .08); border: 1px solid rgba(61, 220, 151, .25); font-size: 14px; }
+.alert-item button { background: none; border: 0; color: #ff8a94; font-weight: 600; }
+
 /* ---------- Toast & chargement ---------- */
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--tabbar) + var(--safe-b) + 16px); z-index: 60;

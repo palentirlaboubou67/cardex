@@ -1,7 +1,24 @@
 // Service worker : l'appli marche hors-ligne et garde les images de cartes déjà vues.
-const SHELL = 'cardex-shell-v1';
+importScripts('js/wishdb.js');
+
+const SHELL = 'cardex-shell-v2';
 const IMAGES = 'cardex-images-v1';
-const FILES = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/api.js', 'js/store.js', 'js/scanner.js', 'icon.svg', 'manifest.webmanifest'];
+const FILES = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/api.js', 'js/store.js', 'js/scanner.js', 'js/wishdb.js', 'icon.svg', 'manifest.webmanifest'];
+
+// Vérification des prix en arrière-plan (Chrome Android, appli installée).
+self.addEventListener('periodicsync', e => {
+  if (e.tag === 'cardex-prices') e.waitUntil(WishDB.check().then(hits => WishDB.notify(self.registration, hits)));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = e.notification.data?.url || './';
+  e.waitUntil(self.clients.matchAll({ type: 'window' }).then(list => {
+    const c = list[0];
+    if (c) { c.navigate(url).catch(() => {}); return c.focus(); }
+    return self.clients.openWindow(url);
+  }));
+});
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

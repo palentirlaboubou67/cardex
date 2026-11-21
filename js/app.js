@@ -56,6 +56,7 @@ function show(view) {
   if (view !== 'scan') stopCam();
   if (view === 'collection') renderCollection();
   if (view === 'sets') renderSets();
+  if (view === 'wishlist') renderWishlist();
   if (view === 'search') setTimeout(() => $('#search-input').focus(), 50);
   window.scrollTo(0, 0);
 }
@@ -126,9 +127,12 @@ function renderCard(full) {
     </div>` : ''}
     <p class="section-title">Dans ma collection</p>
     <div class="variants" id="variants"></div>
+    <p class="section-title">Alerte prix</p>
+    <div id="wish-box"></div>
     ${attacks ? `<p class="section-title">Attaques</p>${attacks}` : ''}
   </div>`);
   renderVariants();
+  renderWishBox();
   bindHolo($('#holo'));
 }
 
@@ -147,6 +151,9 @@ function renderVariants() {
 }
 
 $('#sheet-body').addEventListener('click', e => {
+  if (e.target.closest('[data-wish-add]')) return addWish();
+  const del = e.target.closest('[data-wish-del]');
+  if (del) return WishDB.del(del.dataset.wishDel).then(() => { renderWishBox(); refreshWishDot(); toast('Alerte supprimée'); });
   const b = e.target.closest('[data-step]');
   if (!b || !currentCard) return;
   const v = b.dataset.step, d = +b.dataset.d;
@@ -414,6 +421,159 @@ $('#set-chips').addEventListener('click', e => {
   renderSet();
 });
 
+// ---------- Envies / alertes de prix ----------
+const fmtRange = w => `${euro.format(w.min || 0)} – ${euro.format(w.max)}`;
+const VARIANT_LABEL = { normal: 'Normale', holo: 'Reverse / Holo' };
+const hasHolo = full => !!(full.variants?.holo || full.variants?.reverse);
+// serviceWorker.ready ne se résout jamais sans service worker (ex. http sur le réseau local).
+const swReady = () => Promise.race([navigator.serviceWorker?.ready, new Promise(r => setTimeout(() => r(null), 3000))]);
+const cardmarketUrl = w => `https://www.cardmarket.com/fr/Pokemon/Products/Search?searchString=${encodeURIComponent(w.name)}`;
+
+async function renderWishBox() {
+  const full = currentCard, box = $('#wish-box');
+  if (!full || !box) return;
+  const mine = (await WishDB.all()).filter(w => w.id === full.id);
+  const variants = hasHolo(full) ? ['normal', 'holo'] : ['normal'];
+  const { low, trend } = WishDB.prices(full, variants[0]);
+  const suggested = trend || low;
+  box.innerHTML = `${mine.map(w => `<div class="alert-item" style="margin-bottom:8px">
+      <span>🔔 ${VARIANT_LABEL[w.variant]} · ${fmtRange(w)}${w.inRange ? ' · <b style="color:var(--ok)">dans ta fourchette</b>' : ''}</span>
+      <button data-wish-del="${esc(w.key)}">Retirer</button>
+    </div>`).join('')}
+    <div class="wish-form">
+      ${variants.length > 1 ? `<label>Version<select id="w-variant">${variants.map(v => `<option value="${v}">${VARIANT_LABEL[v]}</option>`).join('')}</select></label>` : ''}
+      <div class="range">
+        <label>Prix min (€)<input id="w-min" type="number" inputmode="decimal" min="0" step="0.01" value="0"></label>
+        <label>Prix max (€)<input id="w-max" type="number" inputmode="decimal" min="0" step="0.01" value="${suggested ? (Math.floor(suggested * 0.9 * 100) / 100) : ''}" placeholder="ex. 15"></label>
+      </div>
+      <button class="btn primary block" data-wish-add>
+        <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0"/></svg>Me prévenir dans cette fourchette
+      </button>
+      <small id="w-now">${low ? `Moins chère en vente actuellement : ${euro.format(low)}` : 'Pas de prix Cardmarket connu pour cette carte pour l\'instant.'}</small>
+    </div>`;
+  $('#w-variant')?.addEventListener('change', e => {
+    const p = WishDB.prices(full, e.target.value);
+    $('#w-now').textContent = p.low ? `Moins chère en vente actuellement : ${euro.format(p.low)}` : 'Pas de prix connu pour cette version.';
+  });
+}
+
+async function addWish() {
+  const full = currentCard;
+  const variant = $('#w-variant')?.value || 'normal';
+  const min = parseFloat($('#w-min').value) || 0;
+  const max = parseFloat($('#w-max').value);
+  if (!(max > 0) || min > max) return toast('Indique une fourchette valide (min ≤ max)');
+  const w = {
+    key: `${full.id}|${variant}`, id: full.id, variant, min, max,
+    name: full.name, setName: full.set?.name || '', localId: full.localId,
+    setTotal: full.set?.cardCount?.official || null, image: full.image || '', createdAt: Date.now(),
+  };
+  WishDB.update(w, full);
+  await WishDB.put(w);
+  renderWishBox();
+  refreshWishDot();
+  toast(w.inRange ? `Déjà dans ta fourchette : dès ${euro.format(w.low)} !` : 'Alerte créée, tu seras prévenu');
+  enableNotifications(false);
+}
+
+// Demande la permission puis programme la vérification en arrière-plan quand c'est possible.
+async function enableNotifications(explicit = true) {
+  if (!('Notification' in window)) { if (explicit) toast('Les notifications ne sont pas disponibles ici'); return; }
+  if (Notification.permission === 'default') await Notification.requestPermission();
+  if (Notification.permission === 'granted') await registerPeriodicCheck();
+  if (current === 'wishlist') renderNotifBox();
+}
+
+async function registerPeriodicCheck() {
+  try {
+    const reg = await swReady();
+    if (!reg || !('periodicSync' in reg)) return false;
+    const st = await navigator.permissions.query({ name: 'periodic-background-sync' });
+    if (st.state !== 'granted') return false;
+    await reg.periodicSync.register('cardex-prices', { minInterval: 12 * 3600 * 1000 });
+    return true;
+  } catch { return false; }
+}
+
+async function renderNotifBox() {
+  const box = $('#notif-box');
+  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  const bg = await registerPeriodicCheck();
+  if (perm === 'granted') {
+    box.innerHTML = bg
+      ? '<b>Notifications activées.</b> Les prix sont vérifiés en arrière-plan environ toutes les 12 h, et à chaque ouverture de l\'appli.'
+      : '<b>Notifications activées.</b> Les prix sont vérifiés à chaque ouverture de l\'appli (la vérification en arrière-plan demande Chrome sur Android avec l\'appli installée).';
+  } else if (perm === 'denied') {
+    box.innerHTML = '<b>Notifications bloquées.</b> Réautorise-les dans les réglages du navigateur. En attendant, les cartes dans ta fourchette s\'affichent en vert ici.';
+  } else if (perm === 'unsupported') {
+    box.innerHTML = '<b>Notifications indisponibles ici.</b> Sur iPhone, ajoute d\'abord l\'appli à l\'écran d\'accueil. Les cartes dans ta fourchette s\'affichent en vert ici.';
+  } else {
+    box.innerHTML = 'Choisis une carte, fixe une fourchette de prix, et Cardex te prévient quand elle est en vente dans ta fourchette sur Cardmarket.<br><button class="btn primary" id="btn-notif">Activer les notifications</button>';
+    $('#btn-notif').onclick = () => enableNotifications(true);
+  }
+}
+
+async function renderWishlist() {
+  renderNotifBox();
+  const list = (await WishDB.all()).sort((a, b) => (b.inRange - a.inRange) || (b.createdAt - a.createdAt));
+  const last = Math.max(0, ...list.map(w => w.checkedAt || 0));
+  $('#checked-at').textContent = last ? `Vérifié ${new Date(last).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}` : '';
+  $('#wish-list').innerHTML = list.length ? list.map(w => {
+    const src = api.img(w.image);
+    return `<div class="wish-row ${w.inRange ? 'ok' : ''}">
+      ${src ? `<img src="${esc(src)}" alt="" data-card="${esc(w.id)}">` : `<div class="ph" data-card="${esc(w.id)}"></div>`}
+      <div class="body">
+        <div class="title">${esc(w.name)}</div>
+        <div class="sub">${esc(w.setName)} · ${esc(fmtNum(w))} · ${VARIANT_LABEL[w.variant]}</div>
+        <div class="prices">
+          <span class="now">${w.low ? euro.format(w.low) : '—'}</span>
+          <span>voulu : ${fmtRange(w)}</span>
+          <span class="badge">${w.inRange ? 'Dans ta fourchette !' : w.low ? 'Pas encore' : 'Prix inconnu'}</span>
+        </div>
+      </div>
+      <div class="acts">
+        <a href="${esc(cardmarketUrl(w))}" target="_blank" rel="noopener" aria-label="Voir sur Cardmarket">
+          <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/></svg>
+        </a>
+        <button data-del="${esc(w.key)}" aria-label="Supprimer">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+        </button>
+      </div>
+    </div>`;
+  }).join('') : empty('Aucune envie pour l\'instant', 'Ouvre une carte (scan, recherche ou série) et crée une alerte prix en bas de sa fiche.');
+}
+
+$('#wish-list').addEventListener('click', async e => {
+  const d = e.target.closest('[data-del]');
+  if (!d) return;
+  await WishDB.del(d.dataset.del);
+  renderWishlist();
+  refreshWishDot();
+});
+
+async function checkPrices(manual = false) {
+  if (manual) { $('#btn-check').disabled = true; $('#checked-at').textContent = 'Vérification…'; }
+  try {
+    const hits = await WishDB.check();
+    if (hits.length) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        swReady().then(reg => reg && WishDB.notify(reg, hits)).catch(() => {});
+      }
+      toast(hits.length === 1 ? `${hits[0].name} est dans ta fourchette !` : `${hits.length} cartes sont dans ta fourchette !`);
+    } else if (manual) toast('Prix à jour');
+  } finally {
+    if (manual) $('#btn-check').disabled = false;
+    if (current === 'wishlist') renderWishlist();
+    refreshWishDot();
+  }
+}
+$('#btn-check').addEventListener('click', () => checkPrices(true));
+
+async function refreshWishDot() {
+  const any = (await WishDB.all()).some(w => w.inRange);
+  $('#tab-dot').classList.toggle('on', any);
+}
+
 // ---------- Sauvegarde ----------
 $('#btn-backup').addEventListener('click', () => {
   const t = store.lastSave();
@@ -457,3 +617,5 @@ navigator.storage?.persist?.();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#search-results').innerHTML = empty('Trouve n\'importe quelle carte', 'Tape le nom d\'un Pokémon, d\'un dresseur…');
 api.sets().catch(() => {});
+if (location.hash === '#wishlist') show('wishlist');
+checkPrices();
