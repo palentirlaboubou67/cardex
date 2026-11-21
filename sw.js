@@ -1,9 +1,9 @@
 // Service worker : l'appli marche hors-ligne et garde les images de cartes déjà vues.
 importScripts('js/wishdb.js');
 
-const SHELL = 'cardex-shell-v2';
+const SHELL = 'cardex-shell-v3';
 const IMAGES = 'cardex-images-v1';
-const FILES = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/api.js', 'js/store.js', 'js/scanner.js', 'js/wishdb.js', 'icon.svg', 'manifest.webmanifest'];
+const FILES = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/api.js', 'js/store.js', 'js/scanner.js', 'js/wishdb.js', 'data/logos.json', 'data/pokedex.json', 'icon.svg', 'manifest.webmanifest'];
 
 // Vérification des prix en arrière-plan (Chrome Android, appli installée).
 self.addEventListener('periodicsync', e => {
@@ -34,8 +34,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
 
-  // Images des cartes : cache d'abord.
-  if (url.hostname === 'assets.tcgdex.net') {
+  // Images (cartes, logos, sprites du Pokédex) : cache d'abord.
+  if (['assets.tcgdex.net', 'images.pokemontcg.io', 'raw.githubusercontent.com'].includes(url.hostname)) {
     e.respondWith(caches.open(IMAGES).then(async c => {
       const hit = await c.match(e.request);
       if (hit) return hit;

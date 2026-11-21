@@ -17,16 +17,29 @@ function toast(msg) {
   toastT = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-function tile(c, { sub = '', missing = false } = {}) {
-  const n = store.count(c.id);
+// Finitions sans effet de brillance : on affiche seulement l'étiquette.
+const NO_FX = new Set(['normal', 'firstEdition', 'stamp']);
+const fxLayer = f => (f && !NO_FX.has(f) ? `<i class="fxl fx-${f}"></i>` : '');
+const finishBadge = f => (f && f !== 'normal' ? `<span class="fb fb-${f}">${store.SHORT[f]}</span>` : '');
+
+// qty : quantité affichée (par défaut le total de la carte) ; finish : une finition précise.
+function tile(c, { sub = '', missing = false, qty, finish } = {}) {
+  const n = qty ?? store.count(c.id);
   const src = api.img(c.image);
-  return `<div class="tile ${missing && !n ? 'missing' : ''}" data-card="${esc(c.id)}">
-    <div class="img">${src ? `<img loading="lazy" src="${esc(src)}" alt="">` : `<div class="noimg">${esc(c.name)}</div>`}</div>
+  return `<div class="tile ${missing && !n ? 'missing' : ''}" data-card="${esc(c.id)}"${finish ? ` data-finish="${finish}"` : ''}>
+    <div class="img">${src ? `<img loading="lazy" src="${esc(src)}" alt="">` : `<div class="noimg">${esc(c.name)}</div>`}${n || !missing ? fxLayer(finish) : ''}${finishBadge(finish)}</div>
     ${n ? `<span class="qty">${n}</span>` : ''}
     <div class="name">${esc(c.name)}</div>
     <div class="sub">${esc(sub)}</div>
   </div>`;
 }
+
+// Logo d'une série, ou une plaque avec son nom (jamais le petit symbole du bas des cartes).
+const plate = name => `<span class="plate">${esc(name)}</span>`;
+const setLogoHtml = s => {
+  const l = api.setLogo(s);
+  return l ? `<img loading="lazy" src="${esc(l)}" alt="${esc(s.name)}">` : plate(s.name);
+};
 
 const empty = (title, text) => `<div class="empty"><b>${esc(title)}</b>${esc(text)}</div>`;
 const spinner = '<div class="spinner"></div>';
@@ -34,7 +47,8 @@ const spinner = '<div class="spinner"></div>';
 // Une image qui ne charge pas devient une vignette avec le nom.
 document.addEventListener('error', e => {
   const el = e.target;
-  if (el.tagName === 'IMG' && el.closest('.tile')) {
+  if (el.tagName === 'IMG' && el.closest('.set-logo, .set-head')) el.outerHTML = plate(el.alt);
+  else if (el.tagName === 'IMG' && el.closest('.tile')) {
     const name = el.closest('.tile').querySelector('.name')?.textContent || '';
     el.outerHTML = `<div class="noimg">${esc(name)}</div>`;
   }
@@ -43,7 +57,7 @@ document.addEventListener('error', e => {
 // Clic sur n'importe quelle carte → fiche détaillée.
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-card]');
-  if (t) openCard(t.dataset.card);
+  if (t) openCard(t.dataset.card, t.dataset.finish);
 });
 
 // ---------- Navigation ----------
@@ -51,10 +65,11 @@ let current = 'scan';
 function show(view) {
   current = view;
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${view}`));
-  const tabView = view === 'set' ? 'sets' : view;
+  const tabView = { set: 'sets', poke: 'collection' }[view] || view;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === tabView));
   if (view !== 'scan') stopCam();
   if (view === 'collection') renderCollection();
+  if (view === 'poke') renderPoke();
   if (view === 'sets') renderSets();
   if (view === 'wishlist') renderWishlist();
   if (view === 'search') setTimeout(() => $('#search-input').focus(), 50);
@@ -83,24 +98,28 @@ $('#backdrop').addEventListener('click', closeSheet);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
 // ---------- Détail d'une carte ----------
-let currentCard = null;
+let currentCard = null, previewFinish = 'normal';
 
-async function openCard(id) {
+async function openCard(id, finish) {
   openSheet(spinner);
   try {
     const full = await api.card(id);
     if (!sheetOpen) return;
     currentCard = full;
+    store.refresh(full);
+    previewFinish = finish || ownedFinishes(full)[0] || api.finishesOf(full)[0];
     renderCard(full);
   } catch {
     openSheet(empty('Impossible de charger la carte', 'Vérifie ta connexion internet.'));
   }
 }
 
-function variantsOf(full) {
-  const v = full.variants;
-  const keys = v ? Object.keys(store.VARIANTS).filter(k => v[k]) : [];
-  return keys.length ? keys : ['normal'];
+const ownedFinishes = full => Object.keys(store.get(full.id)?.qty || {}).sort((a, b) => store.finishOrder(a) - store.finishOrder(b));
+
+// Finitions affichées : celles connues de TCGdex + celles ajoutées à la main.
+function shownFinishes(full) {
+  return [...new Set([...api.finishesOf(full), ...ownedFinishes(full)])]
+    .sort((a, b) => store.finishOrder(a) - store.finishOrder(b));
 }
 
 function renderCard(full) {
@@ -117,7 +136,9 @@ function renderCard(full) {
   openSheet(`<div class="detail">
     <div class="holo-wrap"><div class="holo" id="holo">
       ${src ? `<img src="${esc(src)}" alt="${esc(full.name)}">` : `<div class="noimg" style="height:100%;display:grid;place-items:center">${esc(full.name)}</div>`}
+      <i class="fxl" id="holo-fx"></i>
     </div></div>
+    <div class="preview-label" id="preview-label"></div>
     <h2>${esc(full.name)}</h2>
     <div class="meta">${esc(full.set?.name)} · ${esc(fmtNum({ localId: full.localId, setTotal: full.set?.cardCount?.official }))}${full.illustrator ? ` · ill. ${esc(full.illustrator)}` : ''}</div>
     <div class="tags">${tags}</div>
@@ -136,31 +157,58 @@ function renderCard(full) {
   bindHolo($('#holo'));
 }
 
+function applyPreview() {
+  const fx = $('#holo-fx');
+  if (!fx) return;
+  fx.className = `fxl ${NO_FX.has(previewFinish) ? '' : `fx-${previewFinish}`}`;
+  $('#preview-label').textContent = `Aperçu : ${store.VARIANTS[previewFinish]}`;
+}
+
 function renderVariants() {
   const full = currentCard, box = $('#variants');
   if (!full || !box) return;
   const rec = store.get(full.id);
-  box.innerHTML = variantsOf(full).map(v => `<div class="variant">
-      <span>${store.VARIANTS[v]}</span>
+  const shown = shownFinishes(full);
+  const others = Object.keys(store.VARIANTS).filter(v => !shown.includes(v));
+  box.innerHTML = shown.map(v => `<div class="variant ${v === previewFinish ? 'sel' : ''}" data-preview="${v}">
+      <span><i class="dot dot-${v}"></i>${store.VARIANTS[v]}</span>
       <div class="stepper">
         <button data-step="${v}" data-d="-1" aria-label="Retirer">−</button>
         <span>${rec?.qty[v] || 0}</span>
         <button class="plus" data-step="${v}" data-d="1" aria-label="Ajouter">+</button>
       </div>
-    </div>`).join('');
+    </div>`).join('') + (others.length ? `<select class="add-finish" id="add-finish">
+      <option value="">+ Ma carte a une autre finition…</option>
+      ${others.map(v => `<option value="${v}">${store.VARIANTS[v]}</option>`).join('')}
+    </select>` : '');
+  $('#add-finish')?.addEventListener('change', e => {
+    const v = e.target.value;
+    if (!v) return;
+    store.add(full, v);
+    previewFinish = v;
+    renderVariants();
+    toast(`Ajoutée en ${store.VARIANTS[v]}`);
+  });
+  applyPreview();
 }
 
 $('#sheet-body').addEventListener('click', e => {
   if (e.target.closest('[data-wish-add]')) return addWish();
   const del = e.target.closest('[data-wish-del]');
   if (del) return WishDB.del(del.dataset.wishDel).then(() => { renderWishBox(); refreshWishDot(); toast('Alerte supprimée'); });
+  if (!currentCard) return;
   const b = e.target.closest('[data-step]');
-  if (!b || !currentCard) return;
-  const v = b.dataset.step, d = +b.dataset.d;
-  const n = Math.max(0, (store.get(currentCard.id)?.qty[v] || 0) + d);
-  store.setQty(currentCard, v, n);
-  renderVariants();
-  if (d > 0) navigator.vibrate?.(15);
+  if (b) {
+    const v = b.dataset.step, d = +b.dataset.d;
+    const n = Math.max(0, (store.get(currentCard.id)?.qty[v] || 0) + d);
+    store.setQty(currentCard, v, n);
+    previewFinish = v;
+    renderVariants();
+    if (d > 0) navigator.vibrate?.(15);
+    return;
+  }
+  const p = e.target.closest('[data-preview]');
+  if (p) { previewFinish = p.dataset.preview; renderVariants(); }
 });
 
 // Effet holographique qui suit le doigt / la souris.
@@ -272,21 +320,27 @@ function renderScanResults(list) {
         <div class="label">Carte trouvée</div>
         <h2>${esc(best.name)}</h2>
         <div class="meta">${esc(best.setName)} · ${esc(fmtNum(best))}</div>
-        <button class="btn primary" id="quick-add">
-          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Ajouter
-        </button>
-        <button class="btn" data-card="${esc(best.id)}">Détails</button>
+        <div style="font-size:13px;color:var(--muted)">Ajouter en :</div>
+        <div class="quick" id="quick"><span class="chip">…</span></div>
       </div>
     </div>
     ${others.length ? `<p class="others-title">Ce n'est pas elle ? Autres possibilités :</p>
       <div class="others">${others.map(c => tile(c, { sub: c.setName })).join('')}</div>` : ''}`;
-  $('#quick-add').onclick = async () => {
-    try {
-      const full = await api.card(best.id);
-      store.add(full, variantsOf(full)[0]);
-      toast(`${full.name} ajoutée (${store.count(full.id)} au total)`);
-    } catch { toast('Ajout impossible : vérifie ta connexion'); }
-  };
+
+  // Une puce par finition connue + « Autre » pour la choisir à la main dans la fiche.
+  api.card(best.id).then(full => {
+    const q = $('#quick');
+    if (!q) return;
+    q.innerHTML = api.finishesOf(full).map(v => `<button class="chip" data-quick="${v}"><i class="dot dot-${v}"></i>${store.SHORT[v]}</button>`).join('')
+      + `<button class="chip" data-card="${esc(full.id)}">Autre…</button>`;
+    q.onclick = e => {
+      const b = e.target.closest('[data-quick]');
+      if (!b) return;
+      store.add(full, b.dataset.quick);
+      navigator.vibrate?.(20);
+      toast(`${full.name} ajoutée en ${store.VARIANTS[b.dataset.quick]} (${store.get(full.id).qty[b.dataset.quick]})`);
+    };
+  }).catch(() => { const q = $('#quick'); if (q) q.innerHTML = '<span class="chip">Hors-ligne</span>'; });
 }
 
 // ---------- Recherche ----------
@@ -304,6 +358,7 @@ async function runSearch() {
     if (seq !== searchSeq) return;
     const list = res
       .map(c => ({ ...c, set: sets.get(api.setIdOf(c.id)) }))
+      .filter(c => c.set) // écarte les cartes Pokémon TCG Pocket
       .sort((a, b) => (!!b.image - !!a.image) || ((b.set?.order ?? 0) - (a.set?.order ?? 0)));
     box.innerHTML = list.length
       ? list.map(c => tile(c, { sub: `${c.set?.name || ''} · ${c.localId}` })).join('')
@@ -314,10 +369,28 @@ async function runSearch() {
 }
 
 // ---------- Collection ----------
+let colMode = 'cards', colFinish = 'all';
 $('#col-filter').addEventListener('input', renderCollection);
 $('#col-sort').addEventListener('change', renderCollection);
+$('#col-mode').addEventListener('click', e => {
+  const b = e.target.closest('[data-m]');
+  if (!b) return;
+  colMode = b.dataset.m;
+  document.querySelectorAll('#col-mode button').forEach(x => x.classList.toggle('active', x === b));
+  renderCollection();
+});
+$('#col-finish').addEventListener('click', e => {
+  const c = e.target.closest('[data-f]');
+  if (!c) return;
+  colFinish = c.dataset.f;
+  renderCollection();
+});
 
 function renderCollection() {
+  $('#col-cards').hidden = colMode !== 'cards';
+  $('#col-dex').hidden = colMode !== 'dex';
+  if (colMode === 'dex') return renderDex();
+
   const s = store.stats();
   $('#stats').innerHTML = `
     <div class="stat"><div class="v">${s.total}</div><div class="k">cartes</div></div>
@@ -325,22 +398,148 @@ function renderCollection() {
     <div class="stat"><div class="v">${s.sets}</div><div class="k">séries</div></div>
     <div class="stat gold"><div class="v">${euro.format(s.value)}</div><div class="k">valeur estimée</div></div>`;
 
+  // Une entrée par carte ET par finition : une reverse et une normale sont deux cartes distinctes.
+  const entries = store.all().flatMap(rec => Object.entries(rec.qty).map(([f, n]) => ({ rec, f, n })));
+  const counts = {};
+  for (const e of entries) counts[e.f] = (counts[e.f] || 0) + e.n;
+  if (colFinish !== 'all' && !counts[colFinish]) colFinish = 'all';
+  const finishes = Object.keys(counts).sort((a, b) => store.finishOrder(a) - store.finishOrder(b));
+  $('#col-finish').innerHTML = finishes.length > 1
+    ? `<button class="chip ${colFinish === 'all' ? 'active' : ''}" data-f="all">Toutes</button>` + finishes.map(f =>
+      `<button class="chip ${colFinish === f ? 'active' : ''}" data-f="${f}"><i class="dot dot-${f}"></i>${store.SHORT[f]}<span class="n">${counts[f]}</span></button>`).join('')
+    : '';
+
   const q = scanner.norm($('#col-filter').value.trim());
   const sort = $('#col-sort').value;
-  let cards = store.all().filter(c => !q || scanner.norm(`${c.name} ${c.setName}`).includes(q));
+  const list = entries.filter(({ rec, f }) =>
+    (colFinish === 'all' || f === colFinish) && (!q || scanner.norm(`${rec.name} ${rec.setName}`).includes(q)));
+  const byFinish = (a, b) => store.finishOrder(a.f) - store.finishOrder(b.f);
+  const dexNo = r => r.dexId?.[0] ?? 99999;
   const by = {
-    recent: (a, b) => b.addedAt - a.addedAt,
-    name: (a, b) => a.name.localeCompare(b.name, 'fr'),
-    set: (a, b) => a.setName.localeCompare(b.setName, 'fr') || parseInt(a.localId) - parseInt(b.localId),
-    price: (a, b) => store.value(b) - store.value(a),
+    recent: (a, b) => b.rec.addedAt - a.rec.addedAt || byFinish(a, b),
+    name: (a, b) => a.rec.name.localeCompare(b.rec.name, 'fr') || byFinish(a, b),
+    dex: (a, b) => dexNo(a.rec) - dexNo(b.rec) || a.rec.name.localeCompare(b.rec.name, 'fr') || byFinish(a, b),
+    set: (a, b) => a.rec.setName.localeCompare(b.rec.setName, 'fr') || (parseInt(a.rec.localId) || 0) - (parseInt(b.rec.localId) || 0) || byFinish(a, b),
+    price: (a, b) => store.priceFor(b.rec, b.f) * b.n - store.priceFor(a.rec, a.f) * a.n,
   };
-  cards.sort(by[sort]);
-  $('#col-grid').innerHTML = cards.length
-    ? cards.map(c => tile(c, { sub: `${c.setName} · ${c.localId}` })).join('')
-    : store.all().length
+  list.sort(by[sort]);
+  if (sort === 'dex') backfillDex();
+  $('#col-grid').innerHTML = list.length
+    ? list.map(({ rec, f, n }) => tile(rec, { sub: `${rec.setName} · ${rec.localId}`, qty: n, finish: f })).join('')
+    : entries.length
       ? empty('Aucune carte', 'Rien ne correspond au filtre.')
       : empty('Ta collection est vide', 'Scanne ta première carte avec l\'onglet Scanner !');
 }
+
+// ---------- Pokédex ----------
+let DEX = [];
+const dexReady = fetch('data/pokedex.json').then(r => r.json()).then(d => { DEX = d; }).catch(() => {});
+const SPRITES = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
+const sprite = n => `${SPRITES}/${n}.png`;
+const artwork = n => `${SPRITES}/other/official-artwork/${n}.png`;
+const pad = n => `#${String(n).padStart(4, '0')}`;
+let dexFilter = 'all', dexT, backfilling = false;
+const backfillFailed = new Set();
+
+$('#dex-filter').addEventListener('input', () => { clearTimeout(dexT); dexT = setTimeout(renderDex, 150); });
+$('#dex-chips').addEventListener('click', e => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  dexFilter = c.dataset.f;
+  document.querySelectorAll('#dex-chips .chip').forEach(x => x.classList.toggle('active', x === c));
+  renderDex();
+});
+$('#dex-grid').addEventListener('click', e => {
+  const c = e.target.closest('[data-dex]');
+  if (c) openPoke(+c.dataset.dex);
+});
+
+// Les cartes enregistrées avant le Pokédex n'ont pas leur numéro : on le récupère une fois.
+async function backfillDex() {
+  const todo = store.all().filter(r => r.dexId === undefined && !backfillFailed.has(r.id));
+  if (!todo.length || backfilling) return;
+  backfilling = true;
+  let ok = 0;
+  for (const r of todo) {
+    try { store.refresh(await api.card(r.id), false); ok++; } catch { backfillFailed.add(r.id); }
+  }
+  backfilling = false;
+  if (ok) store.flush();
+}
+
+async function renderDex() {
+  await dexReady;
+  backfillDex();
+  const owned = store.ownedByDex();
+  const raw = $('#dex-filter').value.trim();
+  const q = scanner.norm(raw), num = parseInt(raw, 10);
+  const items = DEX.map((name, i) => ({ n: i + 1, name }))
+    .filter(p => (!raw || (num ? String(p.n).startsWith(String(num)) : scanner.norm(p.name).includes(q)))
+      && (dexFilter === 'all' || (dexFilter === 'owned') === owned.has(p.n)));
+  const have = DEX.filter((_, i) => owned.has(i + 1)).length;
+  const pct = DEX.length ? (have / DEX.length) * 100 : 0;
+  $('#dex-progress').innerHTML = `${have} / ${DEX.length} Pokémon dans ta collection<div class="bar"><i style="width:${pct}%"></i></div>`;
+  $('#dex-grid').innerHTML = items.length ? items.map(p => {
+    const c = owned.get(p.n);
+    return `<button class="dex-cell ${c ? 'own' : ''}" data-dex="${p.n}">
+      <img loading="lazy" src="${sprite(p.n)}" alt="">
+      <span class="no">${pad(p.n)}</span><span class="nm">${esc(p.name)}</span>
+      ${c ? `<span class="cnt">${c}</span>` : ''}
+    </button>`;
+  }).join('') : empty('Aucun Pokémon', 'Rien ne correspond à ta recherche.');
+}
+
+// ---------- Fiche d'un Pokémon : toutes ses cartes, possédées ou non ----------
+let currentPoke = null, pokeCards = null, pokeFilter = 'all';
+async function openPoke(n) {
+  currentPoke = n; pokeCards = null; pokeFilter = 'all';
+  document.querySelectorAll('#poke-chips .chip').forEach(x => x.classList.toggle('active', x.dataset.f === 'all'));
+  show('poke');
+  try {
+    const [res, sets] = await Promise.all([api.byDex(n), api.setsById()]);
+    if (currentPoke !== n) return;
+    pokeCards = res.filter(c => sets.has(api.setIdOf(c.id)))
+      .map(c => ({ ...c, set: sets.get(api.setIdOf(c.id)) }))
+      .sort((a, b) => b.set.order - a.set.order);
+  } catch { pokeCards = []; }
+  renderPoke();
+}
+
+function renderPoke() {
+  const n = currentPoke;
+  if (!n) return;
+  const mine = store.all().filter(r => r.dexId?.includes(n))
+    .flatMap(rec => Object.entries(rec.qty).map(([f, q]) => ({ rec, f, q })))
+    .sort((a, b) => a.rec.setName.localeCompare(b.rec.setName, 'fr') || store.finishOrder(a.f) - store.finishOrder(b.f));
+  const ownedIds = new Set(mine.map(m => m.rec.id));
+  const tot = pokeCards?.length;
+  $('#poke-head').innerHTML = `<div class="poke-head">
+    <img src="${artwork(n)}" alt="">
+    <div class="body">
+      <div class="no">${pad(n)}</div>
+      <h1>${esc(DEX[n - 1] || '')}</h1>
+      ${tot ? `<div class="count">${ownedIds.size} / ${tot} cartes différentes</div>
+        <div class="bar ${ownedIds.size >= tot ? 'done' : ''}"><i style="width:${Math.min(100, ownedIds.size / tot * 100)}%"></i></div>` : ''}
+    </div>
+  </div>`;
+  $('#poke-mine').innerHTML = mine.length
+    ? mine.map(({ rec, f, q }) => tile(rec, { sub: `${rec.setName} · ${rec.localId}`, qty: q, finish: f })).join('')
+    : empty('Pas encore', 'Tu n\'as aucune carte de ce Pokémon.');
+  if (!pokeCards) { $('#poke-all').innerHTML = spinner; return; }
+  const list = pokeCards.filter(c => pokeFilter === 'all' || (pokeFilter === 'owned') === ownedIds.has(c.id));
+  $('#poke-all').innerHTML = list.length
+    ? list.map(c => tile(c, { sub: `${c.set.name} · ${c.localId}`, missing: true })).join('')
+    : empty(pokeFilter === 'missing' ? 'Tu les as toutes !' : 'Aucune carte', '');
+}
+
+$('#poke-back').addEventListener('click', () => show('collection'));
+$('#poke-chips').addEventListener('click', e => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  pokeFilter = c.dataset.f;
+  document.querySelectorAll('#poke-chips .chip').forEach(x => x.classList.toggle('active', x === c));
+  renderPoke();
+});
 
 // ---------- Séries ----------
 $('#sets-filter').addEventListener('input', renderSets);
@@ -350,7 +549,7 @@ async function renderSets() {
   const box = $('#set-list');
   if (!box.children.length) box.innerHTML = spinner;
   let list;
-  try { list = await api.sets(); } catch { box.innerHTML = empty('Erreur', 'Vérifie ta connexion internet.'); return; }
+  try { [list] = await Promise.all([api.sets(), api.logosReady]); } catch { box.innerHTML = empty('Erreur', 'Vérifie ta connexion internet.'); return; }
   const owned = store.ownedBySet();
   const q = scanner.norm($('#sets-filter').value.trim());
   const mine = $('#sets-mine').checked;
@@ -360,9 +559,8 @@ async function renderSets() {
       const have = owned.get(s.id) || 0;
       const tot = s.cardCount?.official || s.cardCount?.total || 0;
       const pct = tot ? Math.min(100, (have / tot) * 100) : 0;
-      const l = api.logo(s.logo || s.symbol);
       return `<button class="set-row" data-set="${esc(s.id)}">
-        <div class="set-logo">${l ? `<img loading="lazy" src="${esc(l)}" alt="">` : `<span class="ph">${esc(s.id)}</span>`}</div>
+        <div class="set-logo">${setLogoHtml(s)}</div>
         <div class="body">
           <div class="title">${esc(s.name)}</div>
           <div class="count">${have} / ${tot}</div>
@@ -378,17 +576,59 @@ $('#set-list').addEventListener('click', e => {
   if (r) openSet(r.dataset.set);
 });
 
-let currentSet = null, setFilter = 'all';
+let currentSet = null, setFilter = 'all', setMode = 'base', setFinishMap = null, deepProgress = null;
 async function openSet(id) {
   show('set');
+  currentSet = null; setFinishMap = null; deepProgress = null;
   $('#set-head').innerHTML = '';
+  $('#set-deep').innerHTML = '';
   $('#set-grid').innerHTML = spinner;
   try {
-    currentSet = await api.set(id);
+    const [s] = await Promise.all([api.set(id), api.logosReady]);
+    currentSet = s;
     renderSet();
+    if (setMode === 'master') loadFinishes();
   } catch {
     $('#set-grid').innerHTML = empty('Erreur', 'Vérifie ta connexion internet.');
   }
+}
+
+async function loadFinishes(deep = false) {
+  const s = currentSet;
+  if (!s) return;
+  try {
+    const map = await api.setFinishes(s, deep ? (i, n) => {
+      deepProgress = `${i} / ${n}`;
+      if (currentSet === s) renderDeepBox();
+    } : null);
+    deepProgress = null;
+    if (currentSet === s) { setFinishMap = map; renderSet(); }
+  } catch {
+    deepProgress = null;
+    if (currentSet === s) $('#set-grid').innerHTML = empty('Erreur', 'Impossible de charger les finitions.');
+  }
+}
+
+// Master set : chaque finition de chaque carte (finitions connues + celles ajoutées à la main).
+function masterEntries() {
+  return currentSet.cards.flatMap(c => {
+    const rec = store.get(c.id);
+    const fins = [...new Set([...(setFinishMap[c.id] || ['normal']), ...Object.keys(rec?.qty || {})])]
+      .sort((a, b) => store.finishOrder(a) - store.finishOrder(b));
+    return fins.map(f => ({ c, f, n: rec?.qty[f] || 0 }));
+  });
+}
+
+function renderDeepBox() {
+  const box = $('#set-deep');
+  if (setMode !== 'master' || !currentSet) { box.innerHTML = ''; return; }
+  box.innerHTML = deepProgress
+    ? `<div class="deep-box"><span>Analyse des finitions spéciales… ${deepProgress}</span></div>`
+    : api.finishesDeep(currentSet.id)
+      ? '<div class="deep-box"><span>✓ Reverses Poké Ball, Master Ball et Cosmo incluses</span></div>'
+      : `<div class="deep-box"><span>Le master set compte les versions normale, reverse et holo. Inclure aussi les reverses Poké Ball, Master Ball, Cosmo ?</span>
+         <button class="btn" id="btn-deep">Analyser</button></div>`;
+  $('#btn-deep')?.addEventListener('click', () => { deepProgress = '0'; renderDeepBox(); loadFinishes(true); });
 }
 
 function renderSet() {
@@ -397,15 +637,28 @@ function renderSet() {
   const tot = s.cardCount?.official || s.cards.length;
   const have = s.cards.filter(c => store.count(c.id)).length;
   const pct = Math.min(100, (have / tot) * 100);
-  const l = api.logo(s.logo || s.symbol);
+  const master = setMode === 'master' && setFinishMap ? masterEntries() : null;
+  const mHave = master?.filter(e => e.n).length, mTot = master?.length;
   $('#set-head').innerHTML = `<div class="set-head">
-    ${l ? `<img src="${esc(l)}" alt="">` : ''}
+    ${setLogoHtml(s)}
     <div class="body">
       <h1>${esc(s.name)}</h1>
       <div class="count">${have} / ${tot} cartes${s.cards.length > tot ? ` (+${s.cards.length - tot} secrètes)` : ''}</div>
       <div class="bar ${pct >= 100 ? 'done' : ''}"><i style="width:${pct}%"></i></div>
+      ${master ? `<div class="count" style="margin-top:8px">Master set : ${mHave} / ${mTot}</div>
+        <div class="bar ${mHave >= mTot ? 'done' : ''}"><i style="width:${Math.min(100, mHave / mTot * 100)}%"></i></div>` : ''}
     </div>
   </div>`;
+  renderDeepBox();
+
+  if (setMode === 'master') {
+    if (!master) { $('#set-grid').innerHTML = spinner; return; }
+    const list = master.filter(e => setFilter === 'all' || (setFilter === 'owned') === !!e.n);
+    $('#set-grid').innerHTML = list.length
+      ? list.map(({ c, f, n }) => tile(c, { sub: `${c.localId}/${tot} · ${store.SHORT[f]}`, qty: n, finish: f, missing: true })).join('')
+      : empty(setFilter === 'owned' ? 'Aucune carte possédée' : 'Master set complet !', '');
+    return;
+  }
   const cards = s.cards.filter(c => setFilter === 'all' || (setFilter === 'owned') === !!store.count(c.id));
   $('#set-grid').innerHTML = cards.length
     ? cards.map(c => tile(c, { sub: `${c.localId}/${tot}`, missing: true })).join('')
@@ -413,6 +666,14 @@ function renderSet() {
 }
 
 $('#set-back').addEventListener('click', () => show('sets'));
+$('#set-mode').addEventListener('click', e => {
+  const b = e.target.closest('[data-m]');
+  if (!b) return;
+  setMode = b.dataset.m;
+  document.querySelectorAll('#set-mode button').forEach(x => x.classList.toggle('active', x === b));
+  renderSet();
+  if (setMode === 'master' && !setFinishMap) loadFinishes();
+});
 $('#set-chips').addEventListener('click', e => {
   const c = e.target.closest('.chip');
   if (!c) return;
@@ -603,8 +864,9 @@ store.onChange(() => {
   if (current === 'collection') renderCollection();
   if (current === 'set') renderSet();
   if (current === 'sets') renderSets();
+  if (current === 'poke') renderPoke();
   // met à jour les badges de quantité visibles (scan, recherche)
-  document.querySelectorAll('#scan-results .tile, #search-results .tile').forEach(t => {
+  document.querySelectorAll('#scan-results .tile:not([data-finish]), #search-results .tile').forEach(t => {
     const n = store.count(t.dataset.card);
     let b = t.querySelector('.qty');
     if (n && !b) { b = document.createElement('span'); b.className = 'qty'; t.querySelector('.img').after(b); }

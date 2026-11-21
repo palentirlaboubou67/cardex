@@ -68,20 +68,58 @@
     <!-- COLLECTION -->
     <section class="view" id="view-collection">
       <h1>Ma collection</h1>
-      <div class="stats" id="stats"></div>
-      <div class="toolbar">
-        <div class="searchbox small">
-          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
-          <input id="col-filter" type="search" placeholder="Filtrer" autocomplete="off">
-        </div>
-        <select id="col-sort">
-          <option value="recent">Récentes</option>
-          <option value="name">Nom</option>
-          <option value="set">Série</option>
-          <option value="price">Valeur</option>
-        </select>
+      <div class="segment" id="col-mode">
+        <button class="active" data-m="cards">Cartes</button>
+        <button data-m="dex">Pokédex</button>
       </div>
-      <div class="grid" id="col-grid"></div>
+      <div id="col-cards">
+        <div class="stats" id="stats"></div>
+        <div class="toolbar">
+          <div class="searchbox small">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+            <input id="col-filter" type="search" placeholder="Filtrer (nom, série)" autocomplete="off">
+          </div>
+          <select id="col-sort">
+            <option value="recent">Récentes</option>
+            <option value="name">Nom</option>
+            <option value="dex">N° Pokédex</option>
+            <option value="set">Série</option>
+            <option value="price">Valeur</option>
+          </select>
+        </div>
+        <div class="chips scroll" id="col-finish"></div>
+        <div class="grid" id="col-grid"></div>
+      </div>
+      <div id="col-dex" hidden>
+        <div class="searchbox">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <input id="dex-filter" type="search" placeholder="Nom ou numéro (ex. Pikachu, 25)" autocomplete="off">
+        </div>
+        <div class="chips" id="dex-chips">
+          <button class="chip active" data-f="all">Tous</button>
+          <button class="chip" data-f="owned">Possédés</button>
+          <button class="chip" data-f="missing">Manquants</button>
+        </div>
+        <div id="dex-progress"></div>
+        <div class="dex-grid" id="dex-grid"></div>
+      </div>
+    </section>
+
+    <!-- FICHE D'UN POKÉMON -->
+    <section class="view" id="view-poke">
+      <button class="back" id="poke-back">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Pokédex
+      </button>
+      <div id="poke-head"></div>
+      <p class="section-title">Dans ma collection</p>
+      <div class="grid" id="poke-mine"></div>
+      <p class="section-title" style="margin-top:24px" id="poke-all-title">Toutes ses cartes</p>
+      <div class="chips" id="poke-chips">
+        <button class="chip active" data-f="all">Toutes</button>
+        <button class="chip" data-f="owned">Possédées</button>
+        <button class="chip" data-f="missing">Manquantes</button>
+      </div>
+      <div class="grid" id="poke-all"></div>
     </section>
 
     <!-- SÉRIES -->
@@ -116,6 +154,11 @@
         <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Séries
       </button>
       <div id="set-head"></div>
+      <div class="segment" id="set-mode">
+        <button class="active" data-m="base">Set de base</button>
+        <button data-m="master">Master set</button>
+      </div>
+      <div id="set-deep"></div>
       <div class="chips" id="set-chips">
         <button class="chip active" data-f="all">Toutes</button>
         <button class="chip" data-f="owned">Possédées</button>

@@ -1,8 +1,22 @@
 // Sauvegarde de la collection dans le navigateur (localStorage) + export/import en fichier.
-import { img, setIdOf, priceOf } from './api.js';
+import { setIdOf, priceOf } from './api.js';
 
 const KEY = 'cardex.collection.v1';
-export const VARIANTS = { normal: 'Normale', reverse: 'Reverse', holo: 'Holo', firstEdition: '1re édition' };
+export const VARIANTS = {
+  normal: 'Normale',
+  reverse: 'Reverse',
+  holo: 'Holo',
+  cosmos: 'Cosmo Holo',
+  pokeball: 'Reverse Poké Ball',
+  masterball: 'Reverse Master Ball',
+  firstEdition: '1re édition',
+  stamp: 'Tamponnée (promo)',
+};
+export const SHORT = {
+  normal: 'Normale', reverse: 'Reverse', holo: 'Holo', cosmos: 'Cosmo',
+  pokeball: 'Poké Ball', masterball: 'Master Ball', firstEdition: '1re éd.', stamp: 'Tampon',
+};
+export const finishOrder = f => Object.keys(VARIANTS).indexOf(f);
 
 let data = load();
 const listeners = new Set();
@@ -27,12 +41,11 @@ export const get = id => data.cards[id];
 export const total = rec => (rec ? Object.values(rec.qty).reduce((a, b) => a + b, 0) : 0);
 export const count = id => total(data.cards[id]);
 
-// Construit l'enregistrement à partir de la fiche complète de l'API.
-function recordFrom(full) {
+// Infos de la fiche complète de l'API gardées dans la collection.
+function metaFrom(full) {
   const prices = {};
   for (const v of Object.keys(VARIANTS)) prices[v] = priceOf(full, v);
   return {
-    id: full.id,
     name: full.name,
     localId: full.localId,
     setId: full.set?.id || setIdOf(full.id),
@@ -40,17 +53,16 @@ function recordFrom(full) {
     setTotal: full.set?.cardCount?.official || null,
     image: full.image || '',
     rarity: full.rarity || '',
+    category: full.category || '',
+    dexId: full.dexId || [],
     prices,
-    qty: {},
-    addedAt: Date.now(),
   };
 }
 
 export function setQty(full, variant, n) {
   const id = full.id;
-  let rec = data.cards[id];
-  if (!rec) rec = data.cards[id] = recordFrom(full);
-  else rec.prices = recordFrom(full).prices; // rafraîchit les prix au passage
+  const rec = data.cards[id] ??= { id, qty: {}, addedAt: Date.now() };
+  Object.assign(rec, metaFrom(full)); // rafraîchit prix et infos au passage
   if (n > 0) rec.qty[variant] = n;
   else delete rec.qty[variant];
   if (total(rec) === 0) delete data.cards[id];
@@ -61,9 +73,19 @@ export function add(full, variant, n = 1) {
   setQty(full, variant, (data.cards[full.id]?.qty[variant] || 0) + n);
 }
 
+// Met à jour les infos d'une carte déjà possédée (ex. numéro de Pokédex des anciennes sauvegardes).
+export function refresh(full, notify = true) {
+  const rec = data.cards[full.id];
+  if (!rec) return;
+  Object.assign(rec, metaFrom(full));
+  if (notify) save();
+}
+export const flush = save;
+
+export const priceFor = (rec, f) => rec.prices?.[f] ?? rec.prices?.normal ?? 0;
 export function value(rec) {
   let v = 0;
-  for (const [k, n] of Object.entries(rec.qty)) v += (rec.prices?.[k] ?? rec.prices?.normal ?? 0) * n;
+  for (const [f, n] of Object.entries(rec.qty)) v += priceFor(rec, f) * n;
   return v;
 }
 
@@ -83,7 +105,12 @@ export function ownedBySet() {
   return m;
 }
 
-export const thumb = rec => img(rec.image, 'low');
+// Numéro de Pokédex → nombre de cartes différentes possédées.
+export function ownedByDex() {
+  const m = new Map();
+  for (const c of all()) for (const n of c.dexId || []) m.set(n, (m.get(n) || 0) + 1);
+  return m;
+}
 
 // ---------- Sauvegarde fichier ----------
 export function exportFile() {
@@ -95,7 +122,7 @@ export function exportFile() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-// Fusionne : pour chaque carte et variante, on garde la plus grande quantité.
+// Fusionne : pour chaque carte et finition, on garde la plus grande quantité.
 export function importText(text) {
   const d = JSON.parse(text);
   if (!d || typeof d.cards !== 'object') throw new Error('Fichier invalide');
