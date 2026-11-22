@@ -48,6 +48,19 @@ export async function setsById() {
 }
 
 export const set = id => get(`/sets/${encodeURIComponent(id)}`);
+
+// Blocs (Écarlate et Violet, Épée et Bouclier…) avec la liste de leurs séries, gardés un jour.
+const SERIES_KEY = 'cardex.series.cache';
+export async function series() {
+  const c = readLS(SERIES_KEY);
+  if (c && Date.now() - c.t < 86400000) return c.d;
+  const list = (await get('/series')).filter(s => s.id !== 'tcgp');
+  const d = (await Promise.all(list.map(s => get(`/series/${encodeURIComponent(s.id)}`).catch(() => null))))
+    .filter(Boolean)
+    .map(s => ({ id: s.id, name: s.name, logo: s.logo || '', date: s.releaseDate || s.firstSet?.releaseDate || '', sets: (s.sets || []).map(x => x.id) }));
+  writeLS(SERIES_KEY, { t: Date.now(), d });
+  return d;
+}
 export const card = id => get(`/cards/${encodeURIComponent(id)}`);
 export const search = (name, max = 80) => get(`/cards?name=${encodeURIComponent(name)}${max ? `&pagination:itemsPerPage=${max}` : ''}`);
 export const byDex = n => get(`/cards?dexId=eq:${n}`);

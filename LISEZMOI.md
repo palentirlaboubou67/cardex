@@ -5,7 +5,11 @@ Appli web (installable sur téléphone) pour scanner ses cartes Pokémon et suiv
 - **Scanner** : la caméra lit le numéro en bas de la carte (ex. `025/165`) et le nom, puis retrouve la carte.
 - **Recherche** : par nom, si le scan ne trouve pas.
 - **Collection** : quantités par variante (normale, reverse, holo, 1re édition), valeur estimée (cote Cardmarket).
-- **Séries** : progression de chaque série, cartes possédées et manquantes.
+- **Séries** : rangées par bloc (Méga-Évolution, Écarlate et Violet, Épée et Bouclier…), avec la progression de chacune.
+  Dans une série : vue Grille, Liste à cocher (une case par version, pour saisir vite) ou Classeur (9 cartes par page).
+- **Doubles** : les cartes en plusieurs exemplaires et une liste d'échange (doubles + envies) à copier.
+- **Succès** : des objectifs de collection (Trio de départ, Pokédex de Kanto, Master Ball, série complète…).
+- **Valeur** : la courbe de la valeur estimée de la collection, notée chaque jour.
 - **Envies** : alertes prix. On fixe une fourchette ; Cardex prévient quand l'offre la moins chère sur Cardmarket y entre
   (vérification en arrière-plan toutes les ~12 h sur Chrome Android avec l'appli installée, sinon à chaque ouverture).
 - **Decks** : les meilleurs decks de la méta actuelle et de chaque saison depuis l'ère XY (2014-2015), d'après Limitless TCG, avec le prix

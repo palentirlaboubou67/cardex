@@ -47,7 +47,8 @@ const spinner = '<div class="spinner"></div>';
 // Une image qui ne charge pas devient une vignette avec le nom.
 document.addEventListener('error', e => {
   const el = e.target;
-  if (el.tagName === 'IMG' && el.closest('.set-logo, .set-head')) el.outerHTML = plate(el.alt);
+  if (el.tagName === 'IMG' && (el.classList.contains('set-sym') || el.closest('.bloc-logo'))) el.remove();
+  else if (el.tagName === 'IMG' && el.closest('.set-logo, .set-head')) el.outerHTML = plate(el.alt);
   else if (el.tagName === 'IMG' && el.closest('.tile')) {
     const name = el.closest('.tile').querySelector('.name')?.textContent || '';
     el.outerHTML = `<div class="noimg">${esc(name)}</div>`;
@@ -400,9 +401,10 @@ $('#col-finish').addEventListener('click', e => {
 });
 
 function renderCollection() {
-  $('#col-cards').hidden = colMode !== 'cards';
-  $('#col-dex').hidden = colMode !== 'dex';
+  for (const m of ['cards', 'dex', 'dup', 'ach']) $(`#col-${m}`).hidden = colMode !== m;
   if (colMode === 'dex') return renderDex();
+  if (colMode === 'dup') return renderDoubles();
+  if (colMode === 'ach') return renderAchievements();
 
   const s = store.stats();
   $('#stats').innerHTML = `
@@ -410,6 +412,7 @@ function renderCollection() {
     <div class="stat"><div class="v">${s.unique}</div><div class="k">différentes</div></div>
     <div class="stat"><div class="v">${s.sets}</div><div class="k">séries</div></div>
     <div class="stat gold"><div class="v">${euro.format(s.value)}</div><div class="k">valeur estimée</div></div>`;
+  renderTrend();
 
   // Une entrée par carte ET par finition : une reverse et une normale sont deux cartes distinctes.
   const entries = store.all().flatMap(rec => Object.entries(rec.qty).map(([f, n]) => ({ rec, f, n })));
@@ -609,28 +612,59 @@ $('#sets-mine').addEventListener('change', renderSets);
 async function renderSets() {
   const box = $('#set-list');
   if (!box.children.length) box.innerHTML = spinner;
-  let list;
-  try { [list] = await Promise.all([api.sets(), api.logosReady]); } catch { box.innerHTML = empty('Erreur', 'Vérifie ta connexion internet.'); return; }
+  let list, blocs;
+  try { [list, blocs] = await Promise.all([api.sets(), api.series().catch(() => []), api.logosReady]); } catch { box.innerHTML = empty('Erreur', 'Vérifie ta connexion internet.'); return; }
   const owned = store.ownedBySet();
   const q = scanner.norm($('#sets-filter').value.trim());
   const mine = $('#sets-mine').checked;
-  const rows = [...list].reverse()
-    .filter(s => (!q || scanner.norm(s.name).includes(q)) && (!mine || owned.has(s.id)))
-    .map(s => {
-      const have = owned.get(s.id) || 0;
-      const tot = s.cardCount?.official || s.cardCount?.total || 0;
-      const pct = tot ? Math.min(100, (have / tot) * 100) : 0;
-      return `<button class="set-row" data-set="${esc(s.id)}">
-        <div class="set-logo">${setLogoHtml(s)}</div>
-        <div class="body">
-          <div class="title">${esc(s.name)}</div>
-          <div class="count">${have} / ${tot}</div>
-          <div class="bar ${pct >= 100 ? 'done' : ''}"><i style="width:${pct}%"></i></div>
-        </div>
-      </button>`;
-    });
-  box.innerHTML = rows.length ? rows.join('') : empty('Aucune série', mine ? 'Tu n\'as encore aucune carte.' : 'Rien ne correspond.');
+  const keep = s => (!q || scanner.norm(s.name).includes(q)) && (!mine || owned.has(s.id));
+  const row = s => {
+    const have = owned.get(s.id) || 0;
+    const tot = s.cardCount?.official || s.cardCount?.total || 0;
+    const pct = tot ? Math.min(100, (have / tot) * 100) : 0;
+    return `<button class="set-row" data-set="${esc(s.id)}">
+      <div class="set-logo">${setLogoHtml(s)}</div>
+      <div class="body">
+        <div class="title">${esc(s.name)}</div>
+        <div class="count">${have} / ${tot}</div>
+        <div class="bar ${pct >= 100 ? 'done' : ''}"><i style="width:${pct}%"></i></div>
+      </div>
+    </button>`;
+  };
+  // Comme dans un classeur de collection : les séries rangées par bloc, le plus récent en haut.
+  const byId = new Map(list.map(s => [s.id, s]));
+  const seen = new Set();
+  const groups = blocs.map(b => ({ ...b, sets: b.sets.map(id => byId.get(id)).filter(s => s && !seen.has(s.id) && seen.add(s.id)) }))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const rest = list.filter(s => !seen.has(s.id));
+  if (rest.length) groups.push({ id: 'autres', name: 'Autres séries', sets: rest });
+  const html = groups.map((g, i) => {
+    const sets = [...g.sets].reverse().filter(keep);
+    if (!sets.length) return '';
+    const mineIn = g.sets.filter(s => owned.has(s.id)).length;
+    const cards = g.sets.reduce((n, s) => n + (owned.get(s.id) || 0), 0);
+    const open = q || mine || (openBlocs ? openBlocs.has(g.id) : i === 0 || mineIn > 0);
+    return `<details class="bloc" data-bloc="${esc(g.id)}"${open ? ' open' : ''}>
+      <summary>
+        <span class="bloc-logo">${g.logo ? `<img loading="lazy" src="${esc(g.logo)}.webp" alt="">` : ''}</span>
+        <span class="bloc-name">${esc(g.name)}<small>${g.date ? `${g.date.slice(0, 4)} · ` : ''}${g.sets.length} séries${cards ? ` · ${cards} de tes cartes` : ''}</small></span>
+        <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="set-list">${sets.map(row).join('')}</div>
+    </details>`;
+  }).join('');
+  box.innerHTML = html || empty('Aucune série', mine ? 'Tu n\'as encore aucune carte.' : 'Rien ne correspond.');
 }
+
+// Blocs ouverts ou fermés : retenus sur l'appareil.
+let openBlocs = (() => { try { const v = JSON.parse(localStorage.getItem('cardex.blocs')); return Array.isArray(v) ? new Set(v) : null; } catch { return null; } })();
+$('#set-list').addEventListener('toggle', e => {
+  const d = e.target.closest?.('.bloc');
+  if (!d || $('#sets-filter').value.trim() || $('#sets-mine').checked) return;
+  openBlocs ??= new Set([...document.querySelectorAll('#set-list .bloc[open]')].map(x => x.dataset.bloc));
+  d.open ? openBlocs.add(d.dataset.bloc) : openBlocs.delete(d.dataset.bloc);
+  try { localStorage.setItem('cardex.blocs', JSON.stringify([...openBlocs])); } catch {}
+}, true);
 
 $('#set-list').addEventListener('click', e => {
   const r = e.target.closest('[data-set]');
@@ -638,9 +672,10 @@ $('#set-list').addEventListener('click', e => {
 });
 
 let currentSet = null, setFilter = 'all', setMode = 'master', setFinishMap = null, deepProgress = null;
+let setView = 'grid', binderPage = 0;
 async function openSet(id) {
   show('set');
-  currentSet = null; setFinishMap = null; deepProgress = null;
+  currentSet = null; setFinishMap = null; deepProgress = null; binderPage = 0;
   $('#set-head').innerHTML = '';
   $('#set-deep').innerHTML = '';
   $('#set-grid').innerHTML = spinner;
@@ -648,7 +683,7 @@ async function openSet(id) {
     const [s] = await Promise.all([api.set(id), api.logosReady]);
     currentSet = s;
     renderSet();
-    if (setMode === 'master') loadFinishes();
+    if (setMode === 'master' || setView === 'list') loadFinishes();
   } catch {
     $('#set-grid').innerHTML = empty('Erreur', 'Vérifie ta connexion internet.');
   }
@@ -691,7 +726,7 @@ function masterEntries() {
 
 function renderDeepBox() {
   const box = $('#set-deep');
-  if (setMode !== 'master' || !currentSet) { box.innerHTML = ''; return; }
+  if ((setMode !== 'master' && setView !== 'list') || setView === 'binder' || !currentSet) { box.innerHTML = ''; return; }
   box.innerHTML = deepProgress
     ? `<div class="deep-box"><span>Analyse des finitions spéciales… ${deepProgress}</span></div>`
     : api.finishesDeep(currentSet.id)
@@ -709,10 +744,16 @@ function renderSet() {
   const pct = Math.min(100, (have / tot) * 100);
   const master = setMode === 'master' && setFinishMap ? masterEntries() : null;
   const mHave = master?.filter(e => e.n).length, mTot = master?.length;
+  const date = s.releaseDate ? new Date(s.releaseDate).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  const facts = [s.serie?.name, date && `sortie le ${date}`].filter(Boolean).map(esc).join(' · ');
+  const code = s.abbreviation?.official || s.abbreviation?.localized;
+  const legal = s.legal?.standard ? '<span class="pill ok">Jouable en Standard</span>' : s.legal?.expanded ? '<span class="pill">Étendu</span>' : '';
   $('#set-head').innerHTML = `<div class="set-head">
     ${setLogoHtml(s)}
     <div class="body">
+      <div class="set-facts">${s.symbol ? `<img class="set-sym" src="${esc(s.symbol)}.webp" alt="">` : ''}${code ? `<span class="pill code">${esc(code)}</span>` : ''}${legal}</div>
       <h1>${esc(s.name)}</h1>
+      ${facts ? `<div class="count">${facts}</div>` : ''}
       <div class="count">${have} / ${tot} cartes${s.cards.length > tot ? ` (+${s.cards.length - tot} secrètes)` : ''}</div>
       <div class="bar ${pct >= 100 ? 'done' : ''}"><i style="width:${pct}%"></i></div>
       ${master ? `<div class="count" style="margin-top:8px">Toutes les versions (master set) : ${mHave} / ${mTot}</div>
@@ -720,6 +761,17 @@ function renderSet() {
     </div>
   </div>`;
   renderDeepBox();
+  $('#set-mode').hidden = setView !== 'grid';
+  $('#set-chips').hidden = setView === 'binder';
+  $('#set-hint').innerHTML = {
+    grid: setMode === 'master'
+      ? '<b>Toutes les versions</b> : chaque carte et chacune de ses brillantes (reverse, holo, Poké Ball…), pour un master set. <b>Une par carte</b> : une seule version suffit.'
+      : '<b>Une par carte</b> : une carte compte dès que tu en as une version. <b>Toutes les versions</b> affiche aussi chaque brillante.',
+    list: 'Coche directement les versions que tu possèdes : un appui ajoute la carte, un second la retire. Avec plusieurs exemplaires, l\'appui ouvre la fiche.',
+    binder: 'Ta série rangée comme dans un vrai classeur, 9 cartes par page. Les pochettes vides sont les cartes qui te manquent. Glisse ou utilise les flèches pour tourner les pages.',
+  }[setView];
+  if (setView === 'list') return renderChecklist(tot);
+  if (setView === 'binder') return renderBinder(tot);
 
   if (setMode === 'master') {
     if (!master) { $('#set-grid').innerHTML = spinner; return; }
@@ -750,6 +802,93 @@ $('#set-chips').addEventListener('click', e => {
   setFilter = c.dataset.f;
   document.querySelectorAll('#set-chips .chip').forEach(x => x.classList.toggle('active', x === c));
   renderSet();
+});
+$('#set-view').addEventListener('click', e => {
+  const b = e.target.closest('[data-v]');
+  if (!b) return;
+  setView = b.dataset.v;
+  document.querySelectorAll('#set-view button').forEach(x => x.classList.toggle('active', x === b));
+  renderSet();
+  if (setView === 'list' && !setFinishMap) loadFinishes();
+});
+
+// Liste à cocher : une ligne par carte, une case par version.
+function renderChecklist(tot) {
+  const s = currentSet;
+  const cards = s.cards.filter(c => setFilter === 'all' || (setFilter === 'owned') === !!store.count(c.id));
+  if (!setFinishMap && !cards.some(c => store.count(c.id))) { $('#set-grid').innerHTML = spinner; return; }
+  $('#set-grid').innerHTML = cards.length ? `<div class="checklist">${cards.map(c => {
+    const rec = store.get(c.id);
+    const fins = [...new Set([...(setFinishMap?.[c.id] || ['normal']), ...Object.keys(rec?.qty || {})])]
+      .sort((a, b) => store.finishOrder(a) - store.finishOrder(b));
+    const src = api.img(c.image);
+    return `<div class="chk-row ${rec ? 'own' : ''}">
+      <span class="chk-no">${esc(c.localId)}<small>/${tot}</small></span>
+      <div class="chk-img" data-card="${esc(c.id)}">${src ? `<img loading="lazy" src="${esc(src)}" alt="">` : ''}</div>
+      <div class="chk-nm" data-card="${esc(c.id)}">${esc(c.name)}</div>
+      <div class="chk-fins">${fins.map(f => {
+        const q = rec?.qty[f] || 0;
+        return `<button class="tick ${q ? 'on' : ''}" data-tick="${esc(c.id)}" data-fin="${f}" aria-pressed="${!!q}" title="${esc(store.VARIANTS[f])}">
+          <i class="dot dot-${f}"></i>${store.SHORT[f]}${q > 1 ? ` <b>×${q}</b>` : ''}</button>`;
+      }).join('')}</div>
+    </div>`;
+  }).join('')}</div>` : empty(setFilter === 'owned' ? 'Aucune carte possédée' : 'Série complète !', '');
+}
+
+$('#set-grid').addEventListener('click', async e => {
+  const b = e.target.closest('[data-tick]');
+  if (b && currentSet) {
+    const s = currentSet, c = s.cards.find(x => x.id === b.dataset.tick), f = b.dataset.fin;
+    const q = store.get(c.id)?.qty[f] || 0;
+    if (q > 1) return openCard(c.id, f);
+    // carte déjà en collection : on garde ses infos complètes (prix, Pokédex) en passant par sa fiche
+    const brief = { ...c, set: { id: s.id, name: s.name, cardCount: s.cardCount } };
+    const full = store.get(c.id) ? await api.card(c.id).catch(() => null) : null;
+    store.setQty(full || brief, f, q ? 0 : 1);
+    toast(q ? `${c.name} (${store.SHORT[f]}) retirée` : `${c.name} (${store.SHORT[f]}) ajoutée`);
+    if (!full && !q) api.card(c.id).then(x => store.refresh(x)).catch(() => {});
+    return;
+  }
+  const p = e.target.closest('[data-bp]');
+  if (p) turnPage(+p.dataset.bp);
+});
+
+// Classeur : 9 pochettes par page, dans l'ordre des numéros.
+const POCKETS = 9;
+function renderBinder(tot) {
+  const cards = currentSet.cards;
+  const pages = Math.max(1, Math.ceil(cards.length / POCKETS));
+  binderPage = Math.max(0, Math.min(binderPage, pages - 1));
+  const slice = cards.slice(binderPage * POCKETS, (binderPage + 1) * POCKETS);
+  const have = slice.filter(c => store.count(c.id)).length;
+  const fill = Array.from({ length: POCKETS - slice.length }, () => '<div class="pocket blank"></div>').join('');
+  $('#set-grid').innerHTML = `<div class="binder">
+    <div class="binder-nav">
+      <button class="btn" data-bp="-1" ${binderPage ? '' : 'disabled'} aria-label="Page précédente"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <div class="binder-info"><b>Page ${binderPage + 1} / ${pages}</b><small>cartes ${esc(slice[0]?.localId || '')} à ${esc(slice.at(-1)?.localId || '')} · ${have} / ${slice.length} sur cette page</small></div>
+      <button class="btn" data-bp="1" ${binderPage < pages - 1 ? '' : 'disabled'} aria-label="Page suivante"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
+    </div>
+    <div class="binder-page">${slice.map(c => `<div class="pocket">${tile(c, { sub: `${c.localId}/${tot}`, missing: true })}</div>`).join('')}${fill}</div>
+    <div class="binder-dots">${Array.from({ length: pages }, (_, i) => `<i class="${i === binderPage ? 'on' : ''}"></i>`).join('')}</div>
+  </div>`;
+}
+function turnPage(d) {
+  const pages = Math.ceil((currentSet?.cards.length || 0) / POCKETS);
+  const next = binderPage + d;
+  if (next < 0 || next >= pages) return;
+  binderPage = next;
+  renderSet();
+}
+let swipeX = null;
+$('#set-grid').addEventListener('touchstart', e => { swipeX = setView === 'binder' ? e.touches[0].clientX : null; }, { passive: true });
+$('#set-grid').addEventListener('touchend', e => {
+  if (swipeX === null) return;
+  const dx = e.changedTouches[0].clientX - swipeX;
+  swipeX = null;
+  if (Math.abs(dx) > 60) turnPage(dx < 0 ? 1 : -1);
+});
+document.addEventListener('keydown', e => {
+  if (current === 'set' && setView === 'binder' && !sheetOpen && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) turnPage(e.key === 'ArrowRight' ? 1 : -1);
 });
 
 // ---------- Decks de la méta (data/decks.json, construit par tools/build_decks.py) ----------
@@ -1089,6 +1228,193 @@ async function refreshWishDot() {
   $('#tab-dot').classList.toggle('on', any);
 }
 
+// ---------- Évolution de la valeur de la collection ----------
+const HIST_KEY = 'cardex.history.v1';
+const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const today = () => new Date().toLocaleDateString('sv'); // AAAA-MM-JJ, heure locale
+
+// Un point par jour (le dernier état de la journée), sur un peu plus d'un an.
+function recordHistory() {
+  const s = store.stats();
+  const h = lsGet(HIST_KEY, []);
+  const pt = { d: today(), v: Math.round(s.value * 100) / 100, n: s.total };
+  if (h.at(-1)?.d === pt.d) h[h.length - 1] = pt; else h.push(pt);
+  lsSet(HIST_KEY, h.slice(-400));
+}
+
+const shortDate = d => new Date(`${d}T12:00`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+function renderTrend() {
+  const box = $('#value-trend');
+  const h = lsGet(HIST_KEY, []).slice(-90);
+  if (!store.all().length) { box.innerHTML = ''; return; }
+  if (h.length < 2) {
+    box.innerHTML = `<div class="trend-head"><b>Valeur de ta collection</b><span>La courbe se dessine à partir de demain : Cardex note la valeur chaque jour où tu ouvres l'appli.</span></div>`;
+    return;
+  }
+  const W = 320, H = 64, P = 4;
+  const t = h.map(p => new Date(`${p.d}T12:00`).getTime());
+  const t0 = t[0], t1 = t.at(-1);
+  const vs = h.map(p => p.v), lo = Math.min(...vs), hi = Math.max(...vs);
+  const x = i => P + ((t[i] - t0) / (t1 - t0 || 1)) * (W - 2 * P);
+  const y = v => H - P - ((v - lo) / (hi - lo || 1)) * (H - 2 * P);
+  const line = h.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join('');
+  const area = `${line}L${x(h.length - 1).toFixed(1)},${H}L${x(0).toFixed(1)},${H}Z`;
+  const delta = vs.at(-1) - vs[0];
+  const sign = delta > 0.005 ? 'up' : delta < -0.005 ? 'down' : '';
+  box.innerHTML = `<div class="trend-head">
+      <b>Valeur de ta collection</b>
+      <span class="delta ${sign}">${delta > 0 ? '+' : ''}${euro.format(delta)} depuis le ${shortDate(h[0].d)}</span>
+    </div>
+    <div class="trend-read" id="trend-read">${shortDate(h.at(-1).d)} : <b>${euro.format(vs.at(-1))}</b> · ${h.at(-1).n} cartes</div>
+    <svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Valeur de la collection du ${shortDate(h[0].d)} au ${shortDate(h.at(-1).d)}">
+      <line class="grid-l" x1="0" x2="${W}" y1="${y(hi)}" y2="${y(hi)}"/><line class="grid-l" x1="0" x2="${W}" y1="${y(lo)}" y2="${y(lo)}"/>
+      <path class="area" d="${area}"/><path class="line" d="${line}"/>
+      <line class="cross" id="trend-cross" x1="0" x2="0" y1="0" y2="${H}" visibility="hidden"/>
+      <circle class="end" cx="${x(h.length - 1)}" cy="${y(vs.at(-1))}" r="3.5"/>
+    </svg>
+    <div class="trend-axis"><span>${shortDate(h[0].d)}</span><span>${euro.format(lo)} – ${euro.format(hi)}</span><span>${shortDate(h.at(-1).d)}</span></div>`;
+  // au toucher ou au survol : la valeur du jour le plus proche
+  const svg = box.querySelector('.spark');
+  const read = i => {
+    $('#trend-read').innerHTML = `${shortDate(h[i].d)} : <b>${euro.format(h[i].v)}</b> · ${h[i].n} cartes`;
+    const c = $('#trend-cross');
+    c.setAttribute('x1', x(i)); c.setAttribute('x2', x(i)); c.setAttribute('visibility', 'visible');
+  };
+  svg.addEventListener('pointermove', e => {
+    const r = svg.getBoundingClientRect();
+    const px = ((e.clientX - r.left) / r.width) * W;
+    let best = 0;
+    h.forEach((_, i) => { if (Math.abs(x(i) - px) < Math.abs(x(best) - px)) best = i; });
+    read(best);
+  });
+  svg.addEventListener('pointerleave', () => read(h.length - 1) || $('#trend-cross').setAttribute('visibility', 'hidden'));
+}
+
+// ---------- Doubles et liste d'échange ----------
+function doubles() {
+  return store.all().flatMap(rec => Object.entries(rec.qty).filter(([, n]) => n > 1).map(([f, n]) => ({ rec, f, n })))
+    .sort((a, b) => store.priceFor(b.rec, b.f) - store.priceFor(a.rec, a.f) || a.rec.name.localeCompare(b.rec.name, 'fr'));
+}
+function renderDoubles() {
+  const list = doubles();
+  const extra = list.reduce((a, e) => a + e.n - 1, 0);
+  const val = list.reduce((a, e) => a + store.priceFor(e.rec, e.f) * (e.n - 1), 0);
+  $('#dup-stats').innerHTML = `
+    <div class="stat"><div class="v">${extra}</div><div class="k">cartes à échanger</div></div>
+    <div class="stat"><div class="v">${list.length}</div><div class="k">différentes</div></div>
+    <div class="stat gold"><div class="v">${euro.format(val)}</div><div class="k">valeur des doubles</div></div>`;
+  $('#btn-trade').disabled = !list.length;
+  $('#dup-grid').innerHTML = list.length
+    ? list.map(({ rec, f, n }) => tile(rec, { sub: `${rec.setName} · ${n} exemplaires`, qty: n - 1, finish: f })).join('')
+    : empty('Aucun double', 'Quand tu ajoutes une carte que tu as déjà, elle apparaît ici.');
+}
+
+const finLabel = f => (f && f !== 'normal' ? ` (${store.SHORT[f] || f})` : '');
+async function tradeText() {
+  const lines = ['Mes doubles à échanger :'];
+  for (const { rec, f, n } of doubles()) lines.push(`• ${rec.name} – ${rec.setName} ${fmtNum(rec)}${finLabel(f)}${n > 2 ? ` ×${n - 1}` : ''}`);
+  const wishes = await WishDB.all().catch(() => []);
+  if (wishes.length) {
+    lines.push('', 'Je cherche :');
+    for (const w of wishes) lines.push(`• ${w.name} – ${w.setName} ${fmtNum(w)}${finLabel(w.variant)}`);
+  }
+  return lines.join('\n');
+}
+$('#btn-trade').addEventListener('click', async () => {
+  const text = await tradeText();
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Liste copiée : colle-la dans ta discussion');
+  } catch {
+    openSheet(`<div class="backup"><h2>Ta liste d'échange</h2><p>Sélectionne le texte pour le copier.</p>
+      <textarea class="trade-text" id="trade-text" readonly>${esc(text)}</textarea></div>`);
+    $('#trade-text').select();
+  }
+});
+
+// ---------- Succès ----------
+const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+async function achievements() {
+  await dexReady;
+  const recs = store.all(), st = store.stats(), dex = ownedByDex();
+  const fins = new Set(recs.flatMap(r => Object.keys(r.qty)));
+  const got = ns => ns.filter(n => dex.has(n)).length;
+  let setBest = 0, setName = '';
+  try {
+    const own = store.ownedBySet();
+    for (const s of await api.sets()) {
+      const t = s.cardCount?.official, p = t ? Math.min(1, (own.get(s.id) || 0) / t) : 0;
+      if (p > setBest) { setBest = p; setName = s.name; }
+    }
+  } catch {}
+  await decksReady;
+  let deckBest = 0, deckName = '';
+  const owned = ownedByName();
+  for (const p of DECKS.periods) for (const d of p.decks) {
+    const v = deckStatus(d, owned).pct;
+    if (v > deckBest) { deckBest = v; deckName = d.name; }
+  }
+  const dups = recs.reduce((a, r) => a + Object.values(r.qty).reduce((x, n) => x + Math.max(0, n - 1), 0), 0);
+  return [
+    { id: 'first', g: 'Collection', t: 'Première carte', d: 'Ajoute une carte à ta collection', have: st.total, need: 1 },
+    { id: 'c50', g: 'Collection', t: 'Collectionneur', d: 'Réunis 50 cartes', have: st.total, need: 50 },
+    { id: 'c250', g: 'Collection', t: 'Classeur plein', d: 'Réunis 250 cartes', have: st.total, need: 250 },
+    { id: 'c1000', g: 'Collection', t: 'Légende vivante', d: 'Réunis 1 000 cartes', have: st.total, need: 1000 },
+    { id: 'set', g: 'Collection', t: 'Série complète', d: setName ? `Ta série la plus avancée : ${setName}` : 'Toutes les cartes d\'une série', have: Math.floor(setBest * 100), need: 100, unit: ' %' },
+    { id: 'shiny', g: 'Brillantes', t: 'Ça brille !', d: 'Une reverse, une holo ou mieux', have: [...fins].some(f => f !== 'normal') ? 1 : 0, need: 1 },
+    { id: 'fins', g: 'Brillantes', t: 'Arc-en-ciel', d: '4 finitions différentes', have: fins.size, need: 4 },
+    { id: 'master', g: 'Brillantes', t: 'Master Ball', d: 'Une reverse Master Ball', have: fins.has('masterball') ? 1 : 0, need: 1 },
+    { id: 'starters', g: 'Pokédex', t: 'Trio de départ', d: 'Bulbizarre, Salamèche et Carapuce', have: got([1, 4, 7]), need: 3 },
+    { id: 'birds', g: 'Pokédex', t: 'Oiseaux légendaires', d: 'Artikodin, Électhor et Sulfura', have: got([144, 145, 146]), need: 3 },
+    { id: 'eevee', g: 'Pokédex', t: 'Évolitions', d: 'Évoli et ses 8 évolutions', have: got([133, 134, 135, 136, 196, 197, 470, 471, 700]), need: 9 },
+    { id: 'pika', g: 'Pokédex', t: 'Fan de Pikachu', d: '10 cartes Pikachu différentes', have: recs.filter(r => dexNums(r).includes(25)).length, need: 10 },
+    { id: 'dex100', g: 'Pokédex', t: 'Dresseur confirmé', d: '100 Pokémon différents', have: dex.size, need: 100 },
+    { id: 'kanto', g: 'Pokédex', t: 'Pokédex de Kanto', d: 'Les 151 premiers Pokémon', have: got(range(1, 151)), need: 151 },
+    { id: 'deck', g: 'Jeu', t: 'Prêt pour le tournoi', d: deckName ? `Ton deck le plus avancé : ${deckName}` : 'Un deck de la méta au complet', have: Math.floor(deckBest * 100), need: 100, unit: ' %' },
+    { id: 'dups', g: 'Jeu', t: 'Roi de l\'échange', d: '10 cartes en double', have: dups, need: 10 },
+    { id: 'v100', g: 'Valeur', t: 'Petit trésor', d: 'Collection estimée à 100 €', have: Math.floor(st.value), need: 100, unit: ' €' },
+    { id: 'v1000', g: 'Valeur', t: 'Coffre-fort', d: 'Collection estimée à 1 000 €', have: Math.floor(st.value), need: 1000, unit: ' €' },
+  ];
+}
+
+const ACH_KEY = 'cardex.ach.v1';
+let achT;
+// Après chaque changement : un message pour chaque succès qui vient d'être débloqué.
+function checkAchievements() {
+  clearTimeout(achT);
+  achT = setTimeout(async () => {
+    const list = await achievements().catch(() => null);
+    if (!list) return;
+    const done = list.filter(a => a.have >= a.need).map(a => a.id);
+    const known = lsGet(ACH_KEY, null);
+    lsSet(ACH_KEY, done);
+    if (!known) return; // premier lancement : on note sans féliciter
+    const fresh = list.filter(a => done.includes(a.id) && !known.includes(a.id));
+    if (fresh.length) toast(fresh.length === 1 ? `Succès débloqué : ${fresh[0].t} !` : `${fresh.length} succès débloqués !`);
+  }, 700);
+}
+
+async function renderAchievements() {
+  $('#ach-grid').innerHTML = spinner;
+  const list = await achievements();
+  if (colMode !== 'ach') return;
+  const done = list.filter(a => a.have >= a.need).length;
+  $('#ach-head').innerHTML = `<div class="ach-head"><b>${done} / ${list.length}</b> succès débloqués
+    <div class="bar ${done === list.length ? 'done' : ''}"><i style="width:${done / list.length * 100}%"></i></div></div>`;
+  const groups = [...new Set(list.map(a => a.g))];
+  $('#ach-grid').innerHTML = groups.map(g => `<h2 class="season-title">${esc(g)}</h2>` + list.filter(a => a.g === g).map(a => {
+    const ok = a.have >= a.need, u = a.unit || '';
+    return `<div class="ach ${ok ? 'done' : ''}">
+      <div class="medal"><svg viewBox="0 0 24 24"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4l-5.2 2.7 1-5.8L3.5 9.2l5.9-.9z"/></svg></div>
+      <div class="ach-body"><b>${esc(a.t)}</b><small>${esc(a.d)}</small>
+        ${ok ? '<span class="ach-n ok">Débloqué</span>' : `<div class="bar"><i style="width:${Math.min(100, a.have / a.need * 100)}%"></i></div>
+        <span class="ach-n">${Math.min(a.have, a.need).toLocaleString('fr-FR')}${u} / ${a.need.toLocaleString('fr-FR')}${u}</span>`}
+      </div>
+    </div>`;
+  }).join('')).join('');
+}
+
 // ---------- Sauvegarde ----------
 $('#btn-backup').addEventListener('click', () => {
   const t = store.lastSave();
@@ -1115,6 +1441,8 @@ $('#btn-backup').addEventListener('click', () => {
 
 // ---------- Mise à jour de l'affichage quand la collection change ----------
 store.onChange(() => {
+  recordHistory();
+  checkAchievements();
   if (current === 'collection') renderCollection();
   if (current === 'set') renderSet();
   if (current === 'sets') renderSets();
@@ -1135,5 +1463,7 @@ navigator.storage?.persist?.();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#search-results').innerHTML = empty('Trouve n\'importe quelle carte', 'Tape le nom d\'un Pokémon, d\'un dresseur…');
 api.sets().catch(() => {});
+recordHistory();
+checkAchievements();
 if (location.hash === '#wishlist') show('wishlist');
 checkPrices();

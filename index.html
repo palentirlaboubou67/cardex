@@ -85,9 +85,12 @@
       <div class="segment" id="col-mode">
         <button class="active" data-m="cards">Cartes</button>
         <button data-m="dex">Pokédex</button>
+        <button data-m="dup">Doubles</button>
+        <button data-m="ach">Succès</button>
       </div>
       <div id="col-cards">
         <div class="stats" id="stats"></div>
+        <div class="trend" id="value-trend"></div>
         <div class="toolbar">
           <div class="searchbox small">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
@@ -118,6 +121,21 @@
         </div>
         <div id="dex-progress"></div>
         <div class="dex-grid" id="dex-grid"></div>
+      </div>
+      <div id="col-dup" hidden>
+        <p class="hint">Les cartes que tu as en plusieurs exemplaires. Le badge indique combien tu peux en échanger : tu en gardes toujours une.</p>
+        <div class="stats three" id="dup-stats"></div>
+        <div class="toolbar">
+          <button class="btn primary" id="btn-trade">
+            <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg>Copier ma liste d'échange
+          </button>
+          <span class="checked">Tes doubles et tes envies, prêts à coller dans une discussion</span>
+        </div>
+        <div class="grid" id="dup-grid"></div>
+      </div>
+      <div id="col-ach" hidden>
+        <div id="ach-head"></div>
+        <div class="ach-grid" id="ach-grid"></div>
       </div>
     </section>
 
@@ -150,7 +168,7 @@
         </div>
         <label class="toggle"><input type="checkbox" id="sets-mine"><span>Les miennes</span></label>
       </div>
-      <div class="set-list" id="set-list"></div>
+      <div class="blocs" id="set-list"></div>
     </section>
 
     <!-- ENVIES / ALERTES DE PRIX -->
@@ -221,12 +239,25 @@
         <button class="active" data-m="master">Toutes les versions</button>
         <button data-m="base">Une par carte</button>
       </div>
-      <p class="hint"><b>Toutes les versions</b> : chaque carte et chacune de ses brillantes (reverse, holo, Poké Ball…), pour un master set. <b>Une par carte</b> : une seule version suffit.</p>
+      <p class="hint" id="set-hint"></p>
       <div id="set-deep"></div>
-      <div class="chips" id="set-chips">
-        <button class="chip active" data-f="all">Toutes</button>
-        <button class="chip" data-f="owned">Possédées</button>
-        <button class="chip" data-f="missing">Manquantes</button>
+      <div class="toolbar">
+        <div class="chips" id="set-chips" style="margin:0;flex:1">
+          <button class="chip active" data-f="all">Toutes</button>
+          <button class="chip" data-f="owned">Possédées</button>
+          <button class="chip" data-f="missing">Manquantes</button>
+        </div>
+        <div class="vswitch" id="set-view" role="group" aria-label="Affichage">
+          <button class="active" data-v="grid" title="Grille">
+            <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>Grille
+          </button>
+          <button data-v="list" title="Liste à cocher">
+            <svg viewBox="0 0 24 24"><path d="M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9"/></svg>Liste
+          </button>
+          <button data-v="binder" title="Classeur">
+            <svg viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M2.5 7h4M2.5 12h4M2.5 17h4"/></svg>Classeur
+          </button>
+        </div>
       </div>
       <div class="grid" id="set-grid"></div>
     </section>
