@@ -112,6 +112,25 @@ export function ownedByDex() {
   return m;
 }
 
+// ---------- Produits scellés : ceux que je possède (prix d'achat) et ceux que je suis ----------
+export const sealedAll = () => Object.values(data.sealed || {});
+export const sealedGet = id => data.sealed?.[id];
+export function sealedSet(id, entry) {
+  data.sealed ??= {};
+  if (entry && entry.qty > 0) data.sealed[id] = { ...entry, id };
+  else delete data.sealed[id];
+  save();
+}
+export const watching = id => (data.watch || []).includes(id);
+export function toggleWatch(id) {
+  const w = new Set(data.watch || []);
+  w.has(id) ? w.delete(id) : w.add(id);
+  data.watch = [...w];
+  save();
+  return w.has(id);
+}
+export const watchList = () => data.watch || [];
+
 // ---------- Sauvegarde fichier ----------
 export function exportFile() {
   const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
@@ -133,6 +152,8 @@ export function importText(text) {
     if (!cur) { data.cards[id] = rec; n++; continue; }
     for (const [v, q] of Object.entries(rec.qty)) cur.qty[v] = Math.max(cur.qty[v] || 0, q);
   }
+  for (const [id, s] of Object.entries(d.sealed || {})) if (!data.sealed?.[id]) (data.sealed ??= {})[id] = s;
+  if (Array.isArray(d.watch)) data.watch = [...new Set([...(data.watch || []), ...d.watch])];
   save();
   return n;
 }

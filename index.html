@@ -171,18 +171,83 @@
       <div class="blocs" id="set-list"></div>
     </section>
 
+    <!-- MARCHÉ : cotes des cartes, produits scellés, mon scellé -->
+    <section class="view" id="view-market">
+      <h1>Marché</h1>
+      <p class="lede" id="market-lede"></p>
+      <div class="segment market-seg">
+        <button data-mk="cotes">Cotes</button>
+        <button data-mk="sealed">Scellé</button>
+        <button data-mk="mine">Mon scellé</button>
+        <button data-mk="wish">Envies</button>
+      </div>
+      <div id="mk-cotes">
+        <div class="stats" id="cotes-stats"></div>
+        <p class="hint">La variation compare la moyenne des ventes Cardmarket des <b>7 derniers jours</b> à celle des <b>30 derniers jours</b>, pour chaque carte et chaque version de ta collection.</p>
+        <div class="chips" id="cotes-chips">
+          <button class="chip active" data-f="up">En hausse</button>
+          <button class="chip" data-f="down">En baisse</button>
+          <button class="chip" data-f="top">Les plus chères</button>
+        </div>
+        <div class="mk-list" id="cotes-list"></div>
+      </div>
+      <div id="mk-sealed" hidden>
+        <div class="segment small" id="sealed-mode">
+          <button class="active" data-s="ideas">Pistes d'investissement</button>
+          <button data-s="all">Tout le scellé</button>
+        </div>
+        <div id="sealed-ideas"></div>
+        <div id="sealed-all" hidden>
+          <div class="toolbar">
+            <div class="searchbox small">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+              <input id="sealed-filter" type="search" placeholder="Série, produit (ex. Dracaufeu, 151)" autocomplete="off">
+            </div>
+            <label class="sel">Trier
+              <select id="sealed-sort">
+                <option value="new">Nouveautés</option>
+                <option value="c365">Hausse sur 1 an</option>
+                <option value="c90">Hausse sur 3 mois</option>
+                <option value="mult">Plus-value depuis le 1er prix</option>
+                <option value="asc">Prix croissant</option>
+                <option value="desc">Prix décroissant</option>
+              </select>
+            </label>
+          </div>
+          <div class="chips scroll" id="sealed-kinds"></div>
+          <p class="hint" id="sealed-count"></p>
+          <div class="pgrid" id="sealed-grid"></div>
+          <button class="btn block" id="sealed-more" hidden>Afficher plus</button>
+        </div>
+      </div>
+      <div id="mk-mine" hidden>
+        <div class="stats" id="mine-stats"></div>
+        <p class="hint">Ajoute un produit depuis sa fiche (bouton « J'en ai ») avec ton prix d'achat : Cardex calcule ta plus-value avec la cote du jour.</p>
+        <div class="mk-list" id="mine-list"></div>
+      </div>
+      <p class="credits" id="sealed-credits"></p>
+    </section>
+
     <!-- ENVIES / ALERTES DE PRIX -->
     <section class="view" id="view-wishlist">
-      <h1>Mes envies</h1>
+      <h1>Marché</h1>
       <p class="lede">Les cartes que tu veux acheter, avec le prix que tu es prêt à payer. Cardex te prévient quand la cote Cardmarket entre dans ta fourchette.</p>
-      <div class="notif-box" id="notif-box"></div>
-      <div class="toolbar">
-        <button class="btn" id="btn-check">
-          <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5"/></svg>Vérifier les prix
-        </button>
-        <span class="checked" id="checked-at"></span>
+      <div class="segment market-seg">
+        <button data-mk="cotes">Cotes</button>
+        <button data-mk="sealed">Scellé</button>
+        <button data-mk="mine">Mon scellé</button>
+        <button data-mk="wish" class="active">Envies</button>
       </div>
-      <div class="wish-list" id="wish-list"></div>
+      <div id="wish-body">
+        <div class="notif-box" id="notif-box"></div>
+        <div class="toolbar">
+          <button class="btn" id="btn-check">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5"/></svg>Vérifier les prix
+          </button>
+          <span class="checked" id="checked-at"></span>
+        </div>
+        <div class="wish-list" id="wish-list"></div>
+      </div>
     </section>
 
     <!-- DECKS DE LA MÉTA -->
@@ -279,8 +344,8 @@
     <button class="tab" data-view="decks">
       <svg viewBox="0 0 24 24"><rect x="7" y="3" width="12" height="16" rx="2"/><path d="M4 7v12a2 2 0 002 2h9"/></svg>Decks
     </button>
-    <button class="tab" data-view="wishlist">
-      <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0"/></svg>Envies<i class="tab-dot" id="tab-dot"></i>
+    <button class="tab" data-view="market">
+      <svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg>Marché<i class="tab-dot" id="tab-dot"></i>
     </button>
   </nav>
 

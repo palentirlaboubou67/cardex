@@ -49,6 +49,22 @@ export async function setsById() {
 
 export const set = id => get(`/sets/${encodeURIComponent(id)}`);
 
+// Évolution de la cote : moyennes des ventes Cardmarket sur 30, 7 et 1 jour, et tendance actuelle.
+export function trendOf(full, variant = 'normal') {
+  let cm = full?.pricing?.cardmarket;
+  let sfx = variant === 'normal' || variant === 'firstEdition' || variant === 'stamp' ? '' : '-holo';
+  if (['cosmos', 'pokeball', 'masterball'].includes(variant)) {
+    const dc = (full?.variants_detailed || []).find(d => foilKey(d) === variant)?.pricing?.cardmarket;
+    if (dc && dc.idProduct !== cm?.idProduct) { cm = dc; sfx = ''; }
+  }
+  if (!cm) return null;
+  const num = k => (typeof cm[k + sfx] === 'number' && cm[k + sfx] > 0 ? cm[k + sfx] : null);
+  const t = { a30: num('avg30'), a7: num('avg7'), a1: num('avg1'), now: num('trend') || num('avg') };
+  if (!t.now && sfx) return trendOf(full, 'normal');
+  t.change = t.a30 && t.a7 ? (t.a7 - t.a30) / t.a30 : null;
+  return t.now || t.a30 ? t : null;
+}
+
 // Blocs (Écarlate et Violet, Épée et Bouclier…) avec la liste de leurs séries, gardés un jour.
 const SERIES_KEY = 'cardex.series.cache';
 export async function series() {

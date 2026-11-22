@@ -680,6 +680,72 @@ select option { background: var(--bg2); color: var(--text); }
 .ach-n { display: block; font: 600 11.5px var(--f-mono); color: var(--muted); margin-top: 4px; }
 .ach-n.ok { color: var(--ok); }
 
+/* ---------- Marché ---------- */
+.market-seg button { padding: 9px 4px; font-size: 14px; }
+.segment.small button { padding: 7px 6px; font-size: 13.5px; }
+.chg { font: 600 12.5px var(--f-mono); color: var(--muted); white-space: nowrap; }
+.chg.up, .up-c { color: var(--ok); }
+.chg.down, .down-c { color: var(--bad); }
+.stat .v .chg { font-size: inherit; font-weight: 700; }
+.trend-cells {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: -6px 0 16px;
+  padding: 10px 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border);
+}
+.trend-cells > div { min-width: 0; }
+.trend-cells small { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trend-cells b { font: 600 13.5px var(--f-mono); }
+.mk-list { display: grid; gap: 8px; }
+@media (min-width: 700px) { .mk-list { grid-template-columns: 1fr 1fr; } }
+.mk-row {
+  display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 8px; border-radius: 14px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); min-width: 0;
+}
+.mk-img { position: relative; width: 46px; flex: none; aspect-ratio: 63 / 88; border-radius: 5px; overflow: hidden; background: var(--pocket); }
+.mk-img.sq { aspect-ratio: 1; background: #fff; }
+.mk-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mk-img.sq img { object-fit: contain; }
+.mk-img .fb { left: 2px; bottom: 2px; font-size: 8.5px; padding: 1px 4px; }
+.mk-body { flex: 1; min-width: 0; }
+.mk-body b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mk-body small { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mk-body small.up-c { color: var(--ok); } .mk-body small.down-c { color: var(--bad); }
+.mk-price { text-align: right; flex: none; display: grid; gap: 2px; }
+.mk-price b { font: 700 15px var(--f-mono); }
+
+/* produits scellés */
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.ptile {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; color: inherit; min-width: 0;
+  padding: 10px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border);
+}
+.ptile .pill { font-size: 10.5px; padding: 1px 7px; }
+.pimg { position: relative; width: 100%; aspect-ratio: 1; border-radius: 10px; background: #fff; display: grid; place-items: center; overflow: hidden; margin-bottom: 4px; }
+.pimg img { width: 92%; height: 92%; object-fit: contain; }
+.pimg-ph { width: 100%; height: 100%; background: var(--pocket); }
+.pimg .qty { position: absolute; top: 6px; right: 6px; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px; background: var(--ok); color: #fff; font: 700 12px var(--f-mono); display: grid; place-items: center; }
+.pimg .qty::before { content: '×'; opacity: .8; }
+.pimg .star { position: absolute; top: 5px; left: 7px; color: #e3a215; font-size: 17px; text-shadow: 0 1px 2px rgba(0, 0, 0, .3); }
+.ptitle { font-size: 13.5px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; width: 100%; }
+.ptile small { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+.pprice { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; width: 100%; margin-top: auto; padding-top: 2px; }
+.pprice b { font: 700 15px var(--f-mono); color: var(--gold); }
+.prow { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(150px, 160px); gap: 10px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: thin; }
+.idea { margin-bottom: 8px; }
+.idea .hint { margin: 2px 0 10px; }
+.warn-box { padding: 12px 14px; border-radius: 14px; background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); font-size: 13px; color: var(--text); margin-bottom: 6px; }
+.warn-box b { display: block; margin-bottom: 2px; }
+.pbig { display: grid; place-items: center; background: #fff; border-radius: 16px; padding: 14px; margin: 4px 0 14px; }
+.pbig img { max-height: 240px; max-width: 100%; object-fit: contain; }
+.detail .pill + h2 { margin-top: 6px; }
+.spark.tall { height: 96px; }
+#p-chart { margin: 0 0 10px; }
+#p-chart .spinner { margin: 14px auto; }
+.own-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.own-form label { font-size: 12px; color: var(--muted); display: grid; gap: 4px; }
+.own-form input { height: 44px; border-radius: 11px; border: 1px solid var(--border); background: var(--bg); padding: 0 12px; font-size: 16px; width: 100%; color: var(--text); }
+.own-form .btn { grid-column: span 1; }
+.own-form .btn.primary:only-of-type { grid-column: 1 / -1; }
+
 /* ---------- Toast & chargement ---------- */
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--tabbar) + var(--safe-b) + 16px); z-index: 60;

@@ -47,6 +47,8 @@ const spinner = '<div class="spinner"></div>';
 // Une image qui ne charge pas devient une vignette avec le nom.
 document.addEventListener('error', e => {
   const el = e.target;
+  if (el.tagName === 'IMG' && el.dataset.fallback && el.src !== el.dataset.fallback) { el.src = el.dataset.fallback; return; }
+  if (el.tagName === 'IMG' && el.closest('.ptile, .mk-row')) { el.replaceWith(Object.assign(document.createElement('div'), { className: 'pimg-ph' })); return; }
   if (el.tagName === 'IMG' && (el.classList.contains('set-sym') || el.closest('.bloc-logo'))) el.remove();
   else if (el.tagName === 'IMG' && el.closest('.set-logo, .set-head')) el.outerHTML = plate(el.alt);
   else if (el.tagName === 'IMG' && el.closest('.tile')) {
@@ -68,13 +70,14 @@ let current = 'scan';
 function show(view) {
   current = view;
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${view}`));
-  const tabView = { set: 'sets', poke: 'collection', deck: 'decks' }[view] || view;
+  const tabView = { set: 'sets', poke: 'collection', deck: 'decks', wishlist: 'market' }[view] || view;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === tabView));
   if (view !== 'scan') stopCam();
   if (view === 'collection') renderCollection();
   if (view === 'poke') renderPoke();
   if (view === 'sets') renderSets();
   if (view === 'wishlist') renderWishlist();
+  if (view === 'market') renderMarket();
   if (view === 'decks') renderDecks();
   if (view === 'deck') renderDeck();
   if (view === 'search') setTimeout(() => $('#search-input').focus(), 50);
@@ -152,6 +155,7 @@ function renderCard(full) {
       <div><small>Cote Cardmarket (tendance)</small><br><b>${price ? euro.format(price) : '—'}</b></div>
       ${priceHolo ? `<div style="text-align:right"><small>Reverse / Holo</small><br><b>${euro.format(priceHolo)}</b></div>` : ''}
     </div>` : ''}
+    ${trendBox(full)}
     <p class="section-title">Dans ma collection</p>
     <div class="variants" id="variants"></div>
     <p class="section-title">Alerte prix</p>
@@ -173,6 +177,8 @@ function applyPreview() {
   if (!fx) return;
   fx.className = `fxl ${NO_FX.has(previewFinish) ? '' : `fx-${previewFinish}`}`;
   $('#preview-label').textContent = `Aperçu : ${store.VARIANTS[previewFinish]}`;
+  const tb = $('#trend-box');
+  if (tb && currentCard) tb.outerHTML = trendBox(currentCard);
 }
 
 function renderVariants() {
@@ -1415,6 +1421,351 @@ async function renderAchievements() {
   }).join('')).join('');
 }
 
+// ---------- Marché : cotes des cartes, produits scellés, mon scellé ----------
+let marketMode = 'cotes', sealedMode = 'ideas', cotesFilter = 'up', sealedKind = 'all', sealedShown = 60, sealedT;
+const pct = v => `${v > 0 ? '+' : ''}${v.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %`;
+const chg = v => (v == null ? '' : `<span class="chg ${v > 0.5 ? 'up' : v < -0.5 ? 'down' : ''}">${v > 0.5 ? '▲' : v < -0.5 ? '▼' : '='} ${pct(v)}</span>`);
+
+// Évolution de la cote dans la fiche d'une carte.
+function trendBox(full) {
+  const t = api.trendOf(full, previewFinish || 'normal');
+  if (!t || !(t.a30 || t.a7)) return '<div id="trend-box"></div>';
+  const cell = (k, v) => `<div><small>${k}</small><b>${v ? euro.format(v) : '—'}</b></div>`;
+  return `<div class="trend-cells" id="trend-box" title="Cote de la version ${esc(store.VARIANTS[previewFinish] || '')}">
+    ${cell('Moy. 30 jours', t.a30)}${cell('Moy. 7 jours', t.a7)}${cell('Hier', t.a1)}
+    <div class="tc-chg"><small>Sur 30 jours</small>${t.change != null ? chg(t.change * 100) : '<b>—</b>'}</div>
+  </div>`;
+}
+
+const MARKET_LEDE = {
+  cotes: 'L\'évolution des cotes de tes cartes : celles qui montent, celles qui baissent et les plus précieuses.',
+  sealed: 'Tous les produits scellés du JCC (displays, coffrets, bundles, blisters, pokébox…) avec leur cote et son évolution depuis 2024.',
+  mine: 'Tes produits scellés, ce qu\'ils t\'ont coûté et ce qu\'ils valent aujourd\'hui.',
+};
+document.addEventListener('click', e => {
+  const b = e.target.closest('.market-seg [data-mk]');
+  if (!b) return;
+  if (b.dataset.mk === 'wish') return show('wishlist');
+  marketMode = b.dataset.mk;
+  show('market');
+});
+function renderMarket() {
+  document.querySelectorAll('#view-market .market-seg button').forEach(x => x.classList.toggle('active', x.dataset.mk === marketMode));
+  $('#market-lede').textContent = MARKET_LEDE[marketMode];
+  for (const m of ['cotes', 'sealed', 'mine']) $(`#mk-${m}`).hidden = marketMode !== m;
+  if (marketMode === 'cotes') renderCotes();
+  if (marketMode === 'sealed') renderSealed();
+  if (marketMode === 'mine') renderMine();
+}
+
+// --- Cotes des cartes de la collection (fiches TCGdex rafraîchies toutes les 12 h) ---
+const COTES_KEY = 'cardex.cotes.v1';
+let cotesBusy = false;
+async function loadCotes() {
+  const c = lsGet(COTES_KEY, { t: 0, m: {} });
+  const recs = store.all();
+  const stale = Date.now() - c.t > 12 * 3600000;
+  const todo = recs.filter(r => stale || !c.m[r.id]);
+  if (!todo.length || cotesBusy) return c.m;
+  cotesBusy = true;
+  let i = 0, done = 0;
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    while (i < todo.length) {
+      const r = todo[i++];
+      try {
+        const full = await api.card(r.id);
+        c.m[r.id] = Object.fromEntries(Object.keys(r.qty).map(f => [f, api.trendOf(full, f)]));
+        store.refresh(full, false); // la valeur de la collection suit les nouvelles cotes
+      } catch { /* hors ligne : on garde l'ancienne cote */ }
+      done++;
+      if (marketMode === 'cotes' && current === 'market') $('#cotes-list').innerHTML = `<p class="hint" style="text-align:center">Mise à jour des cotes… ${done} / ${todo.length}</p>`;
+    }
+  }));
+  if (stale) c.t = Date.now();
+  lsSet(COTES_KEY, c);
+  cotesBusy = false;
+  store.flush();
+  return c.m;
+}
+
+async function renderCotes() {
+  const recs = store.all();
+  if (!recs.length) {
+    $('#cotes-stats').innerHTML = '';
+    $('#cotes-list').innerHTML = empty('Aucune carte', 'Ajoute des cartes à ta collection pour suivre leurs cotes.');
+    return;
+  }
+  if (!lsGet(COTES_KEY, null)) $('#cotes-list').innerHTML = spinner;
+  const m = await loadCotes();
+  if (marketMode !== 'cotes' || current !== 'market') return;
+  const rows = recs.flatMap(rec => Object.entries(rec.qty).map(([f, n]) => ({ rec, f, n, t: m[rec.id]?.[f] })));
+  let v30 = 0, v7 = 0, up = 0, down = 0;
+  for (const r of rows) {
+    if (r.t?.a30 && r.t?.a7) { v30 += r.t.a30 * r.n; v7 += r.t.a7 * r.n; }
+    if (r.t?.change > 0.005) up++; else if (r.t?.change < -0.005) down++;
+  }
+  const s = store.stats();
+  $('#cotes-stats').innerHTML = `
+    <div class="stat gold"><div class="v">${euro.format(s.value)}</div><div class="k">valeur de ta collection</div></div>
+    <div class="stat"><div class="v">${v30 ? chg((v7 - v30) / v30 * 100) : '—'}</div><div class="k">sur 30 jours</div></div>
+    <div class="stat"><div class="v up-c">${up}</div><div class="k">cartes en hausse</div></div>
+    <div class="stat"><div class="v down-c">${down}</div><div class="k">cartes en baisse</div></div>`;
+  const by = {
+    up: rows.filter(r => r.t?.change > 0.005).sort((a, b) => b.t.change - a.t.change),
+    down: rows.filter(r => r.t?.change < -0.005).sort((a, b) => a.t.change - b.t.change),
+    top: rows.filter(r => r.t?.now).sort((a, b) => b.t.now - a.t.now),
+  }[cotesFilter].slice(0, 60);
+  $('#cotes-list').innerHTML = by.length ? by.map(({ rec, f, n, t }) => `<div class="mk-row" data-card="${esc(rec.id)}" data-finish="${f}">
+      <div class="mk-img">${rec.image ? `<img loading="lazy" src="${esc(api.img(rec.image))}" alt="">` : ''}${f !== 'normal' ? `<span class="fb fb-${f}">${store.SHORT[f]}</span>` : ''}</div>
+      <div class="mk-body"><b>${esc(rec.name)}</b><small>${esc(rec.setName)} · ${esc(fmtNum(rec))}${n > 1 ? ` · ×${n}` : ''}</small>
+        <small>${t.a30 ? `moy. 30 j ${euro.format(t.a30)}` : ''}${t.a7 ? ` → moy. 7 j ${euro.format(t.a7)}` : ''}</small></div>
+      <div class="mk-price"><b>${euro.format(t.now || t.a7 || t.a30)}</b>${t.change != null ? chg(t.change * 100) : ''}</div>
+    </div>`).join('')
+    : empty(cotesFilter === 'up' ? 'Aucune carte en hausse' : cotesFilter === 'down' ? 'Aucune carte en baisse' : 'Aucune cote', 'Les cotes bougent peu en ce moment.');
+}
+$('#cotes-chips').addEventListener('click', e => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  cotesFilter = c.dataset.f;
+  document.querySelectorAll('#cotes-chips .chip').forEach(x => x.classList.toggle('active', x === c));
+  renderCotes();
+});
+
+// --- Produits scellés (data/sealed.json, construit par tools/build_sealed.py) ---
+let SEALED = null;
+const sealedReady = () => (SEALED ? Promise.resolve(SEALED)
+  : fetch('data/sealed.json').then(r => r.json()).then(d => { SEALED = d; d.byId = new Map(d.products.map(p => [p.id, p])); return d; }));
+const KINDS = {
+  box: 'Display', halfbox: 'Demi-display', etb: 'Coffret Dresseur d\'Élite', bundle: 'Bundle de boosters',
+  coffret: 'Coffret', tin: 'Pokébox et tins', blister: 'Blister', booster: 'Booster', deck: 'Deck',
+  prerelease: 'Kit d\'avant-première', case: 'Caisse scellée',
+};
+const KIND_ORDER = Object.keys(KINDS);
+const bigImg = u => u.replace(/_200w\.jpg$/, '_400w.jpg');
+// Titre lisible : le type en français, plus ce qui distingue le produit (Pokémon Center, variante…).
+function ptitle(p) {
+  const extra = [/pokemon center/i.test(p.n) && 'Pokémon Center', ...(p.n.match(/\[([^\]]+)\]/g) || []).map(x => x.slice(1, -1))].filter(Boolean);
+  if (['box', 'halfbox', 'etb', 'bundle', 'booster', 'prerelease', 'case'].includes(p.k)) return [KINDS[p.k], ...extra].join(' · ');
+  return p.n.replace(/\s*\[[^\]]+\]/g, '').trim() + (extra.length ? ` · ${extra.join(' · ')}` : '');
+}
+const year = p => (p.rel || '').slice(0, 4);
+const mult = p => (p.first ? p.eur / p.first : 1);
+const sinceLabel = p => (p.since ? new Date(`${p.since}T12:00`).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }) : '');
+
+function ptile(p) {
+  const own = store.sealedGet(p.id);
+  return `<button class="ptile" data-product="${p.id}">
+    <div class="pimg">${p.img ? `<img loading="lazy" src="${esc(p.img)}" alt="">` : '<div class="pimg-ph"></div>'}
+      ${own ? `<span class="qty">${own.qty}</span>` : ''}${store.watching(p.id) ? '<span class="star">★</span>' : ''}</div>
+    <span class="pill">${esc(KINDS[p.k])}</span>
+    <b class="ptitle">${esc(ptitle(p))}</b>
+    <small>${esc(p.set)}${year(p) ? ` · ${year(p)}` : ''}</small>
+    <div class="pprice"><b>${euro.format(p.eur)}</b>${chg(p.c365 ?? p.c90 ?? p.c30)}</div>
+  </button>`;
+}
+
+async function renderSealed() {
+  $('#sealed-ideas').hidden = sealedMode !== 'ideas';
+  $('#sealed-all').hidden = sealedMode !== 'all';
+  const box = sealedMode === 'ideas' ? $('#sealed-ideas') : $('#sealed-grid');
+  if (!SEALED) box.innerHTML = spinner;
+  let d;
+  try { d = await sealedReady(); } catch { box.innerHTML = empty('Catalogue indisponible', 'Vérifie ta connexion internet.'); return; }
+  $('#sealed-credits').textContent = `Cotes TCGplayer (marché américain) via TCGCSV, converties en euros (1 $ = ${d.rate.toLocaleString('fr-FR')} €) · mises à jour le ${new Date(d.updatedAt).toLocaleDateString('fr-FR')}. Les prix en France (Cardmarket) peuvent différer.`;
+  if (sealedMode === 'ideas') return renderIdeas(d);
+  const q = scanner.norm($('#sealed-filter').value.trim());
+  const counts = {};
+  const base = d.products.filter(p => !q || scanner.norm(`${p.n} ${p.set} ${ptitle(p)} ${KINDS[p.k]}`).includes(q));
+  for (const p of base) counts[p.k] = (counts[p.k] || 0) + 1;
+  if (sealedKind !== 'all' && !counts[sealedKind]) sealedKind = 'all';
+  $('#sealed-kinds').innerHTML = `<button class="chip ${sealedKind === 'all' ? 'active' : ''}" data-k="all">Tous<span class="n">${base.length}</span></button>`
+    + KIND_ORDER.filter(k => counts[k]).map(k => `<button class="chip ${sealedKind === k ? 'active' : ''}" data-k="${k}">${KINDS[k]}<span class="n">${counts[k]}</span></button>`).join('');
+  const sort = $('#sealed-sort').value;
+  const by = {
+    new: (a, b) => (b.rel || '').localeCompare(a.rel || '') || b.eur - a.eur,
+    c365: (a, b) => (b.c365 ?? -1e9) - (a.c365 ?? -1e9),
+    c90: (a, b) => (b.c90 ?? -1e9) - (a.c90 ?? -1e9),
+    mult: (a, b) => mult(b) - mult(a),
+    asc: (a, b) => a.eur - b.eur,
+    desc: (a, b) => b.eur - a.eur,
+  };
+  const list = base.filter(p => sealedKind === 'all' || p.k === sealedKind).sort(by[sort]);
+  $('#sealed-count').textContent = `${list.length.toLocaleString('fr-FR')} produits`;
+  $('#sealed-grid').innerHTML = list.length ? list.slice(0, sealedShown).map(ptile).join('') : empty('Aucun produit', 'Rien ne correspond à ta recherche.');
+  $('#sealed-more').hidden = list.length <= sealedShown;
+}
+
+// Pistes d'investissement : des listes simples et expliquées, calculées sur l'historique des prix.
+function renderIdeas(d) {
+  // ni caisses, ni boosters à l'unité, ni pièces de musée hors de prix
+  const P = d.products.filter(p => p.k !== 'case' && p.k !== 'booster' && p.eur >= 5 && p.eur <= 1500);
+  const now = Date.now(), months = p => (now - new Date(`${p.rel}T12:00`).getTime()) / (30.4 * 86400000);
+  const watched = store.watchList().map(id => d.byId.get(id)).filter(Boolean);
+  const sections = [
+    watched.length && { t: 'Tes produits suivis', d: 'Ceux que tu as marqués d\'une étoile dans leur fiche.', list: watched },
+    { t: 'Hausse régulière sur un an', d: 'Plus de 20 % sur un an, sans baisse marquée ces derniers mois : la demande tient dans la durée.',
+      list: P.filter(p => p.c365 > 20 && (p.c90 ?? 0) >= 0 && (p.c30 ?? 0) > -5).sort((a, b) => b.c365 - a.c365) },
+    { t: 'Forte dynamique sur 3 mois', d: 'Les plus fortes hausses récentes. Une hausse rapide peut aussi retomber : à surveiller avant d\'acheter.',
+      list: P.filter(p => p.c90 > 10).sort((a, b) => b.c90 - a.c90) },
+    { t: 'Encore proches de leur prix de sortie', d: 'Sortis il y a moins de 10 mois et pas plus de 10 % au-dessus de leur premier prix. Les produits prennent souvent de la valeur quand ils ne sont plus réimprimés.',
+      list: P.filter(p => ['etb', 'box', 'bundle', 'coffret', 'tin'].includes(p.k) && months(p) < 10 && months(p) >= 0 && p.first && p.eur <= p.first * 1.1).sort((a, b) => (b.rel || '').localeCompare(a.rel || '')) },
+    { t: 'Les plus belles plus-values depuis 2024', d: 'Le prix actuel comparé au premier prix connu (février 2024 pour les produits plus anciens).',
+      list: P.filter(p => p.since && p.since <= '2024-03-01').sort((a, b) => mult(b) - mult(a)) },
+    { t: 'En baisse sur 3 mois', d: 'Plus de 15 % de baisse : une occasion pour certains, un signal d\'alerte pour d\'autres.',
+      list: P.filter(p => p.c90 < -15).sort((a, b) => a.c90 - b.c90) },
+  ].filter(s => s && s.list.length);
+  $('#sealed-ideas').innerHTML = `<div class="warn-box"><b>Ce ne sont pas des conseils financiers.</b> Ces listes classent les produits d'après l'évolution passée de leur cote, qui ne dit rien de l'avenir. Les cotes viennent du marché américain : vérifie le prix en France avant d'acheter, et garde tes produits bien scellés.</div>`
+    + sections.map(s => `<section class="idea">
+      <h2 class="season-title">${esc(s.t)}</h2><p class="hint">${esc(s.d)}</p>
+      <div class="prow">${s.list.slice(0, 12).map(ptile).join('')}</div>
+    </section>`).join('');
+}
+
+$('#sealed-mode').addEventListener('click', e => {
+  const b = e.target.closest('[data-s]');
+  if (!b) return;
+  sealedMode = b.dataset.s;
+  document.querySelectorAll('#sealed-mode button').forEach(x => x.classList.toggle('active', x === b));
+  renderSealed();
+});
+$('#sealed-kinds').addEventListener('click', e => {
+  const c = e.target.closest('[data-k]');
+  if (!c) return;
+  sealedKind = c.dataset.k; sealedShown = 60;
+  renderSealed();
+});
+$('#sealed-sort').addEventListener('change', () => { sealedShown = 60; renderSealed(); });
+$('#sealed-filter').addEventListener('input', () => { clearTimeout(sealedT); sealedT = setTimeout(() => { sealedShown = 60; renderSealed(); }, 200); });
+$('#sealed-more').addEventListener('click', () => { sealedShown += 60; renderSealed(); });
+document.addEventListener('click', e => {
+  const p = e.target.closest('[data-product]');
+  if (p) openProduct(+p.dataset.product);
+});
+
+// --- Fiche d'un produit scellé ---
+const HIST = new Map();
+const histOf = g => HIST.get(g) || HIST.set(g, fetch(`data/sealed/${g}.json`).then(r => r.json()).catch(() => null)).get(g);
+
+async function openProduct(id) {
+  const d = await sealedReady().catch(() => null);
+  const p = d?.byId.get(id);
+  if (!p) return toast('Produit introuvable');
+  renderProduct(p);
+  const h = await histOf(p.g);
+  if (!sheetOpen || $('#product')?.dataset.id !== String(id)) return;
+  const col = h?.p[String(id)] || [];
+  const pts = h ? h.d.map((day, i) => ({ d: day, v: col[i] == null ? null : col[i] / 100 * d.rate })).filter(x => x.v != null) : [];
+  $('#p-chart').innerHTML = pts.length > 1 ? chartHtml(pts) : '<p class="hint">Pas encore assez de points pour tracer la courbe.</p>';
+  if (pts.length > 1) bindChart($('#p-chart'), pts);
+}
+
+function renderProduct(p) {
+  const own = store.sealedGet(p.id);
+  const w = store.watching(p.id);
+  const cells = [['7 jours', p.c7], ['30 jours', p.c30], ['3 mois', p.c90], ['1 an', p.c365]]
+    .map(([k, v]) => `<div><small>${k}</small>${v == null ? '<b>—</b>' : chg(v)}</div>`).join('');
+  openSheet(`<div class="detail" id="product" data-id="${p.id}">
+    <div class="pbig">${p.img ? `<img src="${esc(bigImg(p.img))}" data-fallback="${esc(p.img)}" alt="">` : ''}</div>
+    <span class="pill">${esc(KINDS[p.k])}</span>
+    <h2>${esc(ptitle(p))}</h2>
+    <div class="meta">${esc(p.set)}${p.rel ? ` · sortie le ${new Date(`${p.rel}T12:00`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}</div>
+    <div class="meta" style="margin-top:-10px"><small>Nom d'origine : ${esc(p.n)}</small></div>
+    <div class="price">
+      <div><small>Cote actuelle</small><br><b>${euro.format(p.eur)}</b></div>
+      <div style="text-align:right"><small>TCGplayer</small><br><span class="mono">${p.usd.toLocaleString('fr-FR', { style: 'currency', currency: 'USD' })}</span></div>
+    </div>
+    <div class="trend-cells">${cells}</div>
+    <p class="section-title">Historique de la cote</p>
+    <div id="p-chart" class="trend">${spinner}</div>
+    <p class="hint">Premier prix connu : <b>${euro.format(p.first)}</b> (${esc(sinceLabel(p))}), soit <b>×${mult(p).toLocaleString('fr-FR', { maximumFractionDigits: 2 })}</b> aujourd'hui · plus haut : <b>${euro.format(p.max)}</b>.</p>
+    <p class="section-title">Mon scellé</p>
+    <div class="own-form" id="own-form">
+      <label>Quantité<input id="own-qty" type="number" min="0" step="1" inputmode="numeric" value="${own?.qty || 1}"></label>
+      <label>Prix d'achat (l'unité)<input id="own-cost" type="number" min="0" step="0.01" inputmode="decimal" value="${own?.cost ?? p.eur}"></label>
+      <button class="btn primary" id="own-save">${own ? 'Mettre à jour' : 'J\'en ai'}</button>
+      ${own ? '<button class="btn danger" id="own-del">Retirer</button>' : ''}
+    </div>
+    <div class="deck-actions" style="margin-top:14px">
+      <button class="btn" id="p-watch">${w ? '★ Suivi' : '☆ Suivre ce produit'}</button>
+      <a class="btn" href="https://www.cardmarket.com/fr/Pokemon/Products/Search?searchString=${encodeURIComponent(p.n.replace(/\s*\[[^\]]+\]/g, ''))}" target="_blank" rel="noopener">Chercher sur Cardmarket</a>
+      <a class="btn" href="https://www.tcgplayer.com/product/${p.id}" target="_blank" rel="noopener">TCGplayer</a>
+    </div>
+  </div>`);
+  $('#own-save').onclick = () => {
+    const qty = Math.max(0, parseInt($('#own-qty').value, 10) || 0);
+    const cost = Math.max(0, parseFloat(String($('#own-cost').value).replace(',', '.')) || 0);
+    store.sealedSet(p.id, qty ? { qty, cost, at: own?.at || today() } : null);
+    toast(qty ? 'Ajouté à ton scellé' : 'Retiré de ton scellé');
+    openProduct(p.id);
+  };
+  $('#own-del')?.addEventListener('click', () => { store.sealedSet(p.id, null); toast('Retiré de ton scellé'); openProduct(p.id); });
+  $('#p-watch').onclick = () => {
+    const on = store.toggleWatch(p.id);
+    $('#p-watch').textContent = on ? '★ Suivi' : '☆ Suivre ce produit';
+    toast(on ? 'Produit suivi : il apparaît en tête des pistes' : 'Tu ne suis plus ce produit');
+  };
+}
+
+// Courbe d'une cote dans le temps (un point par relevé), lisible au toucher.
+function chartHtml(pts) {
+  const W = 320, H = 90, P = 4;
+  const t = pts.map(p => new Date(`${p.d}T12:00`).getTime()), t0 = t[0], t1 = t.at(-1);
+  const vs = pts.map(p => p.v), lo = Math.min(...vs), hi = Math.max(...vs);
+  const x = i => P + ((t[i] - t0) / (t1 - t0 || 1)) * (W - 2 * P);
+  const y = v => H - P - ((v - lo) / (hi - lo || 1)) * (H - 2 * P);
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join('');
+  pts.geo = { x, W };
+  return `<div class="trend-read" data-read>${shortDate(pts.at(-1).d)} : <b>${euro.format(vs.at(-1))}</b></div>
+    <svg class="spark tall" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Historique de la cote">
+      <line class="grid-l" x1="0" x2="${W}" y1="${y(hi)}" y2="${y(hi)}"/><line class="grid-l" x1="0" x2="${W}" y1="${y(lo)}" y2="${y(lo)}"/>
+      <path class="area" d="${line}L${x(pts.length - 1).toFixed(1)},${H}L${x(0).toFixed(1)},${H}Z"/><path class="line" d="${line}"/>
+      <line class="cross" x1="0" x2="0" y1="0" y2="${H}" visibility="hidden"/>
+      <circle class="end" cx="${x(pts.length - 1)}" cy="${y(vs.at(-1))}" r="3.5"/>
+    </svg>
+    <div class="trend-axis"><span>${shortDate(pts[0].d)} ${pts[0].d.slice(0, 4)}</span><span>${euro.format(lo)} – ${euro.format(hi)}</span><span>${shortDate(pts.at(-1).d)}</span></div>`;
+}
+function bindChart(box, pts) {
+  const svg = box.querySelector('svg'), cross = svg.querySelector('.cross'), out = box.querySelector('[data-read]');
+  const { x, W } = pts.geo;
+  svg.addEventListener('pointermove', e => {
+    const r = svg.getBoundingClientRect(), px = ((e.clientX - r.left) / r.width) * W;
+    let b = 0;
+    pts.forEach((_, i) => { if (Math.abs(x(i) - px) < Math.abs(x(b) - px)) b = i; });
+    out.innerHTML = `${new Date(`${pts[b].d}T12:00`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })} : <b>${euro.format(pts[b].v)}</b>`;
+    cross.setAttribute('x1', x(b)); cross.setAttribute('x2', x(b)); cross.setAttribute('visibility', 'visible');
+  });
+  svg.addEventListener('pointerleave', () => cross.setAttribute('visibility', 'hidden'));
+}
+
+// --- Mon scellé : valeur et plus-value ---
+async function renderMine() {
+  const mine = store.sealedAll();
+  if (!mine.length) {
+    $('#mine-stats').innerHTML = '';
+    $('#mine-list').innerHTML = empty('Aucun produit scellé', 'Ouvre un produit dans l\'onglet Scellé et touche « J\'en ai ».');
+    return;
+  }
+  let d;
+  try { d = await sealedReady(); } catch { $('#mine-list').innerHTML = empty('Catalogue indisponible', 'Vérifie ta connexion internet.'); return; }
+  const rows = mine.map(o => ({ o, p: d.byId.get(o.id) })).filter(r => r.p);
+  const cost = rows.reduce((a, r) => a + r.o.cost * r.o.qty, 0), val = rows.reduce((a, r) => a + r.p.eur * r.o.qty, 0);
+  const gain = val - cost;
+  $('#mine-stats').innerHTML = `
+    <div class="stat gold"><div class="v">${euro.format(val)}</div><div class="k">valeur actuelle</div></div>
+    <div class="stat"><div class="v">${euro.format(cost)}</div><div class="k">investi</div></div>
+    <div class="stat"><div class="v ${gain >= 0 ? 'up-c' : 'down-c'}">${gain >= 0 ? '+' : ''}${euro.format(gain)}</div><div class="k">plus-value</div></div>
+    <div class="stat"><div class="v">${cost ? chg(gain / cost * 100) : '—'}</div><div class="k">rendement</div></div>`;
+  $('#mine-list').innerHTML = rows.sort((a, b) => b.p.eur * b.o.qty - a.p.eur * a.o.qty).map(({ o, p }) => {
+    const g = (p.eur - o.cost) * o.qty;
+    return `<div class="mk-row" data-product="${p.id}">
+      <div class="mk-img sq">${p.img ? `<img loading="lazy" src="${esc(p.img)}" alt="">` : ''}</div>
+      <div class="mk-body"><b>${esc(ptitle(p))}</b><small>${esc(p.set)} · ${o.qty} × acheté ${euro.format(o.cost)}</small>
+        <small class="${g >= 0 ? 'up-c' : 'down-c'}">${g >= 0 ? '+' : ''}${euro.format(g)}${o.cost ? ` (${pct((p.eur - o.cost) / o.cost * 100)})` : ''}</small></div>
+      <div class="mk-price"><b>${euro.format(p.eur * o.qty)}</b>${chg(p.c30)}</div>
+    </div>`;
+  }).join('');
+}
+
 // ---------- Sauvegarde ----------
 $('#btn-backup').addEventListener('click', () => {
   const t = store.lastSave();
@@ -1449,6 +1800,7 @@ store.onChange(() => {
   if (current === 'poke') renderPoke();
   if (current === 'decks') renderDecks();
   if (current === 'deck') renderDeck();
+  if (current === 'market' && marketMode !== 'cotes') renderMarket();
   // met à jour les badges de quantité visibles (scan, recherche)
   document.querySelectorAll('#scan-results .tile:not([data-finish]), #search-results .tile').forEach(t => {
     const n = store.count(t.dataset.card);

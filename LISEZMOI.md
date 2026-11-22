@@ -10,7 +10,14 @@ Appli web (installable sur téléphone) pour scanner ses cartes Pokémon et suiv
 - **Doubles** : les cartes en plusieurs exemplaires et une liste d'échange (doubles + envies) à copier.
 - **Succès** : des objectifs de collection (Trio de départ, Pokédex de Kanto, Master Ball, série complète…).
 - **Valeur** : la courbe de la valeur estimée de la collection, notée chaque jour.
-- **Envies** : alertes prix. On fixe une fourchette ; Cardex prévient quand l'offre la moins chère sur Cardmarket y entre
+- **Marché** :
+  - *Cotes* : l'évolution de la cote de chaque carte de la collection (moyenne Cardmarket sur 7 jours comparée à 30 jours), hausses, baisses, cartes les plus chères.
+  - *Scellé* : tous les produits scellés du JCC (displays, coffrets dresseur d'élite, bundles, coffrets, blisters, pokébox, decks…)
+    avec leur cote et son historique depuis février 2024, et des pistes d'investissement expliquées (ce ne sont pas des conseils).
+    Source : TCGplayer via TCGCSV (marché américain), converti en euros. `data/sealed.json` et l'historique `data/sealed/`
+    sont reconstruits par `python tools/build_sealed.py` le lundi et le jeudi (GitHub Action) ; `--backfill` reconstitue l'historique.
+  - *Mon scellé* : les produits possédés avec leur prix d'achat, leur valeur actuelle et la plus-value.
+  - *Envies* : alertes prix. On fixe une fourchette ; Cardex prévient quand l'offre la moins chère sur Cardmarket y entre
   (vérification en arrière-plan toutes les ~12 h sur Chrome Android avec l'appli installée, sinon à chaque ouverture).
 - **Decks** : les meilleurs decks de la méta actuelle et de chaque saison depuis l'ère XY (2014-2015), d'après Limitless TCG, avec le prix
   (cote Cardmarket), les cartes déjà dans la collection et celles à acheter. `data/decks.json` est reconstruit
