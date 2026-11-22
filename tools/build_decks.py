@@ -5,6 +5,7 @@ Lancer depuis la racine du projet :  python tools/build_decks.py
 Uniquement la bibliothèque standard, pour tourner aussi dans GitHub Actions.
 """
 import csv
+from html import unescape
 import io
 import json
 import re
@@ -17,17 +18,30 @@ LIMITLESS = "https://limitlesstcg.com"
 TCGDEX = "https://api.tcgdex.net/v2"
 OUT = "data/decks.json"
 
-# (paramètre "time" de Limitless, libellé, nombre d'archétypes gardés)
+# (paramètre "time" de Limitless, libellé, ère, nombre d'archétypes gardés) : de l'ère XY à aujourd'hui
 PERIODS = [
-    ("1months", "Méta actuelle", 12),
-    ("2526", "Saison 2025-2026", 6),
-    ("2425", "Saison 2024-2025", 6),
-    ("2324", "Saison 2023-2024", 6),
-    ("2223", "Saison 2022-2023", 5),
+    ("1months", "Méta actuelle", "", 20),
+    ("2526", "Saison 2025-2026", "Écarlate et Violet · Méga-Évolution", 15),
+    ("2425", "Saison 2024-2025", "Écarlate et Violet", 15),
+    ("2324", "Saison 2023-2024", "Écarlate et Violet", 15),
+    ("2223", "Saison 2022-2023", "Épée et Bouclier · Écarlate et Violet", 15),
+    ("2122", "Saison 2021-2022", "Épée et Bouclier", 15),
+    ("2021", "Saison 2020-2021", "Épée et Bouclier", 15),
+    ("1920", "Saison 2019-2020", "Soleil et Lune · Épée et Bouclier", 15),
+    ("1819", "Saison 2018-2019", "Soleil et Lune", 15),
+    ("1718", "Saison 2017-2018", "Soleil et Lune", 15),
+    ("1617", "Saison 2016-2017", "XY · Soleil et Lune", 15),
+    ("1516", "Saison 2015-2016", "XY", 15),
+    ("1415", "Saison 2014-2015", "XY", 15),
 ]
+# nombre de tournois (les plus gros de la saison) où l'on cherche la liste de chaque archétype
+BIGGEST = 30
 
 # Codes de séries que la correspondance automatique ne trouve pas.
-CODE_OVERRIDES = {"PR-SV": "svp", "PR-SW": "swshp", "PR-SM": "smp", "PR-XY": "xyp", "PR-BLW": "bwp", "MEP": "mep"}
+CODE_OVERRIDES = {"PR-SV": "svp", "PR-SW": "swshp", "PR-SM": "smp", "PR-XY": "xyp", "PR-BLW": "bwp", "MEP": "mep",
+                  "SP": "swshp", "SMP": "smp", "XYP": "xyp", "BWP": "bwp"}
+# Les promos sont numérotées « 30 » chez Limitless et « SM30 » chez TCGdex.
+PROMO_PREFIX = {"SP": "SWSH", "PR-SW": "SWSH", "SMP": "SM", "PR-SM": "SM", "XYP": "XY", "PR-XY": "XY", "BWP": "BW", "PR-BLW": "BW"}
 
 _cache = {}
 
@@ -67,7 +81,14 @@ def build_code_map():
     en_sets = get(f"{TCGDEX}/en/sets") or []
     by_name = {norm(s["name"]): s["id"] for s in en_sets}
     code_map = dict(CODE_OVERRIDES)
-    ptcg = get("https://api.pokemontcg.io/v2/sets?pageSize=250&select=name,ptcgoCode") or {}
+    ptcg = None
+    for _ in range(4):
+        ptcg = get("https://api.pokemontcg.io/v2/sets?pageSize=250&select=name,ptcgoCode")
+        if ptcg:
+            break
+        _cache.pop("https://api.pokemontcg.io/v2/sets?pageSize=250&select=name,ptcgoCode", None)
+        time.sleep(10)
+    ptcg = ptcg or {}
     for s in ptcg.get("data", []):
         code, sid = s.get("ptcgoCode"), by_name.get(norm(s["name"]))
         if code and sid and code not in code_map:
@@ -122,7 +143,7 @@ def archetypes(period, top):
         share = re.search(r"<td>([\d.]+)%</td>", row)
         if not m:
             continue
-        name = re.sub(r"\s+", " ", f"{m.group(2)} {m.group(3)}").strip()
+        name = unescape(re.sub(r"\s+", " ", f"{m.group(2)} {m.group(3)}").strip())
         out.append({"id": int(m.group(1)), "name": name, "share": float(share.group(1)) if share else None})
         if len(out) >= top:
             break
@@ -146,7 +167,7 @@ def best_list(arch_id, period):
     return best
 
 
-def season_lists(period, biggest=10):
+def season_lists(period, biggest=BIGGEST):
     """Saisons passées : meilleure place de chaque archétype dans les plus gros tournois de la saison."""
     html = get(f"{LIMITLESS}/tournaments?time={period}&format=standard&show=100", as_json=False, pause=0.5) or ""
     events = []
@@ -175,8 +196,11 @@ def decklist(list_id):
         blk = m.group(1)
         attr = lambda k: (re.search(rf'data-{k}="([^"]*)"', blk) or [None, ""])[1]
         count = re.search(r'class="card-count">(\d+)<', blk)
-        cards.append({"set": attr("set"), "number": attr("number"), "type": attr("type"),
-                      "en": attr("name"), "count": int(count.group(1)) if count else 1})
+        num = attr("number")
+        if attr("set") in PROMO_PREFIX and num.isdigit():
+            num = PROMO_PREFIX[attr("set")] + num
+        cards.append({"set": attr("set"), "number": num, "type": attr("type"),
+                      "en": unescape(attr("name")), "count": int(count.group(1)) if count else 1})
     return cards
 
 
@@ -196,9 +220,12 @@ def price_of(card_id):
     for lang in ("fr", "en"):
         full = get(f"{TCGDEX}/{lang}/cards/{card_id}")
         cm = (full or {}).get("pricing", {}).get("cardmarket") or {}
-        p = cm.get("trend") or cm.get("avg")
-        if isinstance(p, (int, float)) and p > 0:
-            return round(p, 2), full
+        # La cote « normale » de vieilles Ultra Rares est parfois faussée (cartes gradées ?) :
+        # on garde la plus basse des cotes tendance / moyenne 30 jours, normale ou holo.
+        vals = [cm.get(k) for k in ("trend", "trend-holo", "avg30", "avg30-holo")]
+        vals = [v for v in vals if isinstance(v, (int, float)) and v > 0]
+        if vals:
+            return round(min(vals), 2), full
         if full:
             return None, full
     return None, None
@@ -208,7 +235,7 @@ def main():
     code_map, en_sets = build_code_map()
     en2fr = species_names()
     periods = []
-    for period, label, top in PERIODS:
+    for period, label, era, top in PERIODS:
         print(f"== {label}")
         decks = []
         past = None if period == "1months" else season_lists(period)
@@ -239,7 +266,7 @@ def main():
             })
             print(f"  {a['name']:<32} {sum(x['count'] for x in cards):>3} cartes  {total:>8.2f} €  "
                   f"(non reliées : {sum(1 for x in cards if not x['id'])})")
-        periods.append({"id": period, "label": label, "current": period == "1months", "decks": decks})
+        periods.append({"id": period, "label": label, "era": era, "current": period == "1months", "decks": decks})
     if not any(p["decks"] for p in periods if p["current"]):
         sys.exit("Aucun deck récupéré pour la méta actuelle : data/decks.json n'est pas modifié.")
     json.dump({"updatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),

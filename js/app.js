@@ -427,7 +427,7 @@ function renderCollection() {
   const list = entries.filter(({ rec, f }) =>
     (colFinish === 'all' || f === colFinish) && (!q || scanner.norm(`${rec.name} ${rec.setName}`).includes(q)));
   const byFinish = (a, b) => store.finishOrder(a.f) - store.finishOrder(b.f);
-  const dexNo = r => r.dexId?.[0] ?? 99999;
+  const dexNo = r => dexNums(r)[0] ?? 99999;
   const by = {
     recent: (a, b) => b.rec.addedAt - a.rec.addedAt || byFinish(a, b),
     name: (a, b) => a.rec.name.localeCompare(b.rec.name, 'fr') || byFinish(a, b),
@@ -461,9 +461,11 @@ const words = s => ` ${scanner.norm(s).replace(/[^a-z0-9♀♂]+/g, ' ').trim()}
 function guessDex(name) {
   if (!DEX.length || !name) return [];
   DEX_INDEX ??= DEX.map((n, i) => [words(n), i + 1]).sort((a, b) => b[0].length - a[0].length);
-  const s = words(name);
-  for (const [n, i] of DEX_INDEX) if (s.includes(n)) return [i];
-  return [];
+  // les noms longs d'abord (Mewtwo avant Mew), et tous ceux d'une carte duo (« Méga-Ténéfix et Tyranocif »)
+  let s = words(name);
+  const out = [];
+  for (const [n, i] of DEX_INDEX) if (s.includes(n)) { out.push(i); s = s.replace(n, ' '); }
+  return out;
 }
 const dexNums = c => (c.dexId?.length ? c.dexId : c.category && c.category !== 'Pokémon' ? [] : guessDex(c.name));
 function ownedByDex() {
@@ -527,12 +529,29 @@ async function openPoke(n) {
   document.querySelectorAll('#poke-chips .chip').forEach(x => x.classList.toggle('active', x.dataset.f === 'all'));
   show('poke');
   try {
-    const [res, sets, fins] = await Promise.all([api.byDex(n), api.setsById(), api.dexFinishes(n).catch(() => ({}))]);
+    const [res, byName, sets, fins] = await Promise.all([api.byDex(n), api.search(DEX[n - 1] || '-', 0).catch(() => []),
+      api.setsById(), api.dexFinishes(n).catch(() => ({}))]);
     if (currentPoke !== n) return;
+    // Les séries récentes n'ont pas encore de numéro de Pokédex dans TCGdex (ex. Règne Delta) :
+    // on ajoute les cartes trouvées par le nom, puis celles de la collection.
+    const all = new Map(res.map(c => [c.id, c]));
+    for (const c of byName) if (!all.has(c.id) && guessDex(c.name).includes(n)) all.set(c.id, c);
+    for (const r of store.all()) if (!all.has(r.id) && dexNums(r).includes(n)) all.set(r.id, r);
     pokeFins = fins;
-    pokeCards = res.filter(c => sets.has(api.setIdOf(c.id)))
+    pokeCards = [...all.values()].filter(c => sets.has(api.setIdOf(c.id)))
       .map(c => ({ ...c, set: sets.get(api.setIdOf(c.id)) }))
-      .sort((a, b) => b.set.order - a.set.order);
+      .sort((a, b) => b.set.order - a.set.order || (parseInt(a.localId, 10) || 0) - (parseInt(b.localId, 10) || 0));
+    renderPoke();
+    // finitions des cartes absentes de la recherche par numéro (fiche complète de chaque carte)
+    const todo = pokeCards.filter(c => !pokeFins[c.id]);
+    let i = 0;
+    await Promise.all(Array.from({ length: 6 }, async () => {
+      while (i < todo.length && currentPoke === n) {
+        const c = todo[i++];
+        try { pokeFins[c.id] = api.finishesOf(await api.card(c.id)); } catch { /* reste « normale » */ }
+      }
+    }));
+    if (currentPoke !== n) return;
   } catch { pokeCards = []; }
   renderPoke();
 }
@@ -734,7 +753,7 @@ $('#set-chips').addEventListener('click', e => {
 });
 
 // ---------- Decks de la méta (data/decks.json, construit par tools/build_decks.py) ----------
-let DECKS = null, deckPeriod = 'current', deckFilter = 'all', currentDeck = null;
+let DECKS = null, deckPeriod = 'current', deckFilter = 'all', currentDeck = null, deckT;
 const decksReady = fetch('data/decks.json').then(r => r.json()).then(d => { DECKS = d; }).catch(() => { DECKS = { periods: [] }; });
 const GROUPS = [['pokemon', 'Pokémon'], ['trainer', 'Dresseurs'], ['energy', 'Énergies']];
 
@@ -776,8 +795,11 @@ $('#deck-period').addEventListener('click', e => {
   if (!b) return;
   deckPeriod = b.dataset.p;
   document.querySelectorAll('#deck-period button').forEach(x => x.classList.toggle('active', x === b));
+  $('#deck-season').hidden = deckPeriod !== 'past';
   renderDecks();
 });
+$('#deck-season').addEventListener('change', renderDecks);
+$('#deck-filter').addEventListener('input', () => { clearTimeout(deckT); deckT = setTimeout(renderDecks, 150); });
 $('#deck-chips').addEventListener('click', e => {
   const c = e.target.closest('.chip');
   if (!c) return;
@@ -795,6 +817,12 @@ async function renderDecks() {
   const box = $('#deck-list');
   if (!DECKS) box.innerHTML = spinner;
   await decksReady;
+  const sel = $('#deck-season');
+  if (!sel.options.length) {
+    const past = DECKS.periods.filter(p => !p.current);
+    sel.innerHTML = `<option value="">Toutes les saisons (${past.reduce((n, p) => n + p.decks.length, 0)} decks)</option>`
+      + past.map(p => `<option value="${esc(p.id)}">${esc(p.label)}${p.era ? ` · ${esc(p.era)}` : ''}</option>`).join('');
+  }
   const owned = ownedByName();
   const sort = $('#deck-sort').value;
   const by = {
@@ -803,13 +831,18 @@ async function renderDecks() {
     missing: (a, b) => a.st.missing - b.st.missing,
     price: (a, b) => a.d.price - b.d.price,
   };
-  const keep = ({ st }) => deckFilter === 'all' || (deckFilter === 'ready' ? st.pct >= 1 : st.pct >= 0.7 && st.pct < 1);
+  const q = scanner.norm($('#deck-filter').value.trim());
+  const season = $('#deck-season').value;
+  // la recherche porte sur le nom du deck (français et anglais) et sur les noms de ses cartes
+  const match = d => !q || [d.name, d.en, ...d.cards.map(c => c.name)].some(s => scanner.norm(s || '').includes(q));
+  const keep = ({ d, st }) => match(d)
+    && (deckFilter === 'all' || (deckFilter === 'ready' ? st.pct >= 1 : st.pct >= 0.7 && st.pct < 1));
   const html = DECKS.periods
-    .filter(p => (deckPeriod === 'current') === !!p.current)
+    .filter(p => (deckPeriod === 'current') === !!p.current && (deckPeriod === 'current' || !season || p.id === season))
     .map(p => {
       const list = p.decks.map(d => ({ d, st: deckStatus(d, owned) })).filter(keep).sort(by[sort]);
       if (!list.length) return '';
-      return (deckPeriod === 'past' ? `<h2 class="season-title">${esc(p.label)}</h2>` : '') + list.map(({ d, st }) => {
+      return (deckPeriod === 'past' ? `<h2 class="season-title">${esc(p.label)}${p.era ? ` <small>${esc(p.era)}</small>` : ''}</h2>` : '') + list.map(({ d, st }) => {
         const ready = st.pct >= 1;
         return `<button class="deck ${ready ? 'ready' : ''}" data-deck="${esc(d.id)}">
           <div class="deck-art">${deckArt(d).map(c => `<img loading="lazy" src="${esc(api.img(c.image))}" alt="">`).join('')}</div>
@@ -825,7 +858,7 @@ async function renderDecks() {
       }).join('');
     }).join('');
   box.innerHTML = html || empty(
-    deckFilter === 'all' ? 'Aucun deck' : 'Aucun deck pour ce filtre',
+    deckFilter === 'all' && !q ? 'Aucun deck' : 'Aucun deck pour ce filtre',
     deckFilter === 'ready' ? 'Il te manque encore des cartes pour chaque deck. Essaie « Presque ».' : 'Les données des decks n\'ont pas pu être chargées.');
   $('#deck-credits').textContent = DECKS.updatedAt
     ? `Listes : la mieux classée de chaque archétype sur Limitless TCG · cartes et cotes : TCGdex / Cardmarket · mis à jour le ${new Date(DECKS.updatedAt).toLocaleDateString('fr-FR')}`

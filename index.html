@@ -156,6 +156,13 @@
         <button data-p="past">Saisons passées</button>
       </div>
       <div class="toolbar">
+        <div class="searchbox small">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <input id="deck-filter" type="search" placeholder="Chercher un deck ou un Pokémon" autocomplete="off">
+        </div>
+        <select id="deck-season" hidden></select>
+      </div>
+      <div class="toolbar">
         <div class="chips" id="deck-chips" style="margin:0;flex:1">
           <button class="chip active" data-f="all">Tous</button>
           <button class="chip" data-f="ready">Jouables</button>

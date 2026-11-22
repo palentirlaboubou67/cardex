@@ -49,7 +49,7 @@ export async function setsById() {
 
 export const set = id => get(`/sets/${encodeURIComponent(id)}`);
 export const card = id => get(`/cards/${encodeURIComponent(id)}`);
-export const search = name => get(`/cards?name=${encodeURIComponent(name)}&pagination:itemsPerPage=80`);
+export const search = (name, max = 80) => get(`/cards?name=${encodeURIComponent(name)}${max ? `&pagination:itemsPerPage=${max}` : ''}`);
 export const byDex = n => get(`/cards?dexId=eq:${n}`);
 
 // ---------- Finitions ----------
