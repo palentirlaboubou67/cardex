@@ -885,7 +885,8 @@ function renderDeck() {
     <div class="deck-actions">
       ${ready ? '' : '<button class="btn primary" id="deck-wish">🔔 Mettre les manquantes en envies</button>'}
       <a class="btn" href="${esc(d.list)}" target="_blank" rel="noopener">Liste sur Limitless</a>
-    </div>`;
+    </div>
+    <div class="legend"><span class="ok">Tu l'as</span><span class="part">En partie</span><span>À acheter</span></div>`;
   $('#deck-wish')?.addEventListener('click', addMissingToWishes);
   $('#deck-cards').innerHTML = GROUPS.map(([type, label]) => {
     const rows = st.rows.filter(r => r.type === type);

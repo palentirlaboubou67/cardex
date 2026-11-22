@@ -1,7 +1,7 @@
 // Service worker : l'appli marche hors-ligne et garde les images de cartes déjà vues.
 importScripts('js/wishdb.js');
 
-const SHELL = 'cardex-shell-v5';
+const SHELL = 'cardex-shell-v6';
 const IMAGES = 'cardex-images-v1';
 const FILES = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/api.js', 'js/store.js', 'js/scanner.js', 'js/wishdb.js', 'data/logos.json', 'data/pokedex.json', 'data/decks.json', 'icon.svg', 'manifest.webmanifest'];
 
