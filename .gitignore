@@ -1,2 +1,8 @@
 __pycache__/
 tools/shots/
+# Données de prix construites au déploiement (tools/build_market.py), pas versionnées
+data/market/prices/
+data/market/sealed.json
+data/manifest.json
+# Téléchargements des outils (Cardmarket, TCGdex…)
+.cache/
