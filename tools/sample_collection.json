@@ -1,0 +1,675 @@
+{
+ "version": 1,
+ "cards": {
+  "sv03.5-025": {
+   "id": "sv03.5-025",
+   "qty": {
+    "normal": 2
+   },
+   "addedAt": 1795629383519,
+   "name": "Pikachu",
+   "localId": "025",
+   "setId": "sv03.5",
+   "setName": "151",
+   "setTotal": 165,
+   "image": "https://assets.tcgdex.net/fr/sv/sv03.5/025",
+   "rarity": "Commune",
+   "category": "Pokémon",
+   "dexId": [
+    25
+   ],
+   "prices": {
+    "normal": 0.23,
+    "reverse": 0.57,
+    "holo": 0.57,
+    "cosmos": 0.57,
+    "pokeball": 0.57,
+    "masterball": 0.57,
+    "firstEdition": 0.23,
+    "stamp": 0.23
+   }
+  },
+  "sv03.5-004": {
+   "id": "sv03.5-004",
+   "qty": {
+    "reverse": 1
+   },
+   "addedAt": 1795625783519,
+   "name": "Salamèche",
+   "localId": "004",
+   "setId": "sv03.5",
+   "setName": "151",
+   "setTotal": 165,
+   "image": "https://assets.tcgdex.net/fr/sv/sv03.5/004",
+   "rarity": "Commune",
+   "category": "Pokémon",
+   "dexId": [
+    4
+   ],
+   "prices": {
+    "normal": 0.14,
+    "reverse": 0.35,
+    "holo": 0.35,
+    "cosmos": 0.35,
+    "pokeball": 0.35,
+    "masterball": 0.35,
+    "firstEdition": 0.14,
+    "stamp": 0.14
+   }
+  },
+  "sv03.5-006": {
+   "id": "sv03.5-006",
+   "qty": {
+    "normal": 1,
+    "reverse": 1
+   },
+   "addedAt": 1795622183519,
+   "name": "Dracaufeu-ex",
+   "localId": "006",
+   "setId": "sv03.5",
+   "setName": "151",
+   "setTotal": 165,
+   "image": "https://assets.tcgdex.net/fr/sv/sv03.5/006",
+   "rarity": "Double rare",
+   "category": "Pokémon",
+   "dexId": [
+    6
+   ],
+   "prices": {
+    "normal": 7.91,
+    "reverse": 7.91,
+    "holo": 7.91,
+    "cosmos": 7.91,
+    "pokeball": 7.91,
+    "masterball": 7.91,
+    "firstEdition": 7.91,
+    "stamp": 7.91
+   }
+  },
+  "sv03.5-007": {
+   "id": "sv03.5-007",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795618583519,
+   "name": "Carapuce",
+   "localId": "007",
+   "setId": "sv03.5",
+   "setName": "151",
+   "setTotal": 165,
+   "image": "https://assets.tcgdex.net/fr/sv/sv03.5/007",
+   "rarity": "Commune",
+   "category": "Pokémon",
+   "dexId": [
+    7
+   ],
+   "prices": {
+    "normal": 0.19,
+    "reverse": 0.35,
+    "holo": 0.35,
+    "cosmos": 0.35,
+    "pokeball": 0.35,
+    "masterball": 0.35,
+    "firstEdition": 0.19,
+    "stamp": 0.19
+   }
+  },
+  "sv03.5-001": {
+   "id": "sv03.5-001",
+   "qty": {
+    "normal": 3
+   },
+   "addedAt": 1795614983519,
+   "name": "Bulbizarre",
+   "localId": "001",
+   "setId": "sv03.5",
+   "setName": "151",
+   "setTotal": 165,
+   "image": "https://assets.tcgdex.net/fr/sv/sv03.5/001",
+   "rarity": "Commune",
+   "category": "Pokémon",
+   "dexId": [
+    1
+   ],
+   "prices": {
+    "normal": 0.15,
+    "reverse": 0.35,
+    "holo": 0.35,
+    "cosmos": 0.35,
+    "pokeball": 0.35,
+    "masterball": 0.35,
+    "firstEdition": 0.15,
+    "stamp": 0.15
+   }
+  },
+  "sv03.5-150": {
+   "id": "sv03.5-150",
+   "qty": {
+    "holo": 1
+   },
+   "addedAt": 1795611383519,
+   "name": "Mewtwo",
+   "localId": "150",
+   "setId": "sv03.5",
+   "setName": "151",
+   "setTotal": 165,
+   "image": "https://assets.tcgdex.net/fr/sv/sv03.5/150",
+   "rarity": "Rare",
+   "category": "Pokémon",
+   "dexId": [
+    150
+   ],
+   "prices": {
+    "normal": 0.98,
+    "reverse": 4.32,
+    "holo": 4.32,
+    "cosmos": 4.32,
+    "pokeball": 4.32,
+    "masterball": 4.32,
+    "firstEdition": 0.98,
+    "stamp": 0.98
+   }
+  },
+  "sv03.5-199": {
+   "id": "sv03.5-199",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795607783519,
+   "name": "Dracaufeu-ex",
+   "localId": "199",
+   "setId": "sv03.5",
+   "setName": "151",
+   "setTotal": 165,
+   "image": "https://assets.tcgdex.net/fr/sv/sv03.5/199",
+   "rarity": "Illustration spéciale rare",
+   "category": "Pokémon",
+   "dexId": [
+    6
+   ],
+   "prices": {
+    "normal": 294.9,
+    "reverse": 294.9,
+    "holo": 294.9,
+    "cosmos": 294.9,
+    "pokeball": 294.9,
+    "masterball": 294.9,
+    "firstEdition": 294.9,
+    "stamp": 294.9
+   }
+  },
+  "sv03.5-133": {
+   "id": "sv03.5-133",
+   "qty": {
+    "normal": 1,
+    "reverse": 2
+   },
+   "addedAt": 1795604183519,
+   "name": "Évoli",
+   "localId": "133",
+   "setId": "sv03.5",
+   "setName": "151",
+   "setTotal": 165,
+   "image": "https://assets.tcgdex.net/fr/sv/sv03.5/133",
+   "rarity": "Commune",
+   "category": "Pokémon",
+   "dexId": [
+    133
+   ],
+   "prices": {
+    "normal": 0.13,
+    "reverse": 0.44,
+    "holo": 0.44,
+    "cosmos": 0.44,
+    "pokeball": 0.44,
+    "masterball": 0.44,
+    "firstEdition": 0.13,
+    "stamp": 0.13
+   }
+  },
+  "sv08-057": {
+   "id": "sv08-057",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795600583519,
+   "name": "Pikachu-ex",
+   "localId": "057",
+   "setId": "sv08",
+   "setName": "Étincelles Déferlantes",
+   "setTotal": 191,
+   "image": "https://assets.tcgdex.net/fr/sv/sv08/057",
+   "rarity": "Double rare",
+   "category": "Pokémon",
+   "dexId": [
+    25
+   ],
+   "prices": {
+    "normal": 4.12,
+    "reverse": 4.12,
+    "holo": 4.12,
+    "cosmos": 4.12,
+    "pokeball": 4.12,
+    "masterball": 4.12,
+    "firstEdition": 4.12,
+    "stamp": 4.12
+   }
+  },
+  "sv08.5-161": {
+   "id": "sv08.5-161",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795596983519,
+   "name": "Noctali-ex",
+   "localId": "161",
+   "setId": "sv08.5",
+   "setName": "Évolutions Prismatiques",
+   "setTotal": 131,
+   "image": "https://assets.tcgdex.net/fr/sv/sv08.5/161",
+   "rarity": "Illustration spéciale rare",
+   "category": "Pokémon",
+   "dexId": [
+    197
+   ],
+   "prices": {
+    "normal": 1430,
+    "reverse": 1430,
+    "holo": 1430,
+    "cosmos": 1430,
+    "pokeball": 1430,
+    "masterball": 1430,
+    "firstEdition": 1430,
+    "stamp": 1430
+   }
+  },
+  "me01-001": {
+   "id": "me01-001",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795593383519,
+   "name": "Bulbizarre",
+   "localId": "001",
+   "setId": "me01",
+   "setName": "Méga-Évolution",
+   "setTotal": 132,
+   "image": "https://assets.tcgdex.net/fr/me/me01/001",
+   "rarity": "Commune",
+   "category": "Pokémon",
+   "dexId": [
+    1
+   ],
+   "prices": {
+    "normal": 0.07,
+    "reverse": 0.16,
+    "holo": 0.16,
+    "cosmos": 0.16,
+    "pokeball": 0.16,
+    "masterball": 0.16,
+    "firstEdition": 0.07,
+    "stamp": 0.07
+   }
+  },
+  "me01-114": {
+   "id": "me01-114",
+   "qty": {
+    "pokeball": 1
+   },
+   "addedAt": 1795589783519,
+   "name": "Ordres du Boss",
+   "localId": "114",
+   "setId": "me01",
+   "setName": "Méga-Évolution",
+   "setTotal": 132,
+   "image": "https://assets.tcgdex.net/fr/me/me01/114",
+   "rarity": "Peu Commune",
+   "category": "Dresseur",
+   "dexId": [],
+   "prices": {
+    "normal": 0.27,
+    "reverse": 0.31,
+    "holo": 0.31,
+    "cosmos": 0.31,
+    "pokeball": 0.31,
+    "masterball": 0.31,
+    "firstEdition": 0.27,
+    "stamp": 0.27
+   }
+  },
+  "swsh12-139": {
+   "id": "swsh12-139",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795586183519,
+   "name": "Lugia VSTAR",
+   "localId": "139",
+   "setId": "swsh12",
+   "setName": "Tempête Argentée",
+   "setTotal": 195,
+   "image": "https://assets.tcgdex.net/fr/swsh/swsh12/139",
+   "rarity": "Holo Rare VSTAR",
+   "category": "Pokémon",
+   "dexId": [
+    249
+   ],
+   "prices": {
+    "normal": 3.65,
+    "reverse": 3.65,
+    "holo": 3.65,
+    "cosmos": 3.65,
+    "pokeball": 3.65,
+    "masterball": 3.65,
+    "firstEdition": 3.65,
+    "stamp": 3.65
+   }
+  },
+  "swsh7-215": {
+   "id": "swsh7-215",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795582583519,
+   "name": "Noctali VMAX",
+   "localId": "215",
+   "setId": "swsh7",
+   "setName": "Évolution Céleste",
+   "setTotal": 203,
+   "image": "https://assets.tcgdex.net/fr/swsh/swsh7/215",
+   "rarity": "Magnifique rare",
+   "category": "Pokémon",
+   "dexId": [
+    197
+   ],
+   "prices": {
+    "normal": 1504.49,
+    "reverse": 1504.49,
+    "holo": 1504.49,
+    "cosmos": 1504.49,
+    "pokeball": 1504.49,
+    "masterball": 1504.49,
+    "firstEdition": 1504.49,
+    "stamp": 1504.49
+   }
+  },
+  "sm12-1": {
+   "id": "sm12-1",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795578983519,
+   "name": "Florizarre et Vipélierre GX",
+   "localId": "1",
+   "setId": "sm12",
+   "setName": "Éclipse Cosmique",
+   "setTotal": 236,
+   "image": "https://assets.tcgdex.net/fr/sm/sm12/1",
+   "rarity": "Ultra Rare",
+   "category": "Pokémon",
+   "dexId": [
+    3,
+    495
+   ],
+   "prices": {
+    "normal": 22.84,
+    "reverse": 4.68,
+    "holo": 4.68,
+    "cosmos": 4.68,
+    "pokeball": 4.68,
+    "masterball": 4.68,
+    "firstEdition": 22.84,
+    "stamp": 22.84
+   }
+  },
+  "xy1-1": {
+   "id": "xy1-1",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795575383519,
+   "name": "Florizarre EX",
+   "localId": "1",
+   "setId": "xy1",
+   "setName": "XY",
+   "setTotal": 146,
+   "image": "https://assets.tcgdex.net/fr/xy/xy1/1",
+   "rarity": "Ultra Rare",
+   "category": "Pokémon",
+   "dexId": [
+    3
+   ],
+   "prices": {
+    "normal": 11.5,
+    "reverse": 4.37,
+    "holo": 4.37,
+    "cosmos": 4.37,
+    "pokeball": 4.37,
+    "masterball": 4.37,
+    "firstEdition": 11.5,
+    "stamp": 11.5
+   }
+  },
+  "base1-4": {
+   "id": "base1-4",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795571783519,
+   "name": "Dracaufeu",
+   "localId": "4",
+   "setId": "base1",
+   "setName": "Set de Base",
+   "setTotal": 102,
+   "image": "https://assets.tcgdex.net/fr/base/base1/4",
+   "rarity": "Rare",
+   "category": "Pokémon",
+   "dexId": [
+    6
+   ],
+   "prices": {
+    "normal": 404.68,
+    "reverse": 123.63,
+    "holo": 123.63,
+    "cosmos": 123.63,
+    "pokeball": 123.63,
+    "masterball": 123.63,
+    "firstEdition": 404.68,
+    "stamp": 404.68
+   }
+  },
+  "sv06-130": {
+   "id": "sv06-130",
+   "qty": {
+    "masterball": 1
+   },
+   "addedAt": 1795568183519,
+   "name": "Lanssorien-ex",
+   "localId": "130",
+   "setId": "sv06",
+   "setName": "Mascarade Crépusculaire",
+   "setTotal": 167,
+   "image": "https://assets.tcgdex.net/fr/sv/sv06/130",
+   "rarity": "Double rare",
+   "category": "Pokémon",
+   "dexId": [
+    887
+   ],
+   "prices": {
+    "normal": 1.28,
+    "reverse": 1.28,
+    "holo": 1.28,
+    "cosmos": 1.28,
+    "pokeball": 1.28,
+    "masterball": 1.28,
+    "firstEdition": 1.28,
+    "stamp": 1.28
+   }
+  },
+  "sv02-185": {
+   "id": "sv02-185",
+   "qty": {
+    "normal": 4
+   },
+   "addedAt": 1795564583519,
+   "name": "Mashynn",
+   "localId": "185",
+   "setId": "sv02",
+   "setName": "Évolutions à Paldea",
+   "setTotal": 193,
+   "image": "https://assets.tcgdex.net/fr/sv/sv02/185",
+   "rarity": "Peu Commune",
+   "category": "Dresseur",
+   "dexId": [],
+   "prices": {
+    "normal": 0.09,
+    "reverse": 0.38,
+    "holo": 0.38,
+    "cosmos": 0.38,
+    "pokeball": 0.38,
+    "masterball": 0.38,
+    "firstEdition": 0.09,
+    "stamp": 0.09
+   }
+  },
+  "me02-059": {
+   "id": "me02-059",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795560983519,
+   "name": "Ténéfix",
+   "localId": "059",
+   "setId": "me02",
+   "setName": "Flammes Fantasmagoriques",
+   "setTotal": 94,
+   "image": "https://assets.tcgdex.net/fr/me/me02/059",
+   "rarity": "Commune",
+   "category": "Pokémon",
+   "dexId": [
+    302
+   ],
+   "prices": {
+    "normal": 0.03,
+    "reverse": 0.06,
+    "holo": 0.06,
+    "cosmos": 0.06,
+    "pokeball": 0.06,
+    "masterball": 0.06,
+    "firstEdition": 0.03,
+    "stamp": 0.03
+   }
+  },
+  "sv01-245": {
+   "id": "sv01-245",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795557383519,
+   "name": "Gardevoir-ex",
+   "localId": "245",
+   "setId": "sv01",
+   "setName": "Écarlate et Violet",
+   "setTotal": 198,
+   "image": "https://assets.tcgdex.net/fr/sv/sv01/245",
+   "rarity": "Illustration spéciale rare",
+   "category": "Pokémon",
+   "dexId": [
+    282
+   ],
+   "prices": {
+    "normal": 48.54,
+    "reverse": 48.54,
+    "holo": 48.54,
+    "cosmos": 48.54,
+    "pokeball": 48.54,
+    "masterball": 48.54,
+    "firstEdition": 48.54,
+    "stamp": 48.54
+   }
+  },
+  "swsh9-154": {
+   "id": "swsh9-154",
+   "qty": {
+    "normal": 2
+   },
+   "addedAt": 1795553783519,
+   "name": "Dracaufeu V",
+   "localId": "154",
+   "setId": "swsh9",
+   "setName": "Stars Étincelantes",
+   "setTotal": 172,
+   "image": "https://assets.tcgdex.net/fr/swsh/swsh9/154",
+   "rarity": "Ultra Rare",
+   "category": "Pokémon",
+   "dexId": [
+    6
+   ],
+   "prices": {
+    "normal": 224.18,
+    "reverse": 224.18,
+    "holo": 224.18,
+    "cosmos": 224.18,
+    "pokeball": 224.18,
+    "masterball": 224.18,
+    "firstEdition": 224.18,
+    "stamp": 224.18
+   }
+  },
+  "sv04.5-232": {
+   "id": "sv04.5-232",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795550183519,
+   "name": "Mew-ex",
+   "localId": "232",
+   "setId": "sv04.5",
+   "setName": "Destinées de Paldea",
+   "setTotal": 91,
+   "image": "https://assets.tcgdex.net/fr/sv/sv04.5/232",
+   "rarity": "Illustration spéciale rare",
+   "category": "Pokémon",
+   "dexId": [
+    151
+   ],
+   "prices": {
+    "normal": 806.7,
+    "reverse": 806.7,
+    "holo": 806.7,
+    "cosmos": 806.7,
+    "pokeball": 806.7,
+    "masterball": 806.7,
+    "firstEdition": 806.7,
+    "stamp": 806.7
+   }
+  },
+  "me06-060": {
+   "id": "me06-060",
+   "qty": {
+    "normal": 1
+   },
+   "addedAt": 1795546583519,
+   "name": "Ténéfix",
+   "localId": "060",
+   "setId": "me06",
+   "setName": "Règne Delta",
+   "setTotal": 103,
+   "image": "https://assets.tcgdex.net/fr/me/me06/060",
+   "rarity": "Commune",
+   "category": "Pokémon",
+   "dexId": [],
+   "prices": {
+    "normal": 0.03,
+    "reverse": 0.11,
+    "holo": 0.11,
+    "cosmos": 0.11,
+    "pokeball": 0.11,
+    "masterball": 0.11,
+    "firstEdition": 0.03,
+    "stamp": 0.03
+   }
+  }
+ },
+ "savedAt": 1795629383519
+}
