@@ -1,0 +1,9 @@
+# Fins de ligne LF partout (le dépôt est construit et vérifié sur Linux par GitHub Actions).
+* text=auto eol=lf
+*.png binary
+*.webp binary
+*.jpg binary
+*.woff2 binary
+*.bin binary
+*.wasm binary
+*.gz binary
