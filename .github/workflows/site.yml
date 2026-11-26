@@ -1,0 +1,117 @@
+# Données et mise en ligne de Cardex (GitHub Pages, source « GitHub Actions »).
+# - chaque jour (04:15 et 10:15 UTC) : cotes Cardmarket du jour (tools/build_market.py), point d'historique du scellé ;
+# - chaque lundi (03:45 UTC) : en plus, table Cardmarket et photos (--weekly), catalogue des cartes, logos et images
+#   (tools/build_catalog.py), base du scanner (tools/build_scan.py) ;
+# - à chaque envoi sur main : les cotes sont refaites depuis le cache (pas de nouvelle requête à Cardmarket) ;
+# puis tools/release.py (sw.js tamponné, data/manifest.json) et mise en ligne. Les fichiers de cotes
+# (data/market/prices/, data/market/sealed.json) ne sont jamais versionnés : ils n'existent que dans le site publié.
+# Les données versionnées qui changent (historique, tables, catalogue, scanner) sont commitées par le robot ; un commit
+# fait avec GITHUB_TOKEN ne relance pas ce workflow.
+name: Données et mise en ligne
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "15 4 * * *"
+    - cron: "15 10 * * *"
+    - cron: "45 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      weekly:
+        description: "Mise à jour hebdomadaire complète (table Cardmarket, catalogue, scanner)"
+        type: boolean
+        default: false
+      verify:
+        description: "Catalogue : revérifier les adresses d'images (--verify, une fois par mois)"
+        type: boolean
+        default: false
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: site
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      WEEKLY: ${{ github.event.schedule == '45 3 * * 1' || inputs.weekly == true }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # caches des constructeurs : ETag et fichiers Cardmarket (mk, chaque jour) ; réponses TCGdex (ca) et images du
+      # scanner (sc/tcgdex, ~500 Mo) seulement le lundi
+      - uses: actions/cache@v4
+        with:
+          path: .cache/mk
+          key: mk-${{ github.run_id }}
+          restore-keys: mk-
+      - uses: actions/cache@v4
+        if: env.WEEKLY == 'true'
+        with:
+          path: |
+            .cache/ca
+            .cache/sc/tcgdex
+          key: weekly-${{ github.run_id }}
+          restore-keys: weekly-
+
+      - name: Catalogue et scanner (lundi)
+        if: env.WEEKLY == 'true'
+        run: |
+          pip install --quiet numpy pillow
+          # 0 = tout vérifié ; 3 = écrit mais certaines vérifications à refaire ; 2 = rien d'écrit (source cassée)
+          set +e
+          python tools/build_catalog.py ${{ inputs.verify == true && '--verify' || '' }}
+          code=$?
+          set -e
+          if [ "$code" = "3" ]; then echo "::warning::catalogue : vérifications incomplètes, à relancer"; fi
+          if [ "$code" = "2" ]; then echo "::warning::catalogue : source indisponible, fichiers précédents gardés"; fi
+          if [ "$code" != "0" ] && [ "$code" != "2" ] && [ "$code" != "3" ]; then exit "$code"; fi
+          python tools/build_scan.py --recheck 600
+
+      - name: Cotes Cardmarket
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # envoi de code : cotes refaites depuis le cache ; sans cache, un seul téléchargement (ETag)
+            python tools/build_market.py --offline || python tools/build_market.py
+          elif [ "$WEEKLY" = "true" ]; then
+            python tools/build_market.py --weekly
+          else
+            python tools/build_market.py
+          fi
+
+      - name: Données versionnées
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- data/market/hist data/market/meta.json data/market/cm-map.json data/market/sealed-img.json \
+            data/sets.json data/sets data/cards-index.json data/cardimg.json img/sets img/sym data/scan
+          if ! git diff --cached --quiet; then
+            git commit -m "Données : mise à jour automatique"
+            git pull --rebase
+            git push
+          fi
+
+      - name: Site
+        run: |
+          python tools/release.py
+          mkdir _site
+          cp -r index.html manifest.webmanifest icon.svg icon-180.png icon-512.png sw.js css js fonts img data vendor _site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

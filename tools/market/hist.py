@@ -4,6 +4,9 @@
 - compactage : quotidien sur 120 jours, puis le premier point de chaque semaine ISO jusqu'à 2 ans, puis de chaque mois ;
   la valeur gardée pour une semaine (un mois) est la première connue du produit dans la période, donc rien ne se perd ;
 - l'historique ne rétrécit jamais : un produit sorti du catalogue garde sa colonne, un fichier existant n'est jamais vidé ;
+  seule exception, les valeurs fausses : 0,02 € (plancher de Cardmarket) n'est jamais relu, et un jour recalculé depuis
+  le même fichier (même guide relu, reconstitution --backfill) remplace ses anciennes valeurs ; un produit qui n'avait
+  que des valeurs fausses perd sa colonne (et un fichier qui n'avait que de tels produits disparaît) ;
 - répartition par extension Cardmarket, les grosses extensions « fourre-tout » découpées par type puis par paquets ;
   un produit garde son fichier pour toujours (pas de déplacement d'un jour à l'autre).
 """
@@ -16,6 +19,7 @@ from .util import read_json, write_json
 
 CAP = 120          # produits par fichier au plus
 DAILY, WEEKLY = 120, 730
+FLOOR = 2          # centimes : plancher de Cardmarket (tendance 0,02 €), jamais un vrai prix de scellé
 SHARD_RX = re.compile(r"^[0-9a-z-]+$")
 
 
@@ -25,6 +29,7 @@ class History:
         self.series = defaultdict(dict)   # id (str) -> {date: centimes}
         self.shard = {}                   # id -> nom du fichier
         self.loaded_files = set()
+        self.cleared = set()              # produits dont toutes les valeurs étaient fausses (colonne retirée)
         if os.path.isdir(folder):
             for fn in sorted(os.listdir(folder)):
                 if not fn.endswith(".json") or not SHARD_RX.match(fn[:-5]):
@@ -40,8 +45,10 @@ class History:
                     self.shard.setdefault(pid, name)
                     s = self.series[pid]
                     for d, v in zip(h["d"], col):
-                        if isinstance(v, int) and v > 0:
+                        if isinstance(v, int) and v > FLOOR:
                             s[d] = v
+                    if not s and any(v is not None for v in col):
+                        self.cleared.add(pid)
 
     # ---------- lecture ----------
     def days(self):
@@ -51,14 +58,32 @@ class History:
         s = self.series.get(str(pid)) or {}
         return sorted(s.items())
 
+    def shard_of(self, pid):
+        """Fichier d'historique d'un produit, ou None s'il n'a aucun point."""
+        pid = str(pid)
+        return self.shard.get(pid) if self.series.get(pid) else None
+
     # ---------- écriture ----------
     def add(self, day, prices):
         """prices = {id: centimes} ; écrase la valeur du même jour (relecture du même fichier)."""
         n = 0
         for pid, v in prices.items():
-            if isinstance(v, int) and v > 0:
+            if isinstance(v, int) and v > FLOOR:
                 self.series[str(pid)][day] = v
                 n += 1
+        return n
+
+    def set_day(self, day, prices, ids):
+        """Valeurs du jour `day` recalculées depuis son fichier pour les produits `ids` : celles de `prices` remplacent
+        les anciennes, un produit de `ids` sans prix perd sa valeur de ce jour (correction d'une valeur fausse)."""
+        n = self.add(day, prices)
+        for pid in ids:
+            pid = str(pid)
+            s = self.series.get(pid)
+            if s and day in s and not (isinstance(prices.get(pid), int) and prices[pid] > FLOOR):
+                del s[day]
+                if not s:
+                    self.cleared.add(pid)
         return n
 
     def assign(self, groups):
@@ -127,16 +152,20 @@ class History:
         return out
 
     def prepare(self):
-        """-> {nom: contenu} des fichiers à écrire ; lève ValueError si un fichier perdait un produit ou disparaissait
-        (l'historique ne rétrécit jamais)."""
+        """-> ({nom: contenu ou None pour un fichier à supprimer}, nombre de fichiers) ; lève ValueError si un fichier
+        perdait un produit ou disparaissait (l'historique ne rétrécit jamais), sauf les produits qui n'avaient que des
+        valeurs fausses (self.cleared)."""
         files = self.files()
-        for name in sorted(self.loaded_files - set(files)):
-            raise ValueError(f"historique : le fichier {name} disparaîtrait")
         out = {}
+        for name in sorted(self.loaded_files - set(files)):
+            old = read_json(os.path.join(self.folder, name + ".json")) or {}
+            if set(old.get("p", {})) - self.cleared:
+                raise ValueError(f"historique : le fichier {name} disparaîtrait")
+            out[name] = None
         for name, h in sorted(files.items()):
             path = os.path.join(self.folder, name + ".json")
             old = read_json(path)
-            if old is not None and set(old.get("p", {})) - set(h["p"]):
+            if old is not None and set(old.get("p", {})) - set(h["p"]) - self.cleared:
                 raise ValueError(f"historique : {name} perdrait des produits")
             if old != h:
                 out[name] = h
@@ -145,7 +174,12 @@ class History:
     def commit(self, changed):
         os.makedirs(self.folder, exist_ok=True)
         for name, h in changed.items():
-            write_json(os.path.join(self.folder, name + ".json"), h, sort=False)
+            path = os.path.join(self.folder, name + ".json")
+            if h is None:
+                if os.path.exists(path):
+                    os.remove(path)
+            else:
+                write_json(path, h, sort=False)
 
 
 def _bucket(d, today):
@@ -177,6 +211,7 @@ def summary(points, today):
     -> {c7, c30, c90, c365 (en %), first (€), since (date), max (€), chg (date depuis laquelle le prix ne bouge pas)}."""
     out = {k: None for k, _, _ in SPANS}
     out.update(first=None, since=None, max=None, chg=None)
+    points = [(d, v) for d, v in points if isinstance(v, int) and v > FLOOR]  # jamais le plancher 0,02 €
     if not points:
         return out
     now = points[-1][1]

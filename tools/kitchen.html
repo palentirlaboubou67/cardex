@@ -182,10 +182,13 @@
         ${setRow(meta('30th-c'), 30)}
         ${setRow(meta('tk-xy-p'), 3)}
         ${setRow(meta('me06'), 1)}
+        ${setRow(meta('swsh12tg'), 12)}
+        ${setRow(meta('tk-ex-p'), 2)}
+        ${setRow({ id: 'kitchen-mono-tag', name: 'Couverture générée avec étiquette', code: 'MCD21', tag: '2021', total: 25 }, 5)}
         ${setRow({ id: 'kitchen-broken', name: 'Logo introuvable (couverture générée)', logo: 'img/sets/absent.webp', code: 'ABS', total: 100 }, 37)}
         ${setRow({ id: 'kitchen-plain', name: 'Sans logo ni symbole', code: 'MEP', total: 108 }, 0)}
       </div>
-      <div class="k-row">${setLogoHTML(meta('sv03.5'), { size: 'hero' })}${setLogoHTML(meta('me05'), { size: 'hero' })}${setLogoHTML(meta('tk-xy-p'), { size: 'hero' })}${setSymHTML(meta('sv03.5'), { size: 24 })}</div>`;
+      <div class="k-row">${setLogoHTML(meta('sv03.5'), { size: 'hero' })}${setLogoHTML(meta('me05'), { size: 'hero' })}${setLogoHTML(meta('tk-xy-p'), { size: 'hero' })}${setLogoHTML(meta('exu'), { size: 'hero' })}${setLogoHTML(meta('tk-ex-p'), { size: 'hero' })}${setSymHTML(meta('sv03.5'), { size: 24 })}</div>`;
 
     // ---------- puces, segmentés, recherche ----------
     const chips = html`<div class="chips" role="group" aria-label="Tri et filtres">
@@ -238,7 +241,7 @@
       <div class="btns"><button type="button" class="btn block">Bouton pleine largeur</button></div>
       <div class="k-row"><span class="stepper"><button type="button" aria-label="Retirer">${icon('minus')}</button><span class="v">3</span><button type="button" aria-label="Ajouter">${icon('plus')}</button></span>
         <button type="button" class="ibtn" aria-label="Info">${icon('info')}</button><button type="button" class="ibtn" aria-label="Suivre" aria-pressed="true">${icon('star-fill')}</button><button type="button" class="ibtn" aria-label="Alerte">${icon('bell')}<i class="bdg"></i></button></div>
-      <div class="k-row"><button type="button" class="btn" data-k="toast">Toast</button><button type="button" class="btn" data-k="toast-undo">Toast « Annuler »</button><button type="button" class="btn" data-k="sheet">Feuille</button><button type="button" class="btn" data-k="menu">Menu</button><button type="button" class="btn" data-k="info">Info</button></div>`;
+      <div class="k-row"><button type="button" class="btn" data-k="toast">Toast</button><button type="button" class="btn" data-k="toast-undo">Toast « Annuler »</button><button type="button" class="btn" data-k="toast-sticky">Toast persistant</button><button type="button" class="btn" data-k="sheet">Feuille</button><button type="button" class="btn" data-k="menu">Menu</button><button type="button" class="btn" data-k="info">Info</button></div>`;
 
     // ---------- liste à cocher, classeur, produits, énergies ----------
     const tick = (f, n) => html`<button type="button" class="tick" aria-pressed="${n ? 'true' : 'false'}">${n ? icon('check') : ''}${SHORT[f]}${n > 1 ? ` ×${n}` : ''}</button>`;
@@ -306,6 +309,7 @@
       const k = b.dataset.k;
       if (k === 'toast') toast('Liste copiée : colle-la dans ta discussion');
       if (k === 'toast-undo') toast('Ajoutée en Normale · 3 au total', { action: 'Annuler', onAction: () => toast('Ajout annulé') });
+      if (k === 'toast-sticky') toast('Nouvelle version disponible', { action: 'Recharger', ms: 0, onAction: () => toast('Rechargement…') });
       if (k === 'sheet') openSheet({ title: 'Alerte prix', body: html`<form class="form" onsubmit="return false"><div class="seg block"><button type="button" aria-pressed="true">Normale</button><button type="button" aria-pressed="false">Reverse</button></div><div class="two"><label class="field">Prix min<input inputmode="decimal" value="0,00"></label><label class="field">Prix max<input inputmode="decimal" placeholder="8,28 €"></label></div><p class="caption" style="padding:0">À partir de 7,50 € en vente</p><button type="button" class="btn primary block">Me prévenir</button></form>` });
       if (k === 'menu') menuSheet([{ icon: 'theme', label: 'Thème' }, { icon: 'info', label: 'À propos de Cardex' }, { icon: 'trash', label: 'Tout effacer', danger: true }, { icon: 'settings', label: 'Réglages et sauvegarde' }]);
       if (k === 'info') infoSheet('Collection', ['La valeur estimée additionne la cote Cardmarket (tendance) de chaque version que tu possèdes.', 'Cotes Cardmarket (tendance, toutes langues), mises à jour chaque nuit. Cardex n’est pas affilié à Cardmarket.']);

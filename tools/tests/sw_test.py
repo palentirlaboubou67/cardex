@@ -7,7 +7,9 @@ hors ligne, aucune réponse opaque ni en erreur dans Cache Storage, TCGdex rése
 si elle existe), données versionnées (?h=) : toutes les séries hors ligne puis purge, mise à jour (nouvelle VERSION,
 toast « Nouvelle version disponible », ancien cache supprimé, caches des autres applis intacts), passage depuis la v1,
 plafonds des caches d'images (FIFO). Les hôtes externes (TCGdex, Scrydex, TCGplayer, GitHub, jsDelivr) sont simulés
-par Playwright : aucune requête ne sort. Port 8772.
+par Playwright : aucune requête ne sort. Port 8772 (ou --port N).
+Aussi : le sw.js du dépôt tel quel (mode développement, SHELL vide) recharge l'appli hors ligne après une première
+visite ; logos et symboles des séries enregistrés pour le hors ligne ; clic sur une notification -> les envies.
 """
 import asyncio
 import json
@@ -37,7 +39,7 @@ def make_site():
         shutil.rmtree(SITE)
     os.makedirs(SITE)
     skip = shutil.ignore_patterns('__pycache__', '*.pyc', 'manifest.json')
-    for f in ['index.html', 'manifest.webmanifest', 'icon.svg', 'sw.js']:
+    for f in ['index.html', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-512.png', 'sw.js']:
         if os.path.isfile(os.path.join(ROOT, f)):
             shutil.copy2(os.path.join(ROOT, f), SITE)
     for d in ['css', 'js', 'fonts', 'img', 'data', 'vendor']:
@@ -46,8 +48,11 @@ def make_site():
 
 
 def release(root, *args):
-    r = subprocess.run([sys.executable, '-P', RELEASE, '--root', root, *args], capture_output=True, text=True, encoding='utf8')
-    return r.returncode, (r.stdout + r.stderr).strip()
+    # release.py doit écrire en UTF-8 de lui-même, quelle que soit la console (PowerShell règle PYTHONIOENCODING,
+    # Git Bash et la CI non) : on retire la variable pour tester le cas difficile, et on décode strictement
+    env = {k: v for k, v in os.environ.items() if k.upper() != 'PYTHONIOENCODING'}
+    r = subprocess.run([sys.executable, '-P', RELEASE, '--root', root, *args], capture_output=True, env=env)
+    return r.returncode, (r.stdout + r.stderr).decode('utf8').strip()
 
 
 def stamped(root):
@@ -290,12 +295,39 @@ async def main():
             n_sets = sum(1 for k in m['files'] if re.match(r'^data/sets/[^/]+\.json$', k))
             eq(st['sets'], n_sets, 'séries listées dans le manifest')
             await pg.evaluate("navigator.serviceWorker.controller.postMessage({ type: 'warm' })")
-            for _ in range(180):
+            for _ in range(240):
                 st = await pg.evaluate(ASK, 'offline-status')
-                if st['cached'] >= st['sets']:
+                if st['cached'] >= st['sets'] and st['picturesCached'] >= st['pictures']:
                     break
                 await asyncio.sleep(0.5)
             eq(st['cached'], st['sets'], 'toutes les séries enregistrées pour le hors ligne')
+            check(st['pictures'] > 100 and st['picturesCached'] == st['pictures'], 'logos et symboles enregistrés pour le hors ligne', st)
+            # Séries hors ligne, liste entière parcourue : aucun logo ni symbole manquant
+            await pg.goto(srv.url + '#/series')
+            await pg.wait_for_timeout(600)
+            failed = []
+
+            def on_failed(r):
+                failed.append(r.url)
+            pg.on('requestfailed', on_failed)
+            await ctx.set_offline(True)
+            try:
+                await pg.reload(wait_until='load')
+                await pg.wait_for_function("document.documentElement.classList.contains('ready') && !!window.__cardex", timeout=20000)
+                await pg.wait_for_timeout(600)
+                await pg.evaluate('''async () => { const h = () => document.documentElement.scrollHeight;
+                  for (let y = 0; y < h(); y += 500) { scrollTo(0, y); await new Promise(r => setTimeout(r, 40)); } }''')
+                await pg.wait_for_timeout(600)
+                imgs = await pg.evaluate('''[...document.images].filter(i => new URL(i.src).pathname.includes('/img/'))
+                  .map(i => ({ src: i.src, ok: i.complete && i.naturalWidth > 0 }))''')
+                await pg.screenshot(path=os.path.join(ROOT, '.cache', 'f2', 'sw_series_offline.png'))
+            finally:
+                await ctx.set_offline(False)
+                pg.remove_listener('requestfailed', on_failed)
+                await pg.evaluate('scrollTo(0, 0)')
+            eq([u for u in failed if '/img/' in u], [], 'aucun logo ni symbole manquant hors ligne')
+            check(len(imgs) > 50 and all(i['ok'] for i in imgs), 'logos affichés hors ligne', len(imgs), [i for i in imgs if not i['ok']][:5])
+            pics = f"{st['picturesCached']}/{st['pictures']} logos et symboles, {len(imgs)} affichés hors ligne"
             sid = 'base1' if 'data/sets/base1.json' in m['files'] else sorted(m['files'])[0].split('/')[-1][:-5]
             await ctx.set_offline(True)
             try:
@@ -322,7 +354,7 @@ async def main():
                     break
             check(not any(f'data/sets/{sid}.json?h={old_h}' in u for u in data_urls), 'ancien hash purgé')
             check(any(u.endswith('data/manifest.json') for u in data_urls), 'manifest gardé (secours hors ligne)')
-            return f"{st['cached']}/{st['sets']} séries hors ligne, {len(data_urls)} entrées dans cardex-data"
+            return f"{st['cached']}/{st['sets']} séries hors ligne, {pics}, {len(data_urls)} entrées dans cardex-data"
 
         # ---------- 6. mise à jour : nouvelle VERSION ----------
         async def t_update():
@@ -446,6 +478,79 @@ async def main():
             eq(kept, urls[-5:], 'les 5 plus récentes gardées (FIFO)')
             return f'12 images, {len(kept)} gardées'
 
+        # ---------- 9. sw.js du dépôt (mode développement) : hors ligne après une première visite ----------
+        async def t_dev():
+            with open(os.path.join(ROOT, 'sw.js'), encoding='utf8') as fh:
+                dev = fh.read()
+            check("const VERSION = 'dev';" in dev and 'const SHELL = [];' in dev, 'sw.js du dépôt en mode développement')
+            srv.pages['sw.js'] = (dev, 'text/javascript; charset=utf-8')
+            srv.fail['data/manifest.json'] = 404                 # comme en développement : pas de manifest
+            ctx4, _ = await new_ctx()
+            failed, errs = [], []
+            try:
+                q = await ctx4.new_page()
+                q.on('console', lambda m: errs.append(m.text) if m.type == 'error' and 'manifest.json' not in (m.location or {}).get('url', '') else None)
+                await q.goto(srv.url + '#/collection/cartes')
+                await q.wait_for_function(CONTROLLED, timeout=30000)
+                prev = -1
+                for _ in range(60):                            # copie de ce que la page a chargé avant la prise de main
+                    n = await q.evaluate("caches.open('cardex-app-dev').then(c => c.keys()).then(k => k.length)")
+                    if n == prev and n >= 20:
+                        break
+                    prev = n
+                    await asyncio.sleep(0.3)
+                dump = await q.evaluate(DUMP)
+                q.on('requestfailed', lambda r: failed.append(r.url))
+                await ctx4.set_offline(True)
+                try:
+                    await q.reload(wait_until='load')
+                    await q.wait_for_function("document.documentElement.classList.contains('ready') && !!window.__cardex", timeout=20000)
+                    await q.wait_for_timeout(800)
+                    title = await q.title()
+                    outlet = await q.evaluate("document.querySelector('#outlet') && document.querySelector('#outlet').innerText.length")
+                    await q.screenshot(path=os.path.join(ROOT, '.cache', 'f2', 'sw_dev_offline.png'))
+                finally:
+                    await ctx4.set_offline(False)
+            finally:
+                del srv.pages['sw.js'], srv.fail['data/manifest.json']
+                await ctx4.close()
+            app = [x['url'] for x in dump.get('cardex-app-dev', [])]
+            opaque = [x['url'] for items in dump.values() for x in items if x['type'] == 'opaque' or not x['ok']]
+            eq(opaque, [], 'mode dev : rien d’opaque ni en erreur')
+            check(srv.url + 'index.html' in app and srv.url + 'js/main.js' in app and srv.url + 'js/state/collection.js' in app,
+                  'mode dev : la page de la première visite et ses modules gardés', app[:8])
+            exists = lambda u: os.path.isfile(os.path.join(SITE, *rel(srv, u).split('/'))) if rel(srv, u) else True
+            lost = [u for u in failed if u.startswith(srv.url) and exists(u) and 'manifest.json' not in u]
+            eq(lost, [], 'mode dev : aucun fichier existant manquant hors ligne')
+            check(outlet and outlet > 20, 'mode dev : vue affichée hors ligne', title, outlet)
+            return f"« {title} » hors ligne ; {len(app)} fichiers de l'appli et {len(dump.get('cardex-data', []))} données gardés à la 1re visite"
+
+        # ---------- 10. clic sur une notification : la fenêtre de Cardex passe sur les envies ----------
+        async def t_click():
+            sw, _, _ = stamped(SITE)
+            check('async function openApp(' in sw, 'openApp() dans sw.js')
+            hook = ("\nself.addEventListener('message', e => { if (e.data && e.data.type === '__open') "
+                    "e.waitUntil(openApp(e.data.url).catch(() => {})); });\n")
+            srv.pages['sw.js'] = (sw + hook, 'text/javascript; charset=utf-8')
+            ctx5, _ = await new_ctx()
+            try:
+                q = await ctx5.new_page()
+                await q.goto(srv.url + '#/series')
+                await q.wait_for_function(CONTROLLED, timeout=30000)
+                await q.wait_for_function("document.documentElement.classList.contains('ready') && !!window.__cardex", timeout=20000)
+                await q.evaluate("(url) => navigator.serviceWorker.controller.postMessage({ type: '__open', url })", './#/marche/envies')
+                await q.wait_for_url('**/#/marche/envies', timeout=10000)
+                await q.wait_for_function("document.documentElement.classList.contains('ready') && !!window.__cardex", timeout=20000)
+                await q.wait_for_timeout(500)
+                title = await q.title()
+                pages = len(ctx5.pages)
+            finally:
+                del srv.pages['sw.js']
+                await ctx5.close()
+            eq(pages, 1, 'pas de deuxième fenêtre')
+            check('Cardex' in title, 'appli affichée', title)
+            return f'« {title} »'
+
         for name, fn in [('installation et précache', t_install),
                          ('rechargement hors ligne', t_offline),
                          ('images : CORS, ok seulement, jamais d’opaque', t_images),
@@ -454,12 +559,23 @@ async def main():
                          ('mise à jour : nouvelle VERSION', t_update),
                          ('alertes : periodicsync → notification', t_periodic),
                          ('passage depuis la v1', t_from_v1),
-                         ('plafonds des caches d’images', t_caps)]:
+                         ('plafonds des caches d’images', t_caps),
+                         ('sw.js du dépôt (mode dev) : hors ligne après la 1re visite', t_dev),
+                         ('notification : la fenêtre ouverte passe sur les envies', t_click)]:
             await R.arun(name, fn)
         blocked = sorted({u for u in ext.blocked})
         print(f'requêtes externes non simulées (bloquées) : {len(blocked)} {blocked[:5]}')
-        print(f"erreurs de console de l'appli pendant les tests : {len(console)}")
-        for c in console[:12]:
+        # fichier absent du site (404 en ligne, ERR_FAILED hors ligne), ex. css/views/*.css liés par index.html avant que
+        # leurs auteurs les écrivent. Les autres sont attendus : 404 et TCGdex coupé voulus par les tests, logos pas
+        # encore enregistrés au premier rechargement hors ligne (avant la mise en cache de toutes les séries).
+        def absent(c):
+            m = re.search(r'(?:status of 404|net::ERR_FAILED).*@ (\S+)', c)
+            p = m and rel(srv, m.group(1))
+            return bool(p) and not os.path.exists(os.path.join(SITE, *p.split('/')))
+        other = sorted({c for c in console if not absent(c)})
+        print(f"erreurs de console de l'appli pendant les tests : {len(console)}, dont {len(console) - sum(1 for c in console if not absent(c))}"
+              f" pour des fichiers absents du site (404, ou échec hors ligne) ; autres (attendus) : {len(other)}")
+        for c in other[:20]:
             print('   ', c[:220])
         await b.close()
     srv.close()
@@ -494,7 +610,9 @@ def release_tests(R):
             m = manifest(d)
             eq(sorted(m['files']), ['data/sub/y.bin', 'data/x.json'], 'manifest : .json et .bin sous data/')
             check(all(re.fullmatch(r'[0-9a-f]{8}', h) for h in m['files'].values()), 'hashes de 8 caractères hexadécimaux')
-            eq(release(d, '--check')[0], 0, '--check : à jour')
+            code, out = release(d, '--check')
+            eq(code, 0, '--check : à jour')
+            check('sw.js à jour' in out, 'sortie en UTF-8 (accents lisibles)', out)
             before = open(os.path.join(d, 'sw.js'), 'rb').read()
             release(d)
             eq(open(os.path.join(d, 'sw.js'), 'rb').read(), before, 'deuxième passage : rien ne change')

@@ -51,7 +51,51 @@ self.addEventListener('message', e => {
   else if (m?.type === 'version') e.source?.postMessage({ type: 'version', version: VERSION });
   else if (m?.type === 'offline-status') e.waitUntil(offlineStatus().then(s => e.source?.postMessage({ type: 'offline-status', ...s })));
   else if (m?.type === 'warm') e.waitUntil(warm(0));
+  // seulement d'une page de Cardex (les autres applis du domaine github.io peuvent écrire à ce service worker)
+  else if (m?.type === 'seen' && Array.isArray(m.urls) && String(e.source?.url || '').startsWith(SCOPE.href)) {
+    e.waitUntil(keepSeen(m.urls).catch(() => {}));
+  }
 });
+
+// Première visite : la page a tout chargé avant que le service worker prenne la main (js/core/net.js envoie alors
+// la liste de ce qu'elle a chargé). On en garde une copie : le rechargement hors ligne qui suit fonctionne, même sans
+// tools/release.py (développement, où SHELL est vide) et pour les données et images déjà vues.
+async function keepSeen(urls) {
+  const jobs = [];
+  for (const u of new Set(urls.slice(0, 600))) {
+    let url;
+    try { url = new URL(u); } catch { continue; }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
+    const path = rel(url);
+    if (path !== null) {
+      url.hash = '';
+      if (path === '' || path === 'index.html') { if (DEV) jobs.push(['app', new URL('index.html', SCOPE).href]); continue; }
+      if (path === 'sw.js' || path === 'data/manifest.json') continue;
+      if (path.startsWith('data/') || path.startsWith('img/')) jobs.push(['data', url.href]);
+      else if (path.startsWith('vendor/')) jobs.push(['vendor', url.href]);
+      else if (DEV && !url.search) jobs.push(['app', url.href]);
+      continue;
+    }
+    if (url.origin === SCOPE.origin) continue;                 // autre appli du domaine
+    const ic = imgCache(url);
+    if (ic) jobs.push(['img', url.href, ic]);
+  }
+  const names = { app: APP, data: DATA, vendor: VEND };
+  let i = 0;
+  await Promise.all([0, 1, 2, 3].map(async () => {
+    while (i < jobs.length) {
+      const [kind, href, ic] = jobs[i++];
+      try {
+        const c = await caches.open(kind === 'img' ? ic[0] : names[kind]);
+        if (await c.match(href)) continue;
+        // copie HTTP déjà là le plus souvent : rien ne repart sur le réseau
+        const res = kind === 'img' ? await fetch(href, { mode: 'cors', credentials: 'omit' }) : await fetch(href);
+        if (res.ok && (res.type === 'basic' || res.type === 'cors') && !res.redirected) await c.put(href, res);
+        if (kind === 'img') await trimSoon(ic[0], ic[1]);
+      } catch { /* hors ligne ou hôte sans CORS : rien */ }
+    }
+  }));
+}
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
@@ -245,8 +289,9 @@ async function purge(m) {
   }
 }
 
-// Consultation hors ligne de toutes les séries : sets.json, chaque data/sets/<id>.json, l'index, cardimg, Pokédex.
-// Doucement (2 à la fois, priorité basse), jamais en mode « économie de données » ni sur une connexion lente.
+// Consultation hors ligne de toutes les séries : sets.json, chaque data/sets/<id>.json, l'index, cardimg, Pokédex,
+// puis les logos et symboles (img/sets, img/sym). Doucement (2 à la fois, priorité basse), jamais en mode
+// « économie de données » ni sur une connexion lente.
 const WARM = p => p === 'data/sets.json' || p === 'data/cards-index.json' || p === 'data/cardimg.json'
   || p === 'data/pokedex.json' || /^data\/sets\/[^/]+\.json$/.test(p);
 let warming = null, warmedAt = 0;
@@ -270,32 +315,66 @@ function warm(delay) {
         const u = new URL(`${p}?h=${h}`, SCOPE).href;
         if (!(await c.match(u))) todo.push(u);
       }
-      let i = 0;
-      await Promise.all([0, 1].map(async () => {
-        while (i < todo.length) {
-          const u = todo[i++];
-          try {
-            const res = await fetch(u, { priority: 'low' });
-            if (res.ok) await c.put(u, res);
-          } catch { return; }                    // hors ligne : on arrête
-        }
-      }));
+      if (!(await fetchAll(c, todo))) return;    // hors ligne : on arrête
+      // puis les logos et symboles des séries (noms avec hash, ~1 Mo en tout), et le ménage des anciens
+      const pics = await setPictures(c, m);
+      if (!pics) return;
+      const want = [];
+      for (const u of pics) if (!(await c.match(u))) want.push(u);
+      if (!(await fetchAll(c, want))) return;
+      const keep = new Set(pics);
+      for (const req of await c.keys()) {
+        const p = rel(new URL(req.url));
+        if (p && /^img\/(sets|sym)\//.test(p) && !keep.has(req.url)) await c.delete(req);
+      }
     } finally { warming = null; }
   })();
   return warming;
 }
 
+// 2 à la fois, priorité basse ; -> false si le réseau a lâché
+async function fetchAll(c, urls) {
+  let i = 0, ok = true;
+  await Promise.all([0, 1].map(async () => {
+    while (ok && i < urls.length) {
+      const u = urls[i++];
+      try {
+        const res = await fetch(u, { priority: 'low' });
+        if (res.ok && res.type === 'basic') await c.put(u, res);
+      } catch { ok = false; }
+    }
+  }));
+  return ok;
+}
+
+// URLs des logos (séries et blocs) et symboles de data/sets.json (copie versionnée du cache), null si illisible
+async function setPictures(c, m) {
+  const h = m.files['data/sets.json'];
+  if (!h) return null;
+  const res = await c.match(new URL(`data/sets.json?h=${h}`, SCOPE).href);
+  let d = null;
+  try { d = res ? await res.json() : null; } catch { return null; }
+  if (!d || !Array.isArray(d.sets)) return null;
+  const out = new Set();
+  const add = p => { if (typeof p === 'string' && /^img\/[\w./-]+$/.test(p)) out.add(new URL(p, SCOPE).href); };
+  for (const s of d.sets) { add(s?.logo); add(s?.sym); }
+  for (const b of d.blocs || []) add(b?.logo);
+  return [...out];
+}
+
 async function offlineStatus() {
   const m = await currentManifest(true);
-  if (!m?.files) return { sets: 0, cached: 0 };
+  if (!m?.files) return { sets: 0, cached: 0, pictures: 0, picturesCached: 0 };
   const c = await caches.open(DATA);
-  let sets = 0, cached = 0;
+  let sets = 0, cached = 0, picturesCached = 0;
   for (const [p, h] of Object.entries(m.files)) {
     if (!/^data\/sets\/[^/]+\.json$/.test(p)) continue;
     sets++;
     if (await c.match(new URL(`${p}?h=${h}`, SCOPE).href)) cached++;
   }
-  return { sets, cached };
+  const pics = (await setPictures(c, m)) || [];
+  for (const u of pics) if (await c.match(u)) picturesCached++;
+  return { sets, cached, pictures: pics.length, picturesCached };
 }
 
 // ---------- alertes de prix ----------
@@ -308,15 +387,23 @@ self.addEventListener('periodicsync', e => {
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const url = new URL(e.notification.data?.url || WishDB.URL || './#/marche/envies', SCOPE).href;
-  e.waitUntil((async () => {
-    // seulement une fenêtre de Cardex (le domaine github.io est partagé avec d'autres applis)
-    const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const c = list.find(x => x.url.startsWith(SCOPE.href));
-    if (c) {
-      try { await c.navigate(url); } catch { /* page non contrôlée : on l'affiche telle quelle */ }
-      return c.focus();
-    }
-    return self.clients.openWindow(url);
-  })());
+  e.waitUntil(openApp(e.notification.data?.url || WishDB.URL || './#/marche/envies'));
 });
+
+// Une fenêtre de Cardex (le domaine github.io est partagé avec d'autres applis) : mise au premier plan tout de suite
+// (le droit de le faire, donné par le clic, ne dure pas), puis ouverte sur la page voulue ; sinon une nouvelle fenêtre.
+async function openApp(target) {
+  const url = new URL(target, SCOPE).href;
+  const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const c = list.find(x => x.url.startsWith(SCOPE.href) && x.focused) || list.find(x => x.url.startsWith(SCOPE.href));
+  if (!c) return self.clients.openWindow(url);
+  const focused = c.focus().catch(() => null);
+  let n = null;
+  if (c.url !== url) {
+    // navigate() renvoie le nouveau client (autre document) ; une page non contrôlée refuse : on lui écrit
+    n = await c.navigate(url).catch(() => null);
+    if (!n) c.postMessage({ type: 'navigate', url });
+  }
+  const f = await focused;
+  return n && !n.focused ? n.focus().catch(() => f) : f;
+}

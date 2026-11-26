@@ -2,7 +2,8 @@
 // Pastilles : « ×N » seulement pour N ≥ 2 (badge 'qty'), « +N » pour les doubles (badge 'extra'), finition en bas à gauche,
 // « EN » / « ≈ » en haut à gauche (js/data/images.js). Brillance fixe + un reflet au survol ou à l'appui.
 import { html, raw, esc } from '../core/dom.js';
-import { eur, cardNo } from '../core/format.js';
+import { eur, cardNo, localNo } from '../core/format.js';
+import { cardHref } from '../core/router.js';
 import { imgHTML, enBadge } from '../data/images.js';
 import { SHORT, LABEL, DOT } from '../data/finishes.js';
 import { metaSync, setIdOf } from '../data/catalog.js';
@@ -32,9 +33,9 @@ export function tileHTML(card, opts = {}) {
   const special = finish && finish !== 'normal' ? finish : null;
   const base = [card.name, set.name, no, special ? (LABEL[special] || special) : ''].filter(Boolean).join(', ');
   const label = opts.label || [base, ownText(badge, qty, missing)].filter(Boolean).join(', ');
-  const link = href ?? `#/carte/${id}${finish ? `?finition=${encodeURIComponent(finish)}` : ''}`;
+  const link = href ?? cardHref(id, finish);                       // id encodé une fois (exu-%3F → exu-%253F)
   const b = badgeText(badge, qty);
-  const metaText = meta || [set.name, card.localId].filter(Boolean).join(' · ') || no;
+  const metaText = meta || [set.name, localNo(card.localId)].filter(Boolean).join(' · ') || no;
   return html`<a class="tile${missing ? ' missing' : ''}" href="${link}" data-card="${id}"${finish ? raw(` data-finish="${esc(finish)}"`) : ''} data-b="${badge}" data-q="${qty}" data-l="${base}" aria-label="${label}"><span class="tile-img">${
     imgHTML(card, { q: 'low' })}${
     fx && FX.has(finish) ? raw(`<i class="fx fx-${finish}"></i>`) : ''}${
@@ -72,5 +73,19 @@ export function patchTile(el, { qty, missing, price } = {}) {
   if (el.dataset.l != null && (qty !== undefined || missing !== undefined)) {
     const own = ownText(mode, +el.dataset.q || 0, el.classList.contains('missing'));
     el.setAttribute('aria-label', [el.dataset.l, own].filter(Boolean).join(', '));
+  }
+}
+
+// La table des images (data/cardimg.json) est arrivée après l'affichage : les vignettes « Pas d'illustration »
+// des tuiles sont refaites (image anglaise ou réimpression trouvée), avec leur pastille EN / ≈.
+export function refreshImages(root = document) {
+  for (const ph of root.querySelectorAll('.tile[data-card] .tile-img > .card-ph')) {
+    const tile = ph.closest('.tile');
+    const id = tile.dataset.card;
+    const card = { id, localId: id.slice(setIdOf(id).length + 1), image: '' };
+    const img = String(imgHTML(card, { q: 'low' }));
+    if (!img.startsWith('<img')) continue;
+    ph.outerHTML = img;
+    if (!tile.querySelector('.pill-en')) tile.querySelector('.tile-img')?.insertAdjacentHTML('beforeend', String(enBadge(card)));
   }
 }

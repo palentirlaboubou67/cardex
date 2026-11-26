@@ -189,9 +189,9 @@ function scaleQuad(q, s) {
 }
 export const SCALES = [1, 1.03, 1.06, 0.97];
 
-// Compare la photo (RGBA + quad) aux candidats (lignes de la base). Retourne [{ i, score }] trié, ou null
-// si aucune image de candidat n'a pu être chargée. urlOf(i) : adresse de l'image (par défaut high.webp TCGdex).
-// Score d'un candidat = meilleure corrélation sur quelques échelles du quad.
+// Compare la photo (RGBA + quad) aux candidats (lignes de la base). Retourne [{ i, score }] pour chaque ligne, trié
+// (score null = image du candidat indisponible, en dernier), ou null si aucune image n'a pu être chargée.
+// urlOf(i) : adresse de l'image (par défaut high.webp TCGdex). Score = meilleure corrélation sur quelques échelles.
 export async function compareRegions(db, frame, quad, rows, { signal, timeout = 6000, urlOf = null, scales = SCALES } = {}) {
   const { data, width: W, height: H } = frame;
   const bands = new Map();
@@ -201,23 +201,27 @@ export async function compareRegions(db, frame, quad, rows, { signal, timeout = 
   };
   const jobs = rows.map(async i => {
     const base = db.imageBase(i), set = db.setOf(i);
-    if (!base || !set) return null;
+    if (!base || !set) return { i, score: null };
     const num = set.num || 'br';
     const bs = bandsOf(num);
-    if (!bs.length) return null;
+    if (!bs.length) return { i, score: null };
+    let timer = 0;
     try {
       const win = await Promise.race([
         loadWindow(urlOf ? urlOf(i) : base + '/high.webp', num, signal),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('délai')), timeout)),
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('délai')), timeout); }),
       ]);
       let score = -1;
       for (const b of bs) score = Math.max(score, nccMax(b, win));
       return { i, score };
     } catch {
-      return null;
+      return { i, score: null };
+    } finally {
+      clearTimeout(timer);
     }
   });
-  const res = (await Promise.all(jobs)).filter(Boolean);
-  if (!res.length) return null;
-  return res.sort((a, b) => b.score - a.score);
+  const res = await Promise.all(jobs);
+  if (signal?.aborted) throw new DOMException('Annulé', 'AbortError');
+  if (!res.some(x => x.score != null)) return null;
+  return res.sort((a, b) => (b.score ?? -9) - (a.score ?? -9));
 }

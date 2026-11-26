@@ -7,14 +7,22 @@ ressemblent, la table des codes de série imprimés (SV/ME) et les infos de num�
 
 Image utilisée : FR low.webp → FR high.webp → FR low.png → EN low.webp → EN high.webp → EN low.png.
 L'ordre des lignes est stable : les cartes déjà présentes gardent leur rang, les nouvelles s'ajoutent à la fin
-(diffs git réduits). Un descripteur existant est réutilisé tant que sa source n'a pas changé.
+(diffs git réduits). Incrémental même sans cache local (CI) : une carte déjà dans la base garde son descripteur sans
+télécharger son image tant que la langue de sa source ne change pas (seules les nouvelles cartes sont téléchargées) ;
+une erreur réseau ne retire jamais une ligne existante. --recheck N revérifie les images de N lignes par passage
+(requête conditionnelle If-None-Match : l'ETag de assets.tcgdex.net est le MD5 du fichier, gardé dans
+.cache/sc/tcgdex/manifest.json) et recalcule le descripteur d'une image modifiée.
+« twins » : cartes sans image de même illustration qu'une carte de la base (data/cardimg.json from/alt de CA, et
+homonymes de la même ère pour les kits du dresseur, McDonald's et la Collection Classique, écartés quand leurs
+illustrateurs TCGdex sont connus et différents) ; la boucle ne les accepte jamais sur l'image seule.
 
 Usage :
   python -P tools/build_scan.py                 # incrémental (réseau pour la liste des séries, TTL 12 h)
-  python -P tools/build_scan.py --full          # recalcule tout ce qui est en cache
+  python -P tools/build_scan.py --recheck 600   # + revérifie 600 images (les plus anciennement vérifiées)
+  python -P tools/build_scan.py --full          # recalcule tout ce qui est en cache (télécharge le reste)
   python -P tools/build_scan.py --seed DIR ...  # dossiers de téléchargements existants (même structure que le cache)
   python -P tools/build_scan.py --offline       # aucune requête réseau
-Dépendances : numpy, Pillow.
+Dépendances : numpy, Pillow. CI hebdomadaire : garder .cache/sc/tcgdex (actions/cache) pour --recheck.
 """
 import argparse
 import collections
@@ -183,6 +191,10 @@ def describe_files(paths, batch=128, log=None):
 # ----------------------------------------------------------------------------------------------------------
 # Réseau (TCGdex ≤ 4 requêtes/s, reprises avec attente sur 429/5xx/délai dépassé)
 
+class Transient(Exception):
+    """Échec réseau passager (après les reprises) : à distinguer d'une image absente (404)."""
+
+
 class Fetcher:
     def __init__(self, offline=False, rate=4.0):
         self.offline = offline
@@ -191,11 +203,19 @@ class Fetcher:
         self.next = 0.0
         self.count = 0
 
-    def get(self, url, timeout=30):
-        """Contenu (bytes), None si 404. Lève une exception après plusieurs échecs."""
+    def get(self, url, timeout=30, etag=None, body=None):
+        """Contenu (bytes), None si 404/410, b"" si 304 (etag inchangé). Lève Transient après plusieurs échecs.
+        body : objet envoyé en POST JSON (GraphQL)."""
         if self.offline:
             raise RuntimeError("hors ligne : " + url)
         delay = 1.0
+        headers = {"User-Agent": UA}
+        if etag:
+            headers["If-None-Match"] = f'"{etag}"'
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf8")
+            headers["Content-Type"] = "application/json"
         for attempt in range(6):
             with self.lock:
                 now = time.monotonic()
@@ -205,20 +225,22 @@ class Fetcher:
                 time.sleep(wait)
             try:
                 self.count += 1
-                req = urllib.request.Request(url, headers={"User-Agent": UA})
+                req = urllib.request.Request(url, data=data, headers=headers)
                 with urllib.request.urlopen(req, timeout=timeout) as r:
                     return r.read()
             except urllib.error.HTTPError as e:
-                if e.code == 404:
+                if e.code == 304:
+                    return b""
+                if e.code in (404, 410):
                     return None
                 if e.code not in (429, 500, 502, 503, 504) or attempt == 5:
-                    raise
-            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+                    raise Transient(f"HTTP {e.code}") from e
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
                 if attempt == 5:
-                    raise
+                    raise Transient(str(e)) from e
             time.sleep(delay)
             delay *= 2
-        return None
+        raise Transient("reprises épuisées")
 
 
 def read_json(path):
@@ -311,9 +333,9 @@ class Source:
             return None
         try:
             b = self.f.get(url, timeout=60)
-        except Exception as e:  # noqa: BLE001
+        except Transient as e:
             print(f"  ! image {url} : {e}")
-            return None
+            raise
         ok = b is not None and (b[:4] == b"RIFF" or b[:8] == b"\x89PNG\r\n\x1a\n")
         if not ok:
             with self.miss_lock:
@@ -471,6 +493,153 @@ def groups_from(dup, n):
 
 
 # ----------------------------------------------------------------------------------------------------------
+# Jumelles sans image et état des images (manifeste)
+
+def image_base(card, en_card, lang):
+    """Adresse TCGdex (sans suffixe) de l'image d'une carte dans une langue, ou None."""
+    return card.get("image") if lang == "fr" else (en_card or {}).get("image")
+
+
+def md5_file(path):
+    try:
+        with open(path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+class Manifest:
+    """{id: [md5 de l'image décrite (= ETag TCGdex), date de vérification]} dans le cache (non versionné)."""
+
+    def __init__(self, path):
+        self.path = path
+        self.d = read_json(path) if os.path.exists(path) else {}
+        self.lock = threading.Lock()
+
+    def seen(self, cid, path):
+        with self.lock:
+            self.d[cid] = [md5_file(path), time.strftime("%Y-%m-%d")]
+
+    def touch(self, cid, md5):
+        with self.lock:
+            self.d[cid] = [md5, time.strftime("%Y-%m-%d")]
+
+    def md5(self, cid):
+        return (self.d.get(cid) or [None])[0]
+
+    def date(self, cid):
+        return (self.d.get(cid) or [None, "0000"])[1]
+
+    def save(self):
+        write_bytes_atomic(self.path, dumps(self.d).encode("utf8"))
+
+
+TWIN_SETS = ("tk-", "cel25cc")         # kits du dresseur, Collection Classique ; McDonald's : id commençant par l'année
+GQL = API + "/graphql"
+_ART = lambda s: "".join(ch for ch in str(s or "").lower() if ch.isalnum())   # « Ken  Sugimori. » = « ken sugimori »
+
+
+def _same_artist(a, b):
+    """Même illustrateur, fautes de frappe de TCGdex tolérées (« Rya Ueda » / « Ryo Ueda ») : écarter un homonyme
+    seulement quand les noms diffèrent nettement (distance d'édition > 1 sur 8 lettres, ni l'un dans l'autre)."""
+    if a == b or a in b or b in a:
+        return True
+    if abs(len(a) - len(b)) > max(1, min(len(a), len(b)) // 8):
+        return False
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] <= max(1, min(len(a), len(b)) // 8)
+
+
+def illustrators(fetcher, sids, log):
+    """{id de carte: illustrateur} des séries données : une requête GraphQL @locale(lang:"fr") par série, gardée dans
+    .cache/sc/tcgdex/illus/<série>.json (l'illustrateur d'une carte ne change pas). Série indisponible (hors ligne,
+    erreur) : illustrateurs inconnus, les homonymes restent jumeaux (choix proposé, jamais une mauvaise série)."""
+    out, fetched, failed = {}, 0, 0
+    for sid in sorted(sids):
+        p = os.path.join(CACHE, "illus", f"{sid}.json")
+        d = read_json(p) if os.path.exists(p) else None
+        if d is None and not fetcher.offline:
+            q = '{ cards(filters:{id:%s}) @locale(lang:"fr") { id illustrator } }' % json.dumps(sid + "-")
+            try:
+                b = fetcher.get(GQL, body={"query": q})
+                r = json.loads(b.decode("utf8")) if b else None
+                cards = ((r or {}).get("data") or {}).get("cards") if isinstance(r, dict) else None
+                if isinstance(cards, list):
+                    d = {c["id"]: c.get("illustrator") or "" for c in cards
+                         if isinstance(c, dict) and isinstance(c.get("id"), str) and set_of(c["id"]) == sid}
+                    write_bytes_atomic(p, dumps(d).encode("utf8"))
+                    fetched += 1
+                else:
+                    failed += 1
+            except (Transient, ValueError):
+                failed += 1
+        for k, v in (d or {}).items():
+            if v:
+                out[k] = v
+    log(f"illustrateurs : {len(out)} cartes de {len(sids)} séries ({fetched} requêtes, {failed} échecs)")
+    return out
+
+
+def twins_table(sets, ids, noimg, set_info, log, fetcher=None):
+    """{carte de la base: [cartes sans image de même illustration]} : data/cardimg.json (from / alt, CA), puis
+    homonymes (même nom, même ère de mise en page, 1 à 3 cartes) pour les kits, McDonald's et la Collection Classique ;
+    un homonyme dont l'illustrateur est connu et différent n'est pas une jumelle (fetcher : lecture des illustrateurs)."""
+    idset, tw = set(ids), collections.defaultdict(set)
+    noset = set(noimg)
+    p = os.path.join(ROOT, "data", "cardimg.json")
+    ci = read_json(p) if os.path.exists(p) else {}
+    for k, v in (ci.get("from") or {}).items():
+        if k in noset and v in idset:
+            tw[v].add(k)
+    for k, v in (ci.get("alt") or {}).items():
+        if k in noset and isinstance(v, str) and v[:3] in ("fr:", "en:"):
+            parts = v[3:].split("/")
+            if len(parts) >= 3 and f"{parts[1]}-{parts[2]}" in idset:
+                tw[f"{parts[1]}-{parts[2]}"].add(k)
+    covered = {x for v in tw.values() for x in v}
+    name = {c["id"]: c.get("name") for d in sets.values() for c in d.get("cards") or []}
+
+    def era(cid):
+        return set_info.get(set_of(cid), {}).get("era")
+
+    by_era, by_name = collections.defaultdict(list), collections.defaultdict(list)
+    for cid in ids:
+        by_era[(name.get(cid), era(cid))].append(cid)
+        by_name[name.get(cid)].append(cid)
+    cands = {}
+    for n in noimg:
+        sid = set_of(n)
+        if n in covered or not name.get(n) or not (sid.startswith(TWIN_SETS) or sid[:4].isdigit()):
+            continue
+        m = by_era.get((name[n], era(n)), [])
+        if not m and sid == "cel25cc":       # reproduction d'une carte d'une autre ère
+            m = by_name.get(name[n], [])
+        if m:
+            cands[n] = m
+    art = illustrators(fetcher, {set_of(x) for n, m in cands.items() for x in [n, *m]}, log) if fetcher else {}
+    homonyms = dropped = 0
+    for n, m in cands.items():
+        a = _ART(art.get(n))
+        if a:                                # illustrateur connu : les homonymes dessinés par un autre sont écartés
+            keep = [cid for cid in m if not _ART(art.get(cid)) or _same_artist(_ART(art.get(cid)), a)]
+            dropped += len(m) - len(keep)
+            m = keep
+        if 1 <= len(m) <= 3:
+            homonyms += 1
+            for cid in m:
+                tw[cid].add(n)
+    out = {k: sorted(v) for k, v in sorted(tw.items())}
+    log(f"jumelles sans image : {len(covered)} d'après data/cardimg.json, {homonyms} homonymes "
+        f"({dropped} homonymes d'un autre illustrateur écartés) ; {len(out)} cartes de la base concernées")
+    return out
+
+
+# ----------------------------------------------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -478,6 +647,7 @@ def main():
     ap.add_argument("--offline", action="store_true")
     ap.add_argument("--full", action="store_true", help="recalcule tous les descripteurs dont l'image est en cache")
     ap.add_argument("--ttl", type=float, default=12, help="durée de validité du cache des séries (heures)")
+    ap.add_argument("--recheck", type=int, default=0, help="revérifie les images de N lignes (requêtes conditionnelles)")
     ap.add_argument("--out", default=OUT)
     args = ap.parse_args()
     t0 = time.time()
@@ -503,31 +673,56 @@ def main():
             if same_algo:
                 old_rows[cid] = (raw[i], old_cards["src"][i] + "/" + vsrc.get(cid, "low.webp"))
 
-    # Source d'image de chaque carte
+    # Source d'image de chaque carte. Carte déjà dans la base (même algorithme) : son descripteur est gardé sans
+    # télécharger l'image, sauf si une image FR est apparue pour une carte décrite depuis l'image EN (FR essayée,
+    # l'ancienne gardée en cas d'échec). Erreur réseau sur une nouvelle carte : elle attend le passage suivant.
     log("images…")
-    jobs = []
     order = []
     for d in ordered_sets(sets):
         for c in d.get("cards") or []:
             order.append((d, c))
 
+    def fetch_first(cands, langs):
+        """Premier fichier image disponible (lang, var, path) ; Transient si une erreur réseau interrompt la recherche."""
+        for lang, var, url, rel in cands:
+            if lang not in langs:
+                continue
+            path = src.image(rel, url)
+            if path:
+                return lang, var, path
+        return None
+
     def pick(dc):
         d, c = dc
-        enc = en.get(d["id"], {}).get(c["id"])
-        for lang, var, url, rel in image_candidates(c, enc, d["id"]):
-            p = src.image(rel, url)
-            if p:
-                return c["id"], lang, var, p
-        return c["id"], None, None, None
+        cid = c["id"]
+        cands = image_candidates(c, en.get(d["id"], {}).get(cid), d["id"])
+        old = None if args.full else old_rows.get(cid)
+        if old:
+            olang = "fr" if old[1][0] == "f" else "en"
+            ovar = old[1].split("/", 1)[1]
+            if not cands or cands[0][0] == olang or olang == "fr":
+                return cid, olang, ovar, None, "reuse"
+            try:
+                got = fetch_first(cands, ("fr",))
+            except Transient:
+                got = None
+            return (cid, *got, "new") if got else (cid, olang, ovar, None, "reuse")
+        try:
+            got = fetch_first(cands, ("fr", "en"))
+        except Transient:
+            return cid, None, None, None, "error"
+        return (cid, *got, "new") if got else (cid, None, None, None, "none")
 
     with concurrent.futures.ThreadPoolExecutor(4) as ex:
         picked = list(ex.map(pick, order))
     src.save_miss()
-    log(f"images prêtes ({src.downloaded} téléchargées, {fetcher.count} requêtes)")
+    st = collections.Counter(x[4] for x in picked)
+    log(f"images prêtes ({src.downloaded} téléchargées, {fetcher.count} requêtes) ; descripteurs gardés {st['reuse']}, "
+        f"nouvelles images {st['new']}, sans image {st['none']}, erreurs réseau {st['error']} (cartes remises à plus tard)")
 
     info = {}
-    for (d, c), (cid, lang, var, path) in zip(order, picked):
-        info[cid] = (d, c, lang, var, path)
+    for (d, c), (cid, lang, var, path, how) in zip(order, picked):
+        info[cid] = (d, c, lang, var, path, how)
 
     # Ordre des lignes : anciennes (toujours présentes) puis nouvelles
     with_img = [cid for cid, v in info.items() if v[2]]
@@ -539,20 +734,60 @@ def main():
 
     desc = np.zeros((len(ids), 64), np.uint8)
     todo = []
-    reused = 0
     for cid in ids:
-        d, c, lang, var, path = info[cid]
-        key = ("f" if lang == "fr" else "e") + "/" + var
-        if not args.full and cid in old_rows and old_rows[cid][1] == key:
+        if info[cid][5] == "reuse":
             desc[pos[cid]] = old_rows[cid][0]
-            reused += 1
         else:
             todo.append(cid)
-    log(f"{len(ids)} cartes avec image ; {reused} descripteurs réutilisés, {len(todo)} à calculer")
+    log(f"{len(ids)} cartes avec image ; {len(ids) - len(todo)} descripteurs réutilisés, {len(todo)} à calculer")
+    manifest = Manifest(os.path.join(CACHE, "manifest.json"))
     if todo:
         res = describe_files([info[cid][4] for cid in todo], log=log)
         for cid, r in zip(todo, res):
             desc[pos[cid]] = r
+            manifest.seen(cid, info[cid][4])
+
+    # Revérification d'images déjà décrites (les plus anciennement vérifiées d'abord) : requête conditionnelle
+    if args.recheck and not args.offline:
+        pool = [cid for cid in ids if info[cid][5] == "reuse"]
+        pool.sort(key=manifest.date)
+        changed = []
+
+        def recheck(cid):
+            d, c, lang, var, _, _ = info[cid]
+            base = image_base(c, en.get(d["id"], {}).get(cid), lang)
+            if not base:
+                return cid, None
+            sub = {"low.webp": "low", "high.webp": "high", "low.png": "lowpng"}[var]
+            ext = "png" if var == "low.png" else "webp"
+            rel = f"img_{lang}_{sub}/{d['id']}/{c['localId'].replace('/', '_')}.{ext}"
+            etag = manifest.md5(cid) or md5_file(os.path.join(CACHE, rel))
+            try:
+                b = fetcher.get(f"{base}/{var}", timeout=60, etag=etag)
+            except Transient:
+                return cid, None
+            if b == b"" or b is None:              # inchangée (304) ou disparue (ligne gardée)
+                manifest.touch(cid, etag)
+                return cid, None
+            path = os.path.join(CACHE, rel)
+            write_bytes_atomic(path, b)
+            if hashlib.md5(b).hexdigest() == etag:
+                manifest.touch(cid, etag)
+                return cid, None
+            return cid, path
+
+        with concurrent.futures.ThreadPoolExecutor(4) as ex:
+            got = list(ex.map(recheck, pool[:args.recheck]))
+        upd = [(cid, path) for cid, path in got if path]
+        if upd:
+            res = describe_files([path for _, path in upd])
+            for (cid, path), r in zip(upd, res):
+                if bytes(r) != bytes(desc[pos[cid]]):
+                    changed.append(cid)
+                desc[pos[cid]] = r
+                manifest.seen(cid, path)
+        log(f"revérification : {len(got)} images, {len(upd)} téléchargées de nouveau, {len(changed)} descripteurs changés")
+    manifest.save()
     log("descripteurs prêts")
 
     # Réimpressions (même illustration) et sosies
@@ -587,7 +822,7 @@ def main():
 
     # Cartes rangées dans une autre série que celle de leur id (pl4-AR1… dans pl3) : même mise en page que la série
     # qui les contient, sans total imprimé connu
-    for cid, (d, c, lang, var, path) in info.items():
+    for cid, (d, c, lang, var, path, how) in info.items():
         sid = set_of(cid)
         if sid not in set_info and d["id"] in set_info:
             set_info[sid] = dict(set_info[d["id"]], t=0, host=d["id"])
@@ -595,16 +830,21 @@ def main():
 
     # Exceptions d'URL d'image (chemin TCGdex différent de <lang>/<serie>/<série de l'id>/<localId>)
     img_exc, var_exc = {}, {}
+    old_img = (old_cards or {}).get("img", {})
     for cid in ids:
-        d, c, lang, var, path = info[cid]
-        base = c.get("image") if lang == "fr" else en[d["id"]][cid].get("image")
+        d, c, lang, var, path, how = info[cid]
+        base = image_base(c, en.get(d["id"], {}).get(cid), lang)
         sid = set_of(cid)                   # la série déduite de l'id (pl4-AR1 est rangée dans pl3)
         derived = f"{ASSETS}/{lang}/{set_info[sid]['s']}/{sid}/{local_of(cid)}" if sid in set_info else None
-        if base != derived:
+        if base is None:                    # image retirée de la liste TCGdex : adresse de la base précédente
+            if cid in old_img:
+                img_exc[cid] = old_img[cid]
+        elif base != derived:
             img_exc[cid] = base[len(ASSETS) + 1:]
         if var != "low.webp":
             var_exc[cid] = var
-    noimg = [cid for cid, v in info.items() if not v[2]]
+    noimg = [cid for cid, v in info.items() if not v[2]]        # (erreur réseau comprise : lue par l'OCR en attendant)
+    twins = twins_table(sets, ids, noimg, set_info, log, fetcher)
 
     cards = {
         "v": 1,
@@ -618,6 +858,7 @@ def main():
         "codes": dict(sorted(codes.items())),
         "sets": set_info,
         "img": dict(sorted(img_exc.items())),
+        "twins": twins,
     }
     meta = {"v": 1, "algo": ALGO, "rows": len(ids), "var": dict(sorted(var_exc.items())),
             "sha256": hashlib.sha256(desc.tobytes()).hexdigest()}

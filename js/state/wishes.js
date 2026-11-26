@@ -66,9 +66,30 @@
     const t = setTimeout(() => ctl.abort(), timeout);
     return fetch(url, { signal: ctl.signal, cache: cache || 'default' }).then(r => {
       if (r.status === 404) return null;            // absent : ce n'est pas une panne
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
       return r.json();
     }).finally(() => clearTimeout(t));
+  }
+
+  // TCGdex : au plus 4 requêtes par seconde (une tous les 250 ms pour tout ce contexte), et sur 429 / 503,
+  // nouvel essai après 1,5 s puis 4 s (SPEC §1.7)
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let nextSlot = 0;
+  async function slot() {
+    const now = Date.now();
+    const at = Math.max(now, nextSlot);
+    nextSlot = at + 250;
+    if (at > now) await sleep(at - now);
+  }
+  async function tcgdex(url, opts) {
+    for (let attempt = 0; ; attempt++) {
+      await slot();
+      try { return await getJSON(url, opts); }
+      catch (e) {
+        if ((e.status === 429 || e.status === 503) && attempt < 2) { await sleep(attempt ? 4000 : 1500); continue; }
+        throw e;
+      }
+    }
   }
 
   // fichiers de la vérification en cours (un seul téléchargement par série)
@@ -96,7 +117,8 @@
     return ctx.files.get(setId);
   }
   function setFile(ctx, setId) {
-    if (!ctx.sets.has(setId)) ctx.sets.set(setId, dataFile(ctx, `data/sets/${setId}.json`).catch(() => null));
+    // null : pas de fichier pour cette série ; undefined : injoignable (hors ligne)
+    if (!ctx.sets.has(setId)) ctx.sets.set(setId, dataFile(ctx, `data/sets/${setId}.json`).catch(() => undefined));
     return ctx.sets.get(setId);
   }
 
@@ -169,7 +191,7 @@
       }
     } catch (e) { /* injoignable : TCGdex ci-dessous */ }
     try {
-      const full = await getJSON(API + encodeURIComponent(w.id), { timeout: 12000 });
+      const full = await tcgdex(API + encodeURIComponent(w.id), { timeout: 12000 });
       answered = true;
       if (full) {
         const p = prices(full, w.variant);
@@ -193,17 +215,23 @@
     return entered;
   }
 
-  // Anciennes envies (v1) : setId manquant ; « holo » voulait dire « Reverse / Holo » (champs -holo = reverse).
+  // Anciennes envies (v1) : setId manquant ; deux choix seulement dans l'ancienne appli :
+  // « normal » = champs de base de Cardmarket (pour une carte holo seulement, c'est la holo),
+  // « holo » = « Reverse / Holo » (champs -holo, donc la reverse quand la carte en a une).
+  // La finition est ramenée à une de celles de la carte (fichier de sa série), sinon son prix ne serait jamais trouvé.
   async function migrate(w, ctx) {
     if (w.v === 2) return w;
     const old = w.key;
     w.setId = w.setId || setIdOf(w.id);
     w.localId = w.localId || String(w.id).slice(w.setId.length + 1);
     if (!FINISHES.includes(w.variant)) w.variant = 'normal';
-    if (w.variant === 'holo') {
-      const f = await setFile(ctx, w.setId);
-      const c = f && Array.isArray(f.cards) ? f.cards.find(x => String(x.l) === w.localId || `${w.setId}-${x.l}` === w.id) : null;
-      if (c && Array.isArray(c.f) && c.f.includes('reverse')) w.variant = 'reverse';
+    const f = await setFile(ctx, w.setId);
+    if (f === undefined) return w;                             // série injoignable : migration au prochain passage
+    const c = f && Array.isArray(f.cards) ? f.cards.find(x => String(x.l) === w.localId || `${w.setId}-${x.l}` === w.id) : null;
+    const fins = c && Array.isArray(c.f) ? c.f.filter(x => FINISHES.includes(x)) : [];
+    if (fins.length) {
+      if (w.variant === 'holo' && fins.includes('reverse')) w.variant = 'reverse';
+      else if (!fins.includes(w.variant)) w.variant = w.variant === 'normal' && fins.includes('holo') ? 'holo' : fins[0];
     }
     w.key = keyOf(w.id, w.variant);
     w.v = 2;

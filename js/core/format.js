@@ -43,8 +43,11 @@ export function relDay(d, now = new Date()) {
 export const norm = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
   .replace(/œ/gi, 'oe').replace(/æ/gi, 'ae').replace(/[’‘`´]/g, "'").toLowerCase().replace(/\s+/g, ' ').trim();
 
-// numéro imprimé : « 025/165 » quand le numéro est numérique et le total connu, sinon le numéro seul (« SWSH001 », « TG05 »)
+// numéro tel qu'imprimé : TCGdex encode certains numéros dans ses ids (« %3F » pour « ? ») ; jamais d'exception
+export const localNo = localId => { const s = String(localId ?? ''); try { return decodeURIComponent(s); } catch { return s; } };
+
+// numéro imprimé : « 025/165 » quand le numéro est numérique et le total connu, sinon le numéro seul (« SWSH001 », « TG05 », « ? »)
 export const cardNo = (localId, total) => {
-  const l = String(localId ?? '');
+  const l = localNo(localId);
   return total && /^\d+$/.test(l) ? `${l}/${total}` : l;
 };

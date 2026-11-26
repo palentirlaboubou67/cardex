@@ -10,7 +10,7 @@ import * as catalog from '../data/catalog.js';
 import { pokedex, nameOf } from '../data/dex.js';
 import * as col from '../state/collection.js';
 
-let el = null, token = 0;
+let el = null;
 const no4 = n => `#${String(n).padStart(4, '0')}`;
 
 export default {
@@ -19,23 +19,23 @@ export default {
     el.innerHTML = '<p class="caption stub-count"></p><div class="grid" id="poke-grid"></div><p class="stub-note">Écran en construction</p>';
   },
   async show(r) {
-    const my = ++token;
+    const { signal } = r;
     const n = Number(r.m[1]);
-    setBar({ title: nameOf(n) || 'Pokémon', subtitle: no4(n), back: true });
+    setBar({ title: nameOf(n) || 'Pokémon', subtitle: no4(n), back: true, signal });
     const grid = el.querySelector('#poke-grid');
     grid.innerHTML = '';
     let cards;
     try {
       await pokedex().catch(() => null);
-      if (my !== token) return;
-      setBar({ title: nameOf(n) || `Pokémon ${no4(n)}`, subtitle: no4(n), back: true });
+      if (signal.aborted) return;
+      setBar({ title: nameOf(n) || `Pokémon ${no4(n)}`, subtitle: no4(n), back: true, signal });
       cards = await catalog.cardsOfDex(n);
     } catch (e) {
-      if (my !== token) return;
+      if (signal.aborted) return;
       setHTML(grid, html`<div class="errrow" data-content>${icon('wifi-off')}<span class="grow">${MESSAGES[e?.kind] || 'Cartes indisponibles'}</span></div>`);
       return;
     }
-    if (my !== token) return;
+    if (signal.aborted) return;
     const owned = cards.filter(c => col.qtyOf(c.id)).length;
     el.querySelector('.stub-count').textContent = `${plural(cards.length, 'carte', 'cartes')} · ${owned} possédée${owned > 1 ? 's' : ''}`;
     cards.sort((a, b) => (col.qtyOf(b.id) ? 1 : 0) - (col.qtyOf(a.id) ? 1 : 0));

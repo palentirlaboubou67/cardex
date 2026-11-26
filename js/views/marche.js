@@ -27,7 +27,7 @@ export default {
   async show(r) {
     sec = r.m[1];
     setBar({
-      title: 'Marché',
+      title: 'Marché', signal: r.signal,
       actions: [{ icon: 'info', label: 'À propos de cet écran', onClick: () => infoSheet('Marché', 'Cotes Cardmarket (tendance, toutes langues), mises à jour chaque nuit. Cardex n’est pas affilié à Cardmarket.') }],
     });
     tabs();

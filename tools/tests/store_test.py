@@ -34,6 +34,8 @@ EVIL = {
         'exu-!': {'id': 'exu-!', 'qty': {'holo': 1}, 'name': 'Zarbi'},
         'exu-%3F': {'id': 'exu-%3F', 'qty': {'holo': 1}, 'name': 'Zarbi'},
         'bad-id': {'id': 'sv03.5-999"', 'qty': {'normal': 1}},
+        'sv03.5-004': {'id': 'sv03.5-004', 'qty': {'normal': 1}, 'image': 'https://tracker.example/p?u=123'},
+        'sv03.5-007': {'id': 'sv03.5-007', 'qty': {'normal': 1}, 'image': 'https://assets.tcgdex.net/fr/sv/sv03.5/007'},
     },
     'sealed': {'__proto__': {'qty': 1}, '719691': {'id': 719691, 'qty': 2, 'cost': 49.9, 'at': '2026-01-02'},
                'x<y': {'qty': 1}, '5402': {'qty': 0}},
@@ -45,7 +47,7 @@ def page_with(ctx, srv, ls=None, before=''):
     """Nouvelle page de test ; ls = contenu de la clé de la collection (None : stockage vidé)."""
     pg = ctx.new_page()
     errs = []
-    console_watch(pg, errs, expected_404s())
+    console_watch(pg, errs, expected_404s() + ['data/market/prices/'])
     pg.goto(srv.url + '__f2.html')
     pg.evaluate('([k, v]) => { localStorage.clear(); if (v !== null) localStorage.setItem(k, v); }', [KEY, ls])
     if before:
@@ -56,7 +58,8 @@ def page_with(ctx, srv, ls=None, before=''):
 
 
 def main():
-    srv = serve(ROOT, PORT, overlays={'data/': FIX}, pages={'__f2.html': HARNESS})
+    # cotes : celles des fixtures seulement (les vrais fichiers de MK changeraient les valeurs attendues)
+    srv = serve(ROOT, PORT, overlays={'data/': FIX}, pages={'__f2.html': HARNESS}, exclusive=('data/market/prices/',))
     srv.fail['data/manifest.json'] = 404
     R = Runner('store_test')
     with sync_playwright() as p:
@@ -97,9 +100,41 @@ def main():
             pg.close()
             return f"24 cartes, {r['bytesV1']} → {r['bytesV2']} octets, total {r['total']}, {r['sets']} séries"
 
+        def t_finish_repair():
+            # v1 : « normale » enregistrée sur une carte qui n'existe qu'en holo -> holo (intégration vague 1)
+            pg = page_with(ctx, srv, SAMPLE)
+            r = pg.evaluate('''async () => {
+              const q = id => ({ normal: C.qtyOf(id, 'normal'), reverse: C.qtyOf(id, 'reverse'), holo: C.qtyOf(id, 'holo') });
+              const need0 = C.needsFinishCheck(), b006 = q('sv03.5-006');
+              const evs = []; C.on(e => evs.push(...e.map(x => x.type)));
+              const n = C.repairFinishes([{ id: 'sv03.5-006', finishes: ['holo'] }, { id: 'sv03.5-025', finishes: ['normal', 'reverse', 'cosmos'] },
+                                          { id: 'sv03.5-150', finishes: ['reverse', 'holo'] }, { id: 'sv03.5-001', finishes: [] }]);
+              await Promise.resolve(); await new Promise(r => setTimeout(r));
+              const again = C.repairFinishes([{ id: 'sv03.5-006', finishes: ['holo'] }]);
+              C.finishCheckDone();
+              const saved = JSON.parse(localStorage.getItem('cardex.collection.v1'));
+              const v2 = C.migrate(saved);
+              return { need0, b006, n, again, a006: q('sv03.5-006'), a025: q('sv03.5-025'), a150: q('sv03.5-150'), a001: q('sv03.5-001'),
+                       evs, need1: C.needsFinishCheck(), savedFix: 'fixFin' in saved, v2Fix: 'fixFin' in v2 };
+            }''')
+            check(r['need0'], 'données v1 : vérification des finitions demandée')
+            eq(r['b006'], {'normal': 1, 'reverse': 1, 'holo': 0}, '006 avant')
+            eq(r['n'], 1, 'une seule carte corrigée')
+            eq(r['again'], 0, 'deuxième passage : rien')
+            eq(r['a006'], {'normal': 0, 'reverse': 1, 'holo': 1}, '006 : normale -> holo, reverse gardée')
+            eq(r['a025'], {'normal': 2, 'reverse': 0, 'holo': 0}, '025 (a une normale) intact')
+            eq(r['a150'], {'normal': 0, 'reverse': 0, 'holo': 1}, '150 intact')
+            eq(r['a001'], {'normal': 3, 'reverse': 0, 'holo': 0}, 'finitions inconnues : rien deviné')
+            eq(r['evs'], ['reload'], 'un événement reload')
+            check(not r['need1'] and not r['savedFix'] and not r['v2Fix'], 'drapeau retiré et enregistré', r)
+            check(not pg.errs, 'erreurs', pg.errs)
+            pg.close()
+            return "normale -> holo sur les cartes holo seulement, une fois"
+
         def t_import_validation():
             pg = page_with(ctx, srv, None)
             r = pg.evaluate('''async (evil) => {
+              const IMGM = await import('./js/data/images.js').catch(() => null); if (IMGM) await IMGM.ready;
               const res = C.importText(JSON.stringify(evil));
               await new Promise(r => setTimeout(r));
               const all = C.all();
@@ -113,6 +148,8 @@ def main():
               return { res, ids: all.map(r => r.id).sort(), pikaQty: pika && pika.qty, pikaImg: pika && pika.image,
                        pikaKeys: pika && Object.keys(pika).sort(), injected: box.querySelectorAll('img[onerror], [onmouseover]').length,
                        imgs: box.querySelectorAll('img').length, pwned: window.pwned || 0,
+                       tracker: C.get('sv03.5-004').image, tcgdex: C.get('sv03.5-007').image,
+                       trackerHtml: IMGM ? String(IMGM.imgHTML(C.get('sv03.5-004'))) : '',
                        longName: C.get('sv03.5-001') && C.get('sv03.5-001').name, rarity: C.get('sv03.5-001') && C.get('sv03.5-001').rarity,
                        legacy: C.legacySealed(), sealedV2: C.sealedAll(), proto: Object.getPrototypeOf(C._debug.data().sealed) === Object.prototype,
                        polluted: ({}).qty };
@@ -121,7 +158,10 @@ def main():
             r2 = pg.evaluate('''async (evil) => { C.clearAll(); await new Promise(r => setTimeout(r));
               const res = C.importText(JSON.stringify({ ...evil, version: undefined, v: 2 }));
               return { res, sealed: C.sealedAll(), watch: C.watchList(), legacy: C.legacySealed() }; }''', EVIL)
-            eq(r['ids'], ['exu-!', 'exu-%3F', 'sv03.5-001', 'sv03.5-025'], 'identifiants acceptés')
+            eq(r['ids'], ['exu-!', 'exu-%3F', 'sv03.5-001', 'sv03.5-004', 'sv03.5-007', 'sv03.5-025'], 'identifiants acceptés')
+            eq(r['tracker'], '', 'URL d’image d’un autre hôte refusée')
+            eq(r['tcgdex'], 'https://assets.tcgdex.net/fr/sv/sv03.5/007', 'base TCGdex FR gardée')
+            check('tracker.example' not in r['trackerHtml'], 'aucune requête vers l’hôte de la sauvegarde', r['trackerHtml'])
             eq(r['pikaQty'], {'normal': 5, 'reverse': 2}, 'finitions valides seulement (2 accepté, 2.5/-1/1000/NaN refusés)')
             eq(r['pikaImg'], '', 'URL javascript: refusée')
             check('prices' not in r['pikaKeys'] and 'evil' not in r['pikaKeys'], 'champs inconnus retirés', r['pikaKeys'])
@@ -136,7 +176,8 @@ def main():
             eq(r2['watch'], [719691, 'abc-1'], 'v2 : suivis valides, sans doublon')
             eq(r2['legacy'], {'sealed': [], 'watch': []}, 'v2 : rien de côté')
             check(r['proto'] and r['polluted'] is None, 'pas de pollution de prototype')
-            eq(r['res']['cards'], 4, 'nouvelles cartes')
+            eq(r['res']['cards'], 6, 'nouvelles cartes')
+            eq(r['res']['saved'], True, 'import enregistré')
             check(r['res']['skipped'] >= 4, 'enregistrements rejetés comptés', r['res'])
             check(not pg.errs, 'erreurs', pg.errs)
             # fichier illisible ou étranger
@@ -176,8 +217,8 @@ def main():
                 if (window.full && k.startsWith('cardex.collection')) throw new DOMException('plein', 'QuotaExceededError');
                 return orig.call(this, k, v);
               };
-              localStorage.setItem('cardex.sets.cache', 'x'.repeat(1000));
-              localStorage.setItem('cardex.fin.sv02', '{}');
+              localStorage.setItem('cardex.cache.livesets', JSON.stringify({ t: Date.now(), d: 'x'.repeat(1000) }));
+              localStorage.setItem('cardex.live.x', '{}');
               localStorage.setItem('cardex.prefs.v1', '{"theme":"dark"}');
             }''')
             r = pg.evaluate('''async () => {
@@ -187,14 +228,18 @@ def main():
               await new Promise(r => setTimeout(r));
               const st = C.storageState();
               const mem = C.qtyOf('sv03.5-025', 'normal');
-              const caches = [localStorage.getItem('cardex.sets.cache'), localStorage.getItem('cardex.fin.sv02')];
+              const caches = [localStorage.getItem('cardex.cache.livesets'), localStorage.getItem('cardex.live.x')];
+              C.add({ id: 'sv03.5-025' }, 'normal');            // 2e échec : même erreur, signalée comme répétition
+              await new Promise(r => setTimeout(r));
+              const imp = C.importText(JSON.stringify({ v: 2, cards: { 'sv03.5-099': { id: 'sv03.5-099', qty: { normal: 1 } } } }));
+              const n1 = window.storageEvents.length;
               const prefs = localStorage.getItem('cardex.prefs.v1');
               const stored = JSON.parse(localStorage.getItem('cardex.collection.v1')).cards['sv03.5-025'].qty.normal;
               window.full = false;
               C.add({ id: 'sv03.5-025' }, 'normal');
               await new Promise(r => setTimeout(r));
               const after = JSON.parse(localStorage.getItem('cardex.collection.v1')).cards['sv03.5-025'].qty.normal;
-              return { threw, st, mem, caches, prefs, stored, after, st2: C.storageState(), events: window.storageEvents };
+              return { threw, st, mem, caches, prefs, stored, after, st2: C.storageState(), events: window.storageEvents, imp, n1 };
             }''')
             check(r['threw'] is None, 'setQty ne doit pas lever d’exception', r['threw'])
             eq(r['mem'], 3, 'état en mémoire à jour malgré le quota')
@@ -202,12 +247,50 @@ def main():
             eq(r['caches'], [None, None], 'caches évincés')
             eq(r['prefs'], '{"theme":"dark"}', 'préférences gardées')
             eq(r['stored'], 2, 'ancienne sauvegarde intacte')
-            eq(r['after'], 4, 'sauvegarde reprise quand il y a de la place')
+            eq(r['after'], 5, 'sauvegarde reprise quand il y a de la place (tout ce qui était en mémoire)')
+            eq(r['imp']['saved'], False, 'import : enregistrement manqué signalé (saved: false)')
             eq(r['st2']['error'], None, 'erreur effacée')
-            check(any(e.get('error') == 'quota' for e in r['events']), 'événement cardex:storage', r['events'])
+            ev = [e for e in r['events'] if e.get('error') == 'quota']
+            check(len(ev) == 3 and not ev[0]['repeat'] and ev[1]['repeat'] and ev[2]['repeat'], 'événements cardex:storage (le 1er, puis répétitions)', r['events'])
+            check(ev[0]['message'].startswith('Stockage plein') and 'Exporte' in ev[0]['message'] and '!' not in ev[0]['message'], 'message prêt à afficher', ev[0])
+            check(r['events'][-1].get('error') is None and r['events'][-1].get('recovered'), 'retour à la normale signalé', r['events'][-1])
+            check(r['st']['message'].startswith('Stockage plein'), 'storageState().message', r['st'])
             pg.close()
 
         def t_corrupt():
+            big = '{"v":2,"cards":{"sv03.5-025":{"id":"sv03.5-025","qty":{"normal":2}' + ' ' * 200000 + 'TRONQUE'
+            listen = '() => { window.sev = []; addEventListener("cardex:storage", e => window.sev.push(e.detail)); }'
+            pg = page_with(ctx, srv, big, before=listen)
+            visits = []
+            for i in range(4):
+                if i:
+                    pg.goto(srv.url + '__f2.html')
+                    pg.evaluate(listen)
+                    pg.evaluate(f'async () => {{ window.C = (await load("{COL}"))[0]; }}')
+                visits.append(pg.evaluate('''async () => { await new Promise(r => setTimeout(r, 30));
+                  let bytes = 0; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); bytes += k.length + localStorage.getItem(k).length; }
+                  return { backups: Object.keys(localStorage).filter(k => k.includes('.corrupt.')).length, bytes,
+                           main: localStorage.getItem('cardex.collection.v1'), st: C.storageState(), ev: window.sev }; }'''))
+            eq([v['backups'] for v in visits], [1, 1, 1, 1], 'une seule copie de secours, quel que soit le nombre de démarrages')
+            check(all(v['main'] is None for v in visits), 'collection illisible retirée tout de suite', visits[0]['main'])
+            check(max(v['bytes'] for v in visits) == min(v['bytes'] for v in visits) and visits[0]['bytes'] < 201000,
+                  'le stockage ne grossit pas', [v['bytes'] for v in visits])
+            check(visits[0]['ev'] and visits[0]['ev'][0]['error'] == 'corrupt' and 'copie' in visits[0]['ev'][0]['message'],
+                  'événement « corrupt » au démarrage (après l’évaluation des modules)', visits[0]['ev'])
+            eq([v['ev'] for v in visits[1:]], [[], [], []], 'plus rien à signaler aux démarrages suivants')
+            st0 = visits[0]['st']
+            check(len(st0['backups']) == 1 and st0['backups'][0]['size'] == len(big) and st0['corrupt'] == st0['backups'][0]['key'],
+                  'storageState() liste les copies', st0)
+            # même texte illisible réécrit (ex. ancienne version restaurée) : pas de deuxième copie
+            pg.evaluate('(v) => localStorage.setItem("cardex.collection.v1", v)', big)
+            pg.goto(srv.url + '__f2.html')
+            r0 = pg.evaluate(f'''async () => {{ window.C = (await load("{COL}"))[0];
+              const st = C.storageState(); const key = st.backups[0].key; const text = C.corruptText(key);
+              const del = C.deleteBackup(key), again = C.deleteBackup(key), evil = C.deleteBackup('cardex.prefs.v1');
+              return {{ n: st.backups.length, same: st.corrupt === key, len: text.length, del, again, evil,
+                        left: Object.keys(localStorage).filter(k => k.includes('.corrupt.')).length }}; }}''')
+            eq(r0, {'n': 1, 'same': True, 'len': len(big), 'del': True, 'again': False, 'evil': False, 'left': 0}, 'copie réutilisée, lue puis supprimée')
+            pg.close()
             pg = page_with(ctx, srv, '{"cards": {"sv03.5-025": tronqué')
             r = pg.evaluate('''async () => {
               const keys = Object.keys(localStorage).filter(k => k.startsWith('cardex.collection.v1.corrupt.'));
@@ -224,6 +307,7 @@ def main():
             pg.close()
             # pas de place pour la copie : lecture seule, rien n'est écrasé
             pg = page_with(ctx, srv, '{illisible', before='''() => {
+              window.ev = []; addEventListener('cardex:storage', e => window.ev.push(e.detail));
               const orig = Storage.prototype.setItem;
               Storage.prototype.setItem = function (k, v) {
                 if (k.includes('.corrupt.')) throw new DOMException('plein', 'QuotaExceededError');
@@ -231,14 +315,25 @@ def main():
               };
             }''')
             r = pg.evaluate('''async () => {
+              const ev = window.ev;
+              await new Promise(r => setTimeout(r, 10));        // signal du démarrage (écouteur posé avant le chargement)
               C.add({ id: 'sv03.5-001' }, 'normal');
               await new Promise(r => setTimeout(r));
-              return { st: C.storageState(), raw: localStorage.getItem('cardex.collection.v1'), text: C.corruptText() };
+              const out = { st: C.storageState(), raw: localStorage.getItem('cardex.collection.v1'), text: C.corruptText() };
+              // texte téléchargé par l'utilisateur, puis on repart de zéro : le toast peut partir
+              out.discard = C.discardCorrupt();
+              out.after = JSON.parse(localStorage.getItem('cardex.collection.v1'));
+              out.ev = ev.map(e => [e.error, !!e.repeat, !!e.recovered]);
+              return out;
             }''')
-            check(r['st']['readOnly'], 'lecture seule', r['st'])
+            check(r['st']['readOnly'] and r['st']['message'].startswith('Ta collection n’a pas pu être lue'), 'lecture seule', r['st'])
             eq(r['raw'], '{illisible', 'données d’origine intactes')
             eq(r['text'], '{illisible', 'texte disponible pour téléchargement')
+            eq(r['discard'], True, 'discardCorrupt() enregistre')
+            check(r['after']['v'] == 2 and r['after']['cards'].get('sv03.5-001'), 'la carte ajoutée en mémoire est gardée', r['after'])
+            eq(r['ev'], [['readonly', False, False], ['readonly', True, False], [None, False, True]], 'événements : démarrage, ajout refusé, retour à la normale')
             pg.close()
+            return f"copie de {len(big)} caractères faite une fois sur 4 démarrages, stockage stable à {visits[0]['bytes']} octets"
 
         def t_two_pages():
             a = page_with(ctx, srv, SAMPLE)
@@ -421,6 +516,37 @@ def main():
             eq(r['miss'], 42, 'clé absente')
             pg.close()
 
+        def t_legacy_keys():
+            pg = page_with(ctx, srv, SAMPLE, before='''() => {
+              for (const k of ['cardex.sets.cache', 'cardex.series.cache', 'cardex.fin.sv02', 'cardex.dexfin.25', 'cardex.cotes.v1'])
+                localStorage.setItem(k, '{"t":1,"m":{}}');
+              localStorage.setItem('cardex.cache.livesets', '{"t":1,"d":[]}');    // les nôtres : gardés
+              localStorage.setItem('cardex.history.v1', '[]');                    // données (courbe de valeur) : gardées
+              localStorage.setItem('cardex.blocs', '["sv","swsh",42]');
+              localStorage.removeItem('cardex.prefs.v1');
+            }''')
+            r = pg.evaluate('''async () => {
+              const t0 = performance.now();
+              while (localStorage.getItem('cardex.cotes.v1') !== null && performance.now() - t0 < 12000) await new Promise(r => setTimeout(r, 50));
+              const [P] = await load('./js/state/prefs.js');
+              return { keys: Object.keys(localStorage).sort(), ms: performance.now() - t0, blocs: P.get('openBlocs'),
+                       raw: JSON.parse(localStorage.getItem('cardex.prefs.v1')), n: C.all().length }; }''')
+            for k in ['cardex.sets.cache', 'cardex.series.cache', 'cardex.fin.sv02', 'cardex.dexfin.25', 'cardex.cotes.v1', 'cardex.blocs']:
+                check(k not in r['keys'], f'{k} retiré', r['keys'])
+            for k in ['cardex.cache.livesets', 'cardex.history.v1', 'cardex.collection.v1', 'cardex.prefs.v1']:
+                check(k in r['keys'], f'{k} gardé', r['keys'])
+            eq(r['blocs'], ['sv', 'swsh'], 'cardex.blocs → prefs.openBlocs')
+            eq(r['raw'], {'openBlocs': ['sv', 'swsh']}, 'préférence enregistrée')
+            eq(r['n'], 24, 'collection intacte')
+            # préférence déjà choisie dans la nouvelle appli : elle l'emporte
+            pg2 = ctx.new_page()
+            pg2.goto(srv.url + '__f2.html')
+            r2 = pg2.evaluate('''async () => { localStorage.setItem('cardex.prefs.v1', '{"openBlocs":["me"]}'); localStorage.setItem('cardex.blocs', '["sv"]');
+              const [P] = await load('./js/state/prefs.js?2'); return { b: P.get('openBlocs'), old: localStorage.getItem('cardex.blocs') }; }''')
+            eq(r2, {'b': ['me'], 'old': None}, 'nouvelle préférence gardée, ancienne clé retirée')
+            pg.close(); pg2.close()
+            return f"caches retirés {r['ms']:.0f} ms après le chargement (au repos)"
+
         def t_injection_render():
             # après import piégé, le rendu par html`` de F1 (s'il existe) n'injecte rien non plus
             if not os.path.isfile(os.path.join(ROOT, 'js', 'core', 'dom.js')):
@@ -439,6 +565,7 @@ def main():
             pg.close()
 
         for name, fn in [('migration v1 → v2 (sample_collection.json)', t_migration),
+                         ('finitions de la v1 revues (normale -> holo)', t_finish_repair),
                          ('import validé (charge d’injection)', t_import_validation),
                          ('fusion export → import', t_merge),
                          ('quota plein', t_quota),
@@ -451,6 +578,7 @@ def main():
                          ('scellé de l’ancienne version (TCGplayer → Cardmarket)', t_legacy_sealed),
                          ('tout effacer', t_clear),
                          ('préférences', t_prefs),
+                         ('ménage de l’ancienne appli (caches, blocs ouverts)', t_legacy_keys),
                          ('rendu html`` après import piégé', t_injection_render)]:
             R.run(name, fn)
         b.close()

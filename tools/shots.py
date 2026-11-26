@@ -10,6 +10,7 @@
   python -P tools/shots.py --big 2000               collection de 2 000 cartes tirées de data/cards-index.json
   python -P tools/shots.py --full                   capture de toute la page (sinon : l'écran)
   python -P tools/shots.py --port 8771              port du serveur local (chaque agent a le sien)
+  python -P tools/shots.py --fresh                  sans le cache HTTP partagé (.cache/shots-profile)
 
 Sert le dépôt sur http://127.0.0.1:<port>, remplit une collection d'exemple (tools/sample_collection.json, ou --big),
 puis joue les étapes de tools/shotsteps/*.json (fichiers lus par ordre de nom ; chacun contient un tableau d'étapes
@@ -20,11 +21,19 @@ ou {"steps": [...]}). Une étape :
     précédente (les actions font le reste) ;
   - root : racine d'onglet ou non (déduit de la route si absent) ;
   - content : premier contenu mesuré (défaut : .tile, .row, [data-content] dans la vue affichée).
-Mesures de chaque étape : débordement horizontal (scrollWidth > largeur utile), haut du premier contenu (≤ 260 px sur
-une racine), ← présente sur une sous-page et absente d'une racine, titre « … · Cardex », erreurs JavaScript,
-requêtes en échec. Écrit report.json dans le dossier de sortie.
-Code de sortie 1 s'il y a une erreur JavaScript, un débordement, ou une règle de ← / premier contenu non tenue.
-Les fichiers absents (404, par exemple css/views/*.css pas encore écrits) sont listés à part, sans faire échouer.
+Mesures de chaque étape : débordement horizontal (scrollWidth > largeur utile), éléments qui sortent de l'écran
+dans la vue (main { overflow-x: clip } les cacherait au premier test), éléments qui dépassent leur tuile ou leur ligne
+(content-visibility: auto les coupe), haut du premier contenu (≤ 260 px sur une racine), onglets principaux collés
+sous la barre après défilement, ← présente sur une sous-page et absente d'une racine, titre « … · Cardex »,
+erreurs JavaScript, requêtes en échec. Écrit report.json dans le dossier de sortie.
+Code de sortie 1 s'il y a une erreur JavaScript, une règle non tenue, un fichier local absent (404) ou une requête en
+échec, sauf les absences permises de ALLOW_MISSING (liste commentée ci-dessous) et les images distantes en échec
+(la chaîne de secours des images de cartes essaie des URL qui peuvent manquer : listées à part ; --strict-images les
+compte aussi) et les pannes d'un service distant (TCGdex qui limite le débit : réponse 429/5xx sans en-tête CORS,
+erreur réseau ; listées à part, --strict-remote les compte). Un 4xx lisible d'un service distant fait échouer.
+Les passes (largeurs × thèmes) partagent un profil Chromium dans .cache/shots-profile (ignoré par git) : les images
+de TCGdex ne sont téléchargées qu'une fois (moins de requêtes, pas de limitation de débit qui ferait échouer les images).
+Stockage local, IndexedDB, caches et service workers sont vidés au début de chaque passe.
 Installation : python -m pip install --user playwright && python -m playwright install chromium
 """
 import argparse
@@ -34,6 +43,7 @@ import http.server
 import json
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -43,6 +53,13 @@ SAMPLE = os.path.join(ROOT, "tools", "sample_collection.json")
 STEPS_DIR = os.path.join(ROOT, "tools", "shotsteps")
 CONTENT = ".tile, .row, [data-content]"
 FIRST_MAX = 260
+
+# Fichiers dont l'absence est normale ici (motif d'URL, raison). Tout autre 404 local fait échouer.
+ALLOW_MISSING = [
+    (r"/data/manifest\.json(\?|$)", "généré au déploiement par tools/release.py (absent en local : net.js s'en passe)"),
+]
+# hôtes des images de cartes, logos, produits et sprites : la chaîne de secours y essaie des URL qui peuvent manquer
+IMAGE_HOSTS = ("assets.tcgdex.net", "images.scrydex.com", "tcgplayer-cdn.tcgplayer.com", "raw.githubusercontent.com", "cdn.jsdelivr.net")
 
 MEASURE = r"""(sel) => {
   const de = document.documentElement;
@@ -64,10 +81,46 @@ MEASURE = r"""(sel) => {
       }
     }
   }
+  // dans la vue : hors de l'écran sans conteneur qui défile (main coupe en x), ou plus large que sa tuile / ligne
+  const W = de.clientWidth, out = [], cut = [];
+  const name = el => el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/).join('.') : '');
+  if (v) {
+    const all = v.querySelectorAll('*');
+    for (let i = 0; i < all.length && i < 6000; i++) {
+      const el = all[i];
+      const b = el.getBoundingClientRect();
+      if (!b.width || !b.height) continue;
+      let scroller = false, box = null, clipped = false;
+      for (let p = el.parentElement; p && p !== v.parentElement; p = p.parentElement) {
+        const cs = getComputedStyle(p);
+        if (!box && (cs.contentVisibility === 'auto' || /paint|strict|content/.test(cs.contain))) box = p;
+        if (cs.overflowX !== 'visible') { if (!box) clipped = true; if (cs.overflowX !== 'clip') scroller = true; }
+      }
+      if ((b.right > W + 0.5 || b.left < -0.5) && !scroller && out.length < 5) out.push([name(el), Math.round(b.left), Math.round(b.right)]);
+      if (box && !clipped && cut.length < 5) {
+        const a = box.getBoundingClientRect();
+        if (b.right > a.right + 1 || b.left < a.left - 1) cut.push([name(el), Math.round(b.right - b.left), name(box), Math.round(a.right - a.left)]);
+      }
+    }
+  }
   const bar = document.querySelector('.appbar .back');
   return { hash: location.hash, view: r?.view || null, root: !!r?.root, sw: de.scrollWidth, cw: de.clientWidth, iw: innerWidth,
-           top, back: !!bar && !bar.hidden, title: document.title, worst,
+           top, back: !!bar && !bar.hidden, title: document.title, worst, out, cut,
            sheet: !!document.querySelector('dialog.sheet[open]') };
+}"""
+
+# onglets principaux : après défilement, collés juste sous la barre d'app (null : pas d'onglets ou page trop courte)
+STICKY = r"""async () => {
+  const t = document.querySelector('main .view:not([hidden]) .ptabs');
+  const de = document.documentElement;
+  if (!t || de.scrollHeight - innerHeight < 300) return null;
+  const y0 = scrollY;
+  scrollTo(0, 300);
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const d = Math.round(t.getBoundingClientRect().top - document.querySelector('.appbar').getBoundingClientRect().bottom);
+  scrollTo(0, y0);
+  await new Promise(r => requestAnimationFrame(r));
+  return d;
 }"""
 
 # attend que les images visibles soient chargées (ou en échec), 4 s au plus
@@ -91,6 +144,7 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
 
 
 def serve(port):
+    http.server.ThreadingHTTPServer.request_queue_size = 128   # file d'attente : 5 par défaut, Windows refuse les rafales
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), functools.partial(Quiet, directory=ROOT))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
@@ -186,18 +240,36 @@ def settle(page):
 
 
 def run_one(pw, args, width, theme, steps, collection, base, out_dir):
+    base_origin = base.split("/index.html")[0] + "/"
     height = 800 if width >= 900 else 844
-    browser = pw.chromium.launch()
-    ctx = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=2 if width < 900 else 1,
-                              color_scheme=theme, locale="fr-FR", timezone_id="Europe/Paris",
-                              service_workers="allow" if args.sw else "block")
+    opts = dict(viewport={"width": width, "height": height}, device_scale_factor=2 if width < 900 else 1,
+                color_scheme=theme, locale="fr-FR", timezone_id="Europe/Paris",
+                service_workers="allow" if args.sw else "block")
+    if args.fresh:
+        browser = pw.chromium.launch()
+        ctx = browser.new_context(**opts)
+    else:
+        # profil partagé entre les passes : le cache HTTP (images distantes) est gardé, le reste est vidé
+        profile = os.path.join(ROOT, ".cache", "shots-profile")
+        os.makedirs(profile, exist_ok=True)
+        ctx = browser = pw.chromium.launch_persistent_context(profile, **opts)
+        ctx.clear_cookies()
+        blank = ctx.pages[0] if ctx.pages else ctx.new_page()
+        blank.goto(base.replace("index.html", "manifest.webmanifest"))
+        blank.evaluate("""async () => {
+            try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
+            try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch (e) {}
+            try { for (const k of await caches.keys()) await caches.delete(k); } catch (e) {}
+            try { for (const d of await indexedDB.databases()) indexedDB.deleteDatabase(d.name); } catch (e) {}
+        }""")
+        blank.close()
     ctx.add_init_script("try { if (!localStorage.getItem('cardex.collection.v1')) localStorage.setItem('cardex.collection.v1', %s); } catch (e) {}"
                         % json.dumps(json.dumps(collection)))
     page = ctx.new_page()
     if args.cpu > 1:
         cdp = ctx.new_cdp_session(page)
         cdp.send("Emulation.setCPUThrottlingRate", {"rate": args.cpu})
-    log = {"js": [], "missing": [], "failed": []}
+    log = {"js": [], "missing": [], "failed": [], "allowed": [], "images": [], "remote": []}
     cur = {"step": "démarrage"}
 
     def on_console(m):
@@ -205,14 +277,35 @@ def run_one(pw, args, width, theme, steps, collection, base, out_dir):
             return
         if m.text.startswith("Failed to load resource"):
             return  # déjà compté par les événements de réseau
+        img = re.match(r"Access to image at '([^']+)'", m.text)
+        if img and any(f"://{h}/" in img.group(1) for h in IMAGE_HOSTS) and not args.strict_images:
+            # image distante refusée (réponse d'erreur sans en-tête CORS, souvent une limitation de débit) : chaîne de secours
+            log["images"].append(f"[{cur['step']}] CORS {img.group(1)}  (secours d'image)")
+            return
+        far = re.match(r"Access to fetch at '([^']+)'", m.text)
+        if far and not far.group(1).startswith(base_origin) and not args.strict_remote:
+            # service distant en panne ou qui limite le débit (réponse sans en-tête CORS) : l'appli a son repli
+            log["remote"].append(f"[{cur['step']}] CORS {far.group(1)}")
+            return
         log["js"].append(f"[{cur['step']}] console.error : {m.text}")
 
     answered = set()
 
+    def bucket(url, rtype):
+        if url.startswith(base_origin):
+            reason = next((why for pat, why in ALLOW_MISSING if re.search(pat, url)), None)
+            return ("allowed", reason) if reason else (None, None)
+        if rtype == "image" and any(f"://{h}/" in url for h in IMAGE_HOSTS) and not args.strict_images:
+            return ("images", "secours d'image")
+        return (None, None)
+
     def on_response(r):
         if r.status >= 400:
             answered.add(r.url)
-            log["missing"].append(f"[{cur['step']}] {r.status} {r.url}")
+            kind, why = bucket(r.url, r.request.resource_type)
+            if not kind and not r.url.startswith(base_origin) and (r.status == 429 or r.status >= 500) and not args.strict_remote:
+                kind, why = "remote", "service distant indisponible"
+            log[kind or "missing"].append(f"[{cur['step']}] {r.status} {r.url}" + (f"  ({why})" if why else ""))
 
     def on_failed(r):
         f = r.failure or ""
@@ -220,7 +313,10 @@ def run_one(pw, args, width, theme, steps, collection, base, out_dir):
             return  # déjà listé avec son code (une feuille de style en 404 est ensuite « annulée »)
         if "ERR_ABORTED" in f and r.resource_type in ("image", "media", "fetch"):
             return  # chargement annulé par la page (image remplacée, requête abandonnée)
-        log["failed"].append(f"[{cur['step']}] {r.url} {f}")
+        kind, why = bucket(r.url, r.resource_type)
+        if not kind and not r.url.startswith(base_origin) and not args.strict_remote:
+            kind, why = "remote", "service distant injoignable"   # réseau, CORS, délai : l'appli a son repli
+        log[kind or "failed"].append(f"[{cur['step']}] {r.url} {f}" + (f"  ({why})" if why else ""))
 
     page.on("console", on_console)
     page.on("pageerror", lambda e: log["js"].append(f"[{cur['step']}] {e}"))
@@ -264,6 +360,15 @@ def run_one(pw, args, width, theme, steps, collection, base, out_dir):
             probs.append(f"premier contenu à {m['top']} px (> {FIRST_MAX})" if m["top"] is not None else "premier contenu introuvable")
         if not m["title"].endswith("· Cardex"):
             probs.append(f"titre du document : {m['title']!r}")
+        for el, left, right in m["out"]:
+            probs.append(f"hors de l'écran (coupé par main) : {el} de {left} à {right} px")
+        for el, w, box, bw in m["cut"]:
+            probs.append(f"plus large que son conteneur (coupé par content-visibility) : {el} {w} px dans {box} {bw} px")
+        sticky = None
+        if root and not m["sheet"]:
+            sticky = page.evaluate(STICKY)
+            if sticky is not None and abs(sticky) > 1:
+                probs.append(f"onglets principaux pas collés sous la barre après défilement (écart {sticky} px)")
         file = os.path.join(out_dir, f"{s['name']}.png")
         if args.full:
             # images paresseuses : on parcourt la page (20 écrans au plus) pour qu'elles se chargent, puis retour en haut
@@ -272,7 +377,7 @@ def run_one(pw, args, width, theme, steps, collection, base, out_dir):
         page.screenshot(path=file, full_page=args.full)
         rec.update({"png": os.path.relpath(file, args.out).replace(os.sep, "/"), "hash": m["hash"], "view": m["view"],
                     "root": root, "scrollWidth": m["sw"], "clientWidth": m["cw"], "innerWidth": m["iw"],
-                    "firstContent": m["top"], "back": m["back"], "title": m["title"], "problems": probs})
+                    "firstContent": m["top"], "back": m["back"], "title": m["title"], "ptabsGap": sticky, "problems": probs})
         results.append(rec)
         flag = "ok " if not probs else "!! "
         print(f"  {width}-{theme} {s['name']:<22} {flag} largeur {m['sw']}/{m['iw']}  1er contenu {m['top']}  ←{'oui' if m['back'] else 'non'}"
@@ -297,6 +402,9 @@ def main():
     ap.add_argument("--cpu", type=float, default=1, help="ralentissement du processeur (ex. 4)")
     ap.add_argument("--big", type=int, default=0, help="collection de N cartes différentes")
     ap.add_argument("--full", action="store_true", help="capture de toute la page")
+    ap.add_argument("--strict-images", action="store_true", help="les images distantes en échec comptent aussi")
+    ap.add_argument("--strict-remote", action="store_true", help="les pannes des services distants comptent aussi")
+    ap.add_argument("--fresh", action="store_true", help="navigateur neuf à chaque passe (sans cache HTTP partagé)")
     args = ap.parse_args()
     from playwright.sync_api import sync_playwright
 
@@ -322,13 +430,19 @@ def main():
                     results, log = run_one(pw, args, w, t, steps, collection, base, out_dir)
                     report["runs"].append({"width": w, "theme": t, "steps": results, **log})
                     n_probs = sum(len(r.get("problems", [])) for r in results)
-                    bad += n_probs + len(log["js"])
+                    bad += n_probs + len(log["js"]) + len(set(log["missing"])) + len(log["failed"])
                     for line in log["js"]:
                         print(f"  {w}-{t} erreur JS {line}")
                     for line in sorted(set(log["missing"])):
                         print(f"  {w}-{t} absent  {line}")
                     for line in log["failed"]:
                         print(f"  {w}-{t} échec   {line}")
+                    for line in sorted(set(log["allowed"])):
+                        print(f"  {w}-{t} permis  {line}")
+                    for line in sorted(set(log["remote"])):
+                        print(f"  {w}-{t} distant {line}")
+                    if log["images"]:
+                        print(f"  {w}-{t} images  {len(set(log['images']))} URL d'image distante en échec (chaîne de secours ; --strict-images pour les compter)")
     finally:
         httpd.shutdown()
     path = os.path.join(args.out, "report.json")

@@ -2,7 +2,7 @@
 import datetime as dt
 import urllib.parse
 
-from .http import DAY, HttpError, Offline
+from .http import DAY, HttpError
 from .tables import POCKET, POCKET_SERIES
 
 API = 'https://api.tcgdex.net/v2'
@@ -69,14 +69,15 @@ class TCGdex:
 
     # ---------- cartes ----------
     def check_locale(self):
-        """La directive @locale n'est pas documentée : on la vérifie à chaque exécution."""
+        """La directive @locale n'est pas documentée : on la vérifie à chaque exécution (une requête, jamais le
+        cache, sauf hors ligne)."""
         cid, want = LOCALE_PROBE
         query = '{ cards(filters:{id:"%s"}) @locale(lang:"fr") { id name } }' % cid
         try:
-            r = self.c.post_json(GQL, {'query': query}, ttl=6 * 3600)
-            names = [c['name'] for c in (r or {}).get('data', {}).get('cards') or [] if c['id'] == cid]
+            r = self.c.post_json(GQL, {'query': query}, ttl=0)
+            names = [c.get('name') for c in ((r or {}).get('data') or {}).get('cards') or [] if c.get('id') == cid]
             self.locale_ok = names == [want]
-        except (HttpError, Offline) as e:
+        except Exception as e:  # HttpError, Offline, réponse inattendue
             self.log(f'  ! vérification @locale impossible : {e}')
             self.locale_ok = False
         if not self.locale_ok:
@@ -86,9 +87,9 @@ class TCGdex:
     def gql_cards(self, sid, ttl, force=False):
         query = '{ cards(filters:{id:%s}) @locale(lang:"fr") { %s } }' % (_gq_str(sid + '-'), FIELDS)
         r = self.c.post_json(GQL, {'query': query}, ttl=0 if force else ttl)
-        if r is None or 'errors' in r:
-            raise HttpError(GQL, 'graphql', str((r or {}).get('errors'))[:200])
-        return [c for c in r['data']['cards'] or [] if set_of(c['id']) == sid]
+        if not isinstance(r, dict) or 'errors' in r or not isinstance(r.get('data'), dict):
+            raise HttpError(GQL, 'graphql', str((r or {}).get('errors') if isinstance(r, dict) else r)[:200])
+        return [c for c in r['data'].get('cards') or [] if set_of(c['id']) == sid]
 
     def rest_card(self, cid, ttl):
         return self.c.get_json(f'{API}/fr/cards/{q(cid)}', ttl=ttl)
@@ -104,7 +105,7 @@ class TCGdex:
                 if set(c['id'] for c in g) != set(want) and not self.c.offline:
                     g = self.gql_cards(sid, ttl, force=True)
                 got = {c['id']: c for c in g}
-            except (HttpError, Offline) as e:
+            except Exception as e:  # HttpError, Offline, réponse GraphQL inattendue : REST carte par carte
                 self.log(f'  ! GraphQL {sid} : {e}')
             # contrôle : noms GraphQL = noms REST français (sinon la directive n'a pas pris)
             bad = [i for i, c in got.items() if i in want and c.get('name') != want[i].get('name')]

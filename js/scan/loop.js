@@ -2,8 +2,9 @@
 // détection ≈ 10 images/s sur une copie réduite de la zone du guide (worker) → quad affiché ;
 // stabilité (coins immobiles à 1,5 % de la hauteur du guide sur 3 images) + netteté → identification sur l'image
 // pleine résolution ; « forte » acceptée sur une image, « normale » confirmée par 2 des 3 dernières ;
-// réimpressions et sosies départagés par la zone du code / numéro ; incertaine pendant ≈ 1 s → « choose » (top 3)
-// et lecture OCR en parallèle ; après une acceptation, pause jusqu'à ce que la carte sorte du cadre.
+// réimpressions et sosies départagés par la zone du code / numéro (sinon choix) ; incertaine pendant ≈ 1 s →
+// « choose » (top 3) et lecture OCR en parallèle ; après une acceptation, pause jusqu'à ce que la carte sorte du cadre.
+// Rien n'est livré après stop() / destroy() : chaque attente est suivie d'une vérification (époque).
 import { call, frameOf } from './client.js';
 
 export const LOOP = {
@@ -11,11 +12,13 @@ export const LOOP = {
   tickPaused: 200,
   stableN: 3,           // images consécutives
   stableTol: 0.015,     // déplacement maximal des coins (fraction de la hauteur du guide)
-  sharpRatio: 0.6,      // netteté ≥ 60 % du maximum récent
+  sharpRatio: 0.6,      // netteté ≥ 60 % du maximum vu sur la carte présente
+  jump: 0.25,           // saut du quad (fraction de la hauteur du guide) : autre carte
   chooseAfter: 1000,    // ms d'incertitude stable avant de proposer un choix
   leaveN: 3,            // images sans carte : la carte est partie
   none: 1.45,           // au-delà : aucune carte plausible (en deçà, le choix montre le top 3)
   regionMargin: 0.01,   // écart minimal de corrélation entre les deux meilleures versions
+  ocrMax: 2,            // lectures OCR au plus par carte présente
   smallH: 420,          // hauteur du guide dans la copie de détection
   margin: 0.3,          // marge autour du guide (fraction de sa hauteur)
 };
@@ -29,11 +32,16 @@ const HINT = {
   load: 'Chargement de la base des cartes…',
   holder: 'Sors la carte de son étui si tu peux',
   glare: 'Évite les reflets, incline un peu la carte',
+  choose: 'Choisis la bonne carte',
   paused: 'Retire la carte pour en scanner une autre',
   none: 'Carte non reconnue',
+  manual: 'Appuie sur le déclencheur',
+  offline: 'Hors ligne : la base des cartes n’est pas encore enregistrée sur cet appareil',
+  error: 'La base des cartes n’a pas pu être chargée, nouvel essai…',
 };
 
 const uniq = a => [...new Set(a)];
+const ids = l => (l || []).map(x => x.id);
 
 // Distance d'image connue d'une carte dans un résultat d'identification
 function dOf(r, id) {
@@ -44,61 +52,86 @@ function dOf(r, id) {
   return null;
 }
 
-// Résultat public (SPEC §5.7) + champs ajoutés : level, region, stage, quad, d2
-export function resultOf(decision, bestId, r, { alternatives = [], region = null, source = 'image', ms = 0, quad = null, extra = {} } = {}) {
-  const top = (r.top || []).slice(0, 5).map(x => ({ id: x.id, d: x.d }));
-  let candidates = top;
-  if (region && region.length) {
-    // version désignée par la zone en premier, puis les autres versions, puis le reste du top 5
-    const lead = region.map(x => ({ id: x.id, d: dOf(r, x.id) }));
-    candidates = uniq([...lead.map(x => x.id), ...top.map(x => x.id)]).slice(0, 5).map(id => ({ id, d: dOf(r, id) }));
-  }
+// Résultat public (SPEC §5.7) + champs ajoutés : level, d2, stage, region, why, quad, token
+// lead : cartes à placer en tête des candidats (versions départagées, groupe de réimpressions, jumelles).
+export function resultOf(decision, bestId, r, { lead = [], alternatives = [], region = null, why = null, source = 'image', ms = 0, quad = null, extra = {} } = {}) {
+  const top = ids((r.top || []).slice(0, 5));
+  const candidates = uniq([bestId, ...lead, ...top]).slice(0, 5).map(id => ({ id, d: dOf(r, id) }));
   return {
     decision, best: { id: bestId, d: dOf(r, bestId) }, candidates,
-    alternatives: alternatives.filter(id => id !== bestId), source, ms: Math.round(ms),
-    level: r.level || 'none', d2: r.d2 ?? null, stage: r.stage || null, region, quad, ...extra,
+    alternatives: uniq(alternatives).filter(id => id !== bestId), source, ms: Math.round(ms),
+    level: r.level || 'none', d2: r.d2 ?? null, stage: r.stage || null, region, why, quad, token: r.token ?? null, ...extra,
   };
 }
 
 // Décision sur une identification (accept / choose), avec départage par la zone du numéro si la carte a des
-// réimpressions (même illustration) ou des sosies. single = pas de vote (déclencheur manuel, photo importée).
-export async function settle(r, { single = false, t0 = performance.now(), quad = null } = {}) {
+// réimpressions (même illustration) ou des sosies : sans comparaison complète (hors ligne, réseau lent, image
+// manquante), jamais d'acceptation → choix. Carte avec des jumelles sans image → choix.
+// single = pas de vote (déclencheur manuel, photo importée). Renvoie null si annulé (signal).
+// (Un contrôle de la zone du numéro de la seule carte reconnue a été mesuré : il ne sépare pas une réimpression
+// absente de la base d'une vraie carte sous sleeve, voir tools/scan_bench.py --self ; il n'est pas appliqué.)
+export async function settle(r, { single = false, t0 = performance.now(), quad = null, signal = null } = {}) {
   if (!r?.top?.length) return null;
   const top1 = r.top[0].id;
   const lvl = r.level;
   const ok = lvl === 'strong' || lvl === 'normal';
-  const ids = uniq([top1, ...(r.group || []).map(x => x.id), ...(r.rivals || []).map(x => x.id)]);
+  const twins = r.twins || [];
+  const fam = uniq([top1, ...ids(r.group), ...ids(r.rivals)]);
+  const done = (decision, best, o = {}) => resultOf(decision, best, r, { ms: performance.now() - t0, quad, ...o });
   if (!ok) {
     if (r.d1 > LOOP.none) return null;
-    return resultOf('choose', top1, r, { alternatives: ids.slice(1), ms: performance.now() - t0, quad });
+    return done('choose', top1, { lead: [...fam, ...twins], alternatives: [...fam, ...twins], why: 'incertaine' });
   }
   if (!single && lvl === 'normal') return null;    // la boucle gère le vote 2 sur 3
-  let best = top1, alternatives = ids.slice(1), region = null, decision = 'accept';
-  if (ids.length > 1) {
-    region = await call('region', { token: r.token, ids }).catch(() => null);
-    if (region && region.length) {
-      best = region[0].id;
-      alternatives = uniq([...region.slice(1).map(x => x.id), ...ids]).filter(id => id !== best);
-      const margin = region.length > 1 ? region[0].score - region[1].score : 1;
-      if (margin < LOOP.regionMargin) decision = 'choose';
-    } else if ((r.rivals || []).length) {
-      decision = 'choose';     // sosies sans zone comparable : jamais acceptés sur l'image seule
+  if (fam.length > 1) {
+    const reg = await call('region', { token: r.token, ids: fam }, [], { signal }).catch(() => null);
+    if (signal?.aborted) return null;
+    if (!reg?.complete) {
+      // versions non comparables : le groupe d'abord (ordre de l'image), jamais d'acceptation sur l'image seule
+      return done('choose', top1, { lead: [...fam, ...twins], alternatives: [...fam, ...twins], region: reg?.scores?.length ? reg.scores : null, why: 'zone-' + (reg?.reason || 'erreur') });
     }
+    const region = reg.scores, best = region[0].id;
+    const margin = region.length > 1 ? region[0].score - region[1].score : 1;
+    const lead = [...ids(region), ...twins];
+    if (twins.length) return done('choose', best, { lead, alternatives: lead, region, why: 'jumelles' });
+    if (margin < LOOP.regionMargin) return done('choose', best, { lead, alternatives: lead, region, why: 'zone-marge' });
+    return done('accept', best, { lead, alternatives: lead, region });
   }
-  return resultOf(decision, best, r, { alternatives, region, ms: performance.now() - t0, quad });
+  if (twins.length) return done('choose', top1, { lead: [top1, ...twins], alternatives: twins, why: 'jumelles' });
+  return done('accept', top1);
 }
 
 // ---------------------------------------------------------------------------------------------------------
 
-export function createLoop({ video, guide, onState = () => {}, onResult = () => {}, ready = null, ocr = true } = {}) {
+// ready : promesse de la base, ou fonction qui la (re)lance (index.js : preload) — un échec est alors réessayé.
+// auto = false : détection et quad seulement, identification à l'appui sur le déclencheur (préférence scanAuto).
+export function createLoop({ video, guide, onState = () => {}, onResult = () => {}, ready = null, ocr = true, auto = true } = {}) {
   let guideSrc = guide;
-  let running = false, busy = false, dead = false, timer = 0;
+  let running = false, busy = false, dead = false, timer = 0, force = false, autoOn = auto;
+  let epoch = 0, ctl = new AbortController();
   let phase = 'run';                  // run | paused
   let hist = [], sharpMax = 0, noCard = 0, leave = 0;
-  let votes = [], unsureSince = 0, chose = false, ocrBusy = false, accepted = null, force = false;
+  let votes = [], unsureSince = 0, chose = false, lastKey = '', ocrBusy = false, ocrRuns = 0, accepted = null;
   let session = 0;                    // change quand la carte présente change (résultats OCR tardifs ignorés)
-  let dbReady = !ready;
-  if (ready) ready.then(() => { dbReady = true; }, () => {});
+
+  // --- base des cartes : chargement, échec typé, nouvel essai (délai croissant, ou dès le retour du réseau)
+  let db = ready ? 'idle' : 'ok', dbErr = null, dbTries = 0, dbAt = 0;
+  function ensureDb() {
+    if (db === 'ok' || db === 'loading') return;
+    if (db === 'error' && performance.now() < dbAt) return;
+    db = 'loading';
+    const p = typeof ready === 'function' ? ready() : ready;
+    Promise.resolve(p).then(() => { db = 'ok'; dbErr = null; dbTries = 0; }, e => {
+      db = 'error'; dbErr = e; dbTries++;
+      dbAt = performance.now() + Math.min(30000, 2000 * 2 ** Math.min(4, dbTries - 1));
+      if (typeof ready !== 'function') dbAt = Infinity;      // promesse figée : pas de nouvel essai possible
+      console.warn('scan : base des cartes indisponible :', e?.kind || e?.message || e);
+    });
+  }
+  const onOnline = () => { if (db === 'error') { dbAt = 0; if (running) kick(); } };
+  if (typeof addEventListener === 'function') addEventListener('online', onOnline);
+  const dbHint = () => (dbErr?.kind === 'offline' || (typeof navigator !== 'undefined' && navigator.onLine === false) ? HINT.offline : HINT.error);
+  ensureDb();
 
   // --- géométrie : pixels CSS de la vidéo ↔ pixels du flux (object-fit, position centrée)
   function guideRect() {
@@ -133,12 +166,16 @@ export function createLoop({ video, guide, onState = () => {}, onResult = () => 
   }
 
   const css = (G, q) => (q ? q.map(G.toCss) : null);
+  const alive = ep => !dead && ep === epoch;
 
   function emit(state, quad, hint, extra = {}) {
     try { onState({ state, quad, hint, ...extra }); } catch (e) { console.error(e); }
   }
 
+  // une proposition d'image (« choose ») par carte ; les lectures OCR remplacent la précédente si elles diffèrent
+  const keyOf = res => res.decision + '|' + res.candidates.map(c => c.id).join(',');
   function deliver(res) {
+    lastKey = keyOf(res);
     try { onResult(res); } catch (e) { console.error(e); }
   }
 
@@ -166,7 +203,7 @@ export function createLoop({ video, guide, onState = () => {}, onResult = () => 
 
   // --- état de la carte présente
   function resetCard() {
-    votes = []; unsureSince = 0; chose = false; hist = []; session++;
+    votes = []; unsureSince = 0; chose = false; lastKey = ''; hist = []; sharpMax = 0; ocrRuns = 0; session++;
   }
 
   function pause(r) {
@@ -190,23 +227,37 @@ export function createLoop({ video, guide, onState = () => {}, onResult = () => 
     return r.d1 > LOOP.none ? HINT.none : HINT.glare;
   }
 
-  async function runOcr(r, G, candidates) {
-    if (!ocr || ocrBusy || !r.token) return;
+  // acceptation : tout ce qui est encore en cours (autre identification, OCR) devient périmé
+  function accept(res, r, G) {
+    cancel();
+    pause(r);
+    emit('paused', css(G, r.squad), HINT.paused);
+    deliver(res);
+  }
+
+  // Lecture OCR en parallèle (non attendue par la boucle) : son résultat est livré s'il diffère du dernier livré
+  async function runOcr(r, G, candidates, ep) {
+    if (!ocr || ocrBusy || !r.token || ocrRuns >= LOOP.ocrMax) return;
     ocrBusy = true;
+    ocrRuns++;
     const ses = session;
     try {
       const mod = await import('./ocr.js');
-      const o = await mod.ocrFrame(r.token, { candidates });
-      if (!o || dead || !running || ses !== session) return;
-      if (phase === 'paused') return;
+      if (!alive(ep) || ses !== session) return;
+      const dists = {};
+      for (const l of [r.rivals, r.group, r.top]) for (const x of l || []) if (x.d != null) dists[x.id] = x.d;
+      const o = await mod.ocrFrame(r.token, { candidates, dists });
+      if (!o || !alive(ep) || ses !== session || phase === 'paused') return;
+      // cartes de la lecture d'abord, puis celles que l'image proposait déjà (jumelles, versions) : rien n'est perdu
+      const lead = o.decision === 'accept' ? o.ids : uniq([...o.ids, ...candidates]);
       const res = resultOf(o.decision, o.ids[0], r, {
-        alternatives: o.ids.slice(1), source: 'ocr', ms: performance.now() - r.t0, quad: css(G, r.squad),
-        extra: { text: o.texts },
+        lead, alternatives: lead.slice(1), source: 'ocr', ms: performance.now() - r.t0, quad: css(G, r.squad),
+        why: o.why, extra: { text: o.texts },
       });
       // les candidats viennent de la lecture : distances d'image inconnues pour les cartes hors top 5
-      res.candidates = o.ids.slice(0, 5).map(id => ({ id, d: dOf(r, id) }));
-      if (o.decision === 'accept') { pause(r); emit('paused', css(G, r.squad), HINT.paused); deliver(res); }
-      else if (!chose) { chose = true; deliver(res); }
+      res.candidates = lead.slice(0, 5).map(id => ({ id, d: dOf(r, id) }));
+      if (o.decision === 'accept') accept(res, r, G);
+      else if (keyOf(res) !== lastKey) { chose = true; deliver(res); }
     } catch (e) {
       console.warn('OCR indisponible :', e?.message || e);
     } finally {
@@ -214,23 +265,19 @@ export function createLoop({ video, guide, onState = () => {}, onResult = () => 
     }
   }
 
-  async function handle(r, G, single) {
+  async function handle(r, G, single, ep) {
     const quad = css(G, r.squad);
     if (r.top) { votes.push(r); if (votes.length > 3) votes.shift(); }
     const lvl = r.level;
     const agree = r.top ? votes.filter(v => sameCard(v, r)).length : 0;
     if (r.top && (lvl === 'strong' || (lvl === 'normal' && (single || agree >= 2)))) {
-      const res = await settle(r, { single: true, t0: r.t0, quad });
-      if (res.decision === 'accept') {
-        pause(r);
-        emit('paused', quad, HINT.paused);
-        deliver(res);
-        return;
-      }
-      // réimpression indécise ou sosie : choix immédiat, OCR en parallèle
-      if (!chose) { chose = true; deliver(res); }
-      emit('uncertain', quad, HINT.glare);
-      runOcr(r, G, res.candidates.map(x => x.id).concat(res.alternatives));
+      const res = await settle(r, { single: true, t0: r.t0, quad, signal: ctl.signal });
+      if (!alive(ep) || !res) return;
+      if (res.decision === 'accept') { accept(res, r, G); return; }
+      // réimpression indécise, sosie ou jumelle : choix tout de suite, OCR en parallèle
+      if (!chose || single) { chose = true; deliver(res); }
+      emit('uncertain', quad, HINT.choose);
+      runOcr(r, G, uniq([...res.candidates.map(x => x.id), ...res.alternatives]), ep);
       return;
     }
     // « normale » en attente de confirmation par l'image suivante : pas encore incertaine
@@ -240,37 +287,47 @@ export function createLoop({ video, guide, onState = () => {}, onResult = () => 
     unsureSince ||= now;
     if (single || now - unsureSince >= LOOP.chooseAfter) {
       const plausible = r.top && r.d1 <= LOOP.none;
-      if (plausible && !chose) {
-        chose = true;
-        deliver(await settle({ ...r, level: 'weak' }, { single: true, t0: r.t0, quad }));
+      if (plausible && (!chose || single)) {
+        const res = await settle({ ...r, level: 'weak' }, { single: true, t0: r.t0, quad });
+        if (!alive(ep)) return;
+        if (res) { chose = true; deliver(res); }
       }
-      runOcr(r, G, plausible ? uniq([...r.top.map(x => x.id), ...(r.group || []).map(x => x.id), ...(r.rivals || []).map(x => x.id)]) : []);
+      runOcr(r, G, plausible ? uniq([...ids(r.top), ...ids(r.group), ...ids(r.rivals), ...(r.twins || [])]) : [], ep);
     }
     emit('uncertain', quad, hintOf(r));
   }
 
-  async function step(G) {
+  async function step(G, ep) {
     if (force) {
       force = false;
       if (phase === 'paused') { phase = 'run'; resetCard(); }
-      chose = false;                  // chaque appui donne un résultat (acceptation ou choix)
       emit('identifying', null, HINT.busy);
-      if (!dbReady) await ready;
+      ensureDb();
+      if (db !== 'ok') {
+        try { await (typeof ready === 'function' ? ready() : ready); db = 'ok'; } catch (e) { db = 'error'; dbErr = e; }
+        if (!alive(ep)) return;
+        if (db !== 'ok') { emit('error', null, dbHint(), { error: dbErr?.kind || 'unknown' }); return; }
+      }
       const r = await identify(G);
-      await handle(r, G, true);
+      if (!alive(ep)) return;
+      await handle(r, G, true, ep);
+      if (!alive(ep)) return;
       if (!r.top || r.d1 > LOOP.none) emit('uncertain', css(G, r.squad), HINT.none);
       return;
     }
     const d = await detect(G);
+    if (!alive(ep)) return;
     const present = !!d.quad && d.found >= 3;
     const quad = css(G, d.quad);
     if (phase === 'paused') {
-      const moved = present && accepted?.quad ? spread([accepted.quad, d.quad]) > 0.25 * G.g.h : false;
+      const moved = present && accepted?.quad ? spread([accepted.quad, d.quad]) > LOOP.jump * G.g.h : false;
       leave = !present || moved ? leave + 1 : 0;
       if (leave >= LOOP.leaveN) { phase = 'run'; resetCard(); emit('searching', present ? quad : null, HINT.frame); }
       else emit('paused', present ? quad : null, HINT.paused);
       return;
     }
+    ensureDb();
+    if (db === 'error') { emit('error', present ? quad : null, dbHint(), { error: dbErr?.kind || 'unknown', found: d.found }); return; }
     if (!present) {
       noCard++;
       hist = [];
@@ -279,32 +336,38 @@ export function createLoop({ video, guide, onState = () => {}, onResult = () => 
       return;
     }
     noCard = 0;
+    // saut du quad : une autre carte (ou replacée) → nouvel état de carte
+    if (hist.length && spread([hist[hist.length - 1], d.quad]) > LOOP.jump * G.g.h) resetCard();
     hist.push(d.quad);
     if (hist.length > LOOP.stableN) hist.shift();
-    sharpMax = Math.max(sharpMax * 0.995, d.sharp || 0);
+    const sh = d.nsharp ?? d.sharp ?? 0;
+    sharpMax = Math.max(sharpMax, sh);               // maximum sur la carte présente seulement
     const stable = hist.length >= LOOP.stableN && spread(hist) < LOOP.stableTol * G.g.h;
-    const sharp = (d.sharp || 0) >= LOOP.sharpRatio * sharpMax;
+    const sharp = sh >= LOOP.sharpRatio * sharpMax;
     const state = unsureSince ? 'uncertain' : 'detected';
     if (!stable || !sharp) { emit(state, quad, sharp ? HINT.still : HINT.blur, { found: d.found }); return; }
-    if (!dbReady) { emit(state, quad, HINT.load, { found: d.found }); return; }
+    if (db !== 'ok') { emit(state, quad, HINT.load, { found: d.found }); return; }
+    if (!autoOn) { emit(state, quad, HINT.manual, { found: d.found }); return; }
     emit('identifying', quad, HINT.busy, { found: d.found });
     const r = await identify(G);
-    if (!running || dead) return;
-    await handle(r, G, false);
+    if (!alive(ep)) return;
+    await handle(r, G, false, ep);
   }
 
   async function tick() {
     timer = 0;
-    if (!running || dead) return;
+    if (dead || (!running && !force)) return;
     const t0 = performance.now();
     if (!busy && !(typeof document !== 'undefined' && document.hidden)) {
       const G = geom();
       if (G) {
         busy = true;
-        try { await step(G); } catch (e) { console.warn('scan :', e?.message || e); } finally { busy = false; }
-      }
+        try { await step(G, epoch); } catch (e) { console.warn('scan :', e?.message || e); } finally { busy = false; }
+      } else if (!running) force = false;           // déclencheur sans image : rien à faire
     }
-    if (running && !dead) timer = setTimeout(tick, Math.max(0, (phase === 'paused' ? LOOP.tickPaused : LOOP.tick) - (performance.now() - t0)));
+    if (dead) return;
+    if (running) timer = setTimeout(tick, Math.max(0, (phase === 'paused' ? LOOP.tickPaused : LOOP.tick) - (performance.now() - t0)));
+    else if (force) timer = setTimeout(tick, 0);
   }
 
   function kick() {
@@ -312,18 +375,39 @@ export function createLoop({ video, guide, onState = () => {}, onResult = () => 
     if (!busy) tick();
   }
 
+  // annule tout ce qui est en cours (résultats ignorés, téléchargements de la zone du numéro abandonnés)
+  function cancel() {
+    epoch++;
+    ctl.abort();
+    ctl = new AbortController();
+  }
+
   return {
     start() { if (dead || running) return; running = true; emit('searching', null, HINT.frame); kick(); },
-    stop() { running = false; if (timer) clearTimeout(timer); timer = 0; },
-    // déclencheur manuel : identifie l'image courante tout de suite (même si elle bouge, même en pause)
-    shutter() { if (dead) return; force = true; if (!running) { running = true; } kick(); },
+    stop() { running = false; force = false; if (timer) clearTimeout(timer); timer = 0; cancel(); },
+    // déclencheur : identifie l'image courante tout de suite (même si elle bouge, même en pause), une seule fois ;
+    // ne relance pas la boucle si elle est arrêtée
+    shutter() { if (dead) return; force = true; chose = false; kick(); },
     // reprend le scan après une acceptation sans attendre que la carte sorte du cadre
-    resume() { if (dead) return; phase = 'run'; resetCard(); if (running) kick(); },
+    resume() { if (dead) return; cancel(); phase = 'run'; resetCard(); if (running) kick(); },
+    // carte choisie dans la liste (« choose ») : pause comme après une acceptation, jusqu'à ce qu'elle sorte du cadre
+    hold() {
+      if (dead) return;
+      const q = hist[hist.length - 1] || null;
+      cancel();
+      pause({ squad: q });
+      emit('paused', null, HINT.paused);
+    },
     setGuide(g) { guideSrc = g; hist = []; },
-    get state() { return { running, phase, busy }; },
+    setAuto(on) { autoOn = !!on; },
+    get state() { return { running, phase, busy, auto: autoOn, db }; },
     destroy() {
-      dead = true; running = false;
+      if (dead) return;
+      dead = true; running = false; force = false;
       if (timer) clearTimeout(timer);
+      timer = 0;
+      cancel();
+      if (typeof removeEventListener === 'function') removeEventListener('online', onOnline);
       call('forget', {}).catch(() => {});
     },
   };

@@ -11,8 +11,10 @@ import { setParams } from '../core/router.js';
 import { tileHTML, patchTile } from '../components/tile.js';
 import { sparkline } from '../components/chart.js';
 import * as col from '../state/collection.js';
+import * as prices from '../data/prices.js';
 import { FINISHES, SHORT, DOT } from '../data/finishes.js';
 import { points } from '../features/valuehistory.js';
+import { whenIdle } from '../core/idle.js';
 
 const SECTIONS = [
   { href: '#/collection/cartes', label: 'Cartes' },
@@ -37,26 +39,37 @@ function entries(q) {
   return by ? out.sort(by) : out;
 }
 
+// en-tête : valeur (somme des cotes connues) dès que les fichiers de cotes des séries possédées sont là
+function summaryHTML(st) {
+  const hist = points().map(p => p.v);
+  return html`<div class="hero">${st.priced ? eur(st.value) : plural(st.total, 'carte', 'cartes')}</div>${sparkline(hist)}
+      <div class="meta">${hist.length < 2 ? 'La courbe démarre demain' : ''}</div>
+      <div class="meta full">${st.priced ? `${plural(st.total, 'carte', 'cartes')} · ` : ''}${plural(st.unique, 'différente', 'différentes')} · ${plural(st.sets, 'série', 'séries')}</div>`;
+}
+
+// cotes arrivées après le rendu : l'en-tête et les prix des tuiles sont corrigés en place
+function patchPrices() {
+  if (sec !== 'cartes' || !el) return;
+  const box = el.querySelector('.summary');
+  if (box) setHTML(box, summaryHTML(col.stats()));
+  for (const t of el.querySelectorAll('#col-grid .tile[data-card]')) patchTile(t, { price: prices.eur(t.dataset.card, t.dataset.finish || 'normal') });
+}
+
 function cartes() {
   dirty = false;
   const st = col.stats();
   const fin = q.get('finition') || '';
   const counts = new Map();
   for (const rec of col.all()) for (const [f, n] of Object.entries(rec.qty)) counts.set(f, (counts.get(f) || 0) + n);
-  const hist = points().map(p => p.v);
   setHTML(el.querySelector('.stub-body'), html`
-    <div class="summary">
-      <div class="hero">${st.priced ? eur(st.value) : plural(st.total, 'carte', 'cartes')}</div>${sparkline(hist)}
-      <div class="meta">${hist.length < 2 ? 'La courbe démarre demain' : ''}</div>
-      <div class="meta full">${st.priced ? `${plural(st.total, 'carte', 'cartes')} · ` : ''}${plural(st.unique, 'différente', 'différentes')} · ${plural(st.sets, 'série', 'séries')}</div>
-    </div>
+    <div class="summary">${summaryHTML(st)}</div>
     <div class="chips" role="group" aria-label="Tri et filtres">
       ${selectChip({ label: 'Trier', options: SORTS, value: q.get('tri') || 'recentes', name: 'tri' })}
       <button type="button" class="chip" data-fin="" aria-pressed="${fin ? 'false' : 'true'}">Toutes <span class="n">${st.total}</span></button>
       ${FINISHES.filter(f => counts.get(f)).map(f => html`<button type="button" class="chip" data-fin="${f}" aria-pressed="${f === fin ? 'true' : 'false'}"><i class="${DOT[f]}"></i>${SHORT[f]} <span class="n">${counts.get(f)}</span></button>`)}
     </div>
     <div class="grid" id="col-grid"></div>`);
-  return renderChunked(el.querySelector('#col-grid'), entries(q), e => tileHTML(e.r, { qty: e.n, finish: e.f, price: col.value(e.r) }), {
+  return renderChunked(el.querySelector('#col-grid'), entries(q), e => tileHTML(e.r, { qty: e.n, finish: e.f, price: prices.eur(e.r.id, e.f) }), {
     empty: html`<div class="empty" data-content><span class="ic">${icon('collection')}</span><b>Ta collection est vide</b><p>Scanne une carte ou ouvre une série pour l’ajouter.</p><a class="btn primary" href="#/scanner">Scanner une carte</a></div>`,
   });
 }
@@ -72,17 +85,19 @@ export default {
     // filtres et tri : dans l'URL sans nouvelle entrée, puis la grille est refaite
     delegate(el, 'change', 'select[name="tri"]', (e, s) => { setParams({ tri: s.value === 'recentes' ? null : s.value }); q = query(); cartes(); });
     delegate(el, 'click', '[data-fin]', (e, b) => { setParams({ finition: b.dataset.fin || null }); q = query(); cartes(); });
+    prices.on(() => patchPrices());
   },
   async show(r) {
     sec = r.m[1];
     q = r.q;
     setBar({
-      title: 'Collection',
+      title: 'Collection', signal: r.signal,
       actions: [{ icon: 'filter', label: 'Filtrer mes cartes', onClick: () => infoSheet('Filtrer', 'Le filtre par nom ou série arrive avec la version complète de cet écran.') }],
       menu: [{ icon: 'info', label: 'À propos de cet écran', onClick: () => infoSheet('Collection', 'La valeur estimée additionne la cote Cardmarket (tendance) de chaque version que tu possèdes.') }],
     });
     setHTML(el.querySelector('.ptabs-slot'), primaryTabs(SECTIONS, `#/collection/${sec}`));
-    if (sec === 'cartes') await cartes();
+    // cotes chargées après le premier écran (elles ne doivent pas concurrencer les vignettes) : patchPrices()
+    if (sec === 'cartes') { const first = cartes(); whenIdle(() => col.ensurePrices(), { timeout: 1500 }); await first; }
     else placeholder(SECTIONS.find(s => s.href.endsWith(sec))?.label || 'Collection');
   },
   hide() {},
@@ -92,9 +107,12 @@ export default {
   onChange(events) {
     if (sec !== 'cartes' || !el) return;
     if (events.some(e => e.type !== 'qty' || e.added || e.removed || e.after === 0 || e.before === 0)) {
+      col.ensurePrices();                       // carte d'une nouvelle série : ses cotes arrivent ensuite (patchPrices)
       if (el.hidden) dirty = true; else cartes();
       return;
     }
     for (const e of events) patchByKey(el, e.id, t => { if (t.dataset.finish === e.finish) patchTile(t, { qty: e.after }); });
+    const box = el.querySelector('.summary');
+    if (box) setHTML(box, summaryHTML(col.stats()));
   },
 };

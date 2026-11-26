@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import threading
+import time
 
 from playwright.sync_api import sync_playwright
 
@@ -34,6 +35,7 @@ results = []
 
 
 SW_VERSION = {"v": None}   # test de mise à jour : sw.js servi avec une autre VERSION (le fichier n'est pas modifié)
+DELAY = {"re": None, "ms": 0}   # réponse ralentie côté serveur (courses : vue quittée pendant son chargement)
 
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -45,6 +47,8 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
+        if DELAY["re"] and re.search(DELAY["re"], self.path):
+            time.sleep(DELAY["ms"] / 1000)
         if SW_VERSION["v"] and self.path.split("?")[0] == "/sw.js":
             src = open(os.path.join(ROOT, "sw.js"), encoding="utf8").read()
             body = re.sub(r"^const VERSION = '[^']*';", f"const VERSION = '{SW_VERSION['v']}';", src, count=1, flags=re.M).encode("utf8")
@@ -58,6 +62,7 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
 
 
 def serve(port):
+    http.server.ThreadingHTTPServer.request_queue_size = 128   # file d'attente : 5 par défaut, Windows refuse les rafales
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), functools.partial(Quiet, directory=ROOT))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
@@ -341,6 +346,7 @@ def run(base, headed):
         sys_back(p); check("41c Retour -> quitte l'appli", p, hash="LEFT_APP:about:blank")
         c.close()
         shell(b, base, sample, errs)
+        fixes(b, base, sample, errs)
         b.close()
 
     print("erreurs JavaScript :", errs or "aucune")
@@ -464,6 +470,174 @@ def shell(b, base, sample, errs):
         ok = False
     rec("62 main.js introuvable -> « Cardex n’a pas pu démarrer » + Recharger", ok)
     c.close()
+
+
+def fixes(b, base, sample, errs):
+    """Scénarios de la relecture du 25/11 : courses de la barre, feuille + autre onglet, hash ancien ou inconnu,
+    ids avec « % », onglets principaux collants, focus d'une action, toast persistant, messages d'erreur, démarrage."""
+    seed = "try { if (!localStorage.getItem('cardex.collection.v1')) localStorage.setItem('cardex.collection.v1', %s); localStorage.setItem('cardex.wishCheck.v1', String(Date.now())); } catch (e) {}" % json.dumps(json.dumps(sample))
+
+    def ctx(**kw):
+        c = b.new_context(viewport={"width": 390, "height": 844}, locale="fr-FR", service_workers="block", **kw)
+        c.route(BLOCK, lambda r: r.abort())
+        c.add_init_script(seed)
+        return c
+
+    def page(c, h=""):
+        p = c.new_page()
+        p.on("pageerror", lambda e: errs.append(str(e)))
+        p.goto(base + h)
+        p.wait_for_function("() => window.__cardex && document.documentElement.classList.contains('ready')", timeout=20000)
+        settle(p, 100)
+        return p
+
+    bar = """() => ({ hash: location.hash, title: document.getElementById('bar-title').textContent, back: !document.querySelector('.appbar .back').hidden,
+        doc: document.title, view: document.documentElement.dataset.view, sheet: !!window.__cardex.sheet.isOpen(),
+        dlg: document.getElementById('sheet').open, d: history.state && history.state.d, vis: document.querySelector('main .view:not([hidden])')?.id })"""
+
+    # 70–73 une vue quittée pendant son chargement ne touche plus à la barre (ni maintenant, ni au retour du cache)
+    c = ctx(); p = page(c, "#/series")
+    DELAY.update(re=r"/data/sets/sv02\.json", ms=1500)
+    p.evaluate("() => { window.__cardex.router.go('#/serie/sv02'); setTimeout(() => history.back(), 250); }")
+    p.wait_for_timeout(2600); settle(p)
+    s = p.evaluate(bar)
+    rec("70 série lente, Retour avant la fin : barre de Séries intacte", s["hash"] == "#/series" and s["title"] == "Séries" and not s["back"], s)
+    DELAY.update(re=None, ms=0)
+    go(p, "#/serie/sv03.5"); sys_back(p)
+    s = p.evaluate(bar)
+    rec("71 puis une autre série et Retour : Séries sans ← (cache sain)", s["hash"] == "#/series" and s["title"] == "Séries" and not s["back"], s)
+    DELAY.update(re=r"/data/sets/sv02\.json", ms=1500)
+    p.evaluate("() => { window.__cardex.router.go('#/carte/sv02-001'); setTimeout(() => document.querySelector('.tabbar [data-tab=\"market\"]').click(), 250); }")
+    p.wait_for_timeout(2600); settle(p)
+    s = p.evaluate(bar)
+    rec("72 fiche lente, onglet Marché avant la fin : barre du Marché intacte", s["hash"] == "#/marche/cotes" and s["title"] == "Marché" and not s["back"], s)
+    DELAY.update(re=None, ms=0)
+    tab(p, "series"); p.wait_for_timeout(300); settle(p)
+    s = p.evaluate(bar)
+    rec("73 retour sur Séries : la fiche abandonnée est refaite (titre de la carte, ←)", s["hash"] == "#/carte/sv02-001" and s["back"] and s["title"] not in ("Carte", "Marché", ""), s)
+    c.close()
+
+    # 74–77 feuille ouverte + lien vers la racine d'un autre onglet, puis Retour ; « Voir » d'un toast ; onglet actif
+    c = ctx(); p = page(c, "#/collection/cartes")
+    p.evaluate("""async () => { const s = await import('./js/core/sheet.js'); const d = await import('./js/core/dom.js');
+        s.openSheet({ title: 'Pas la bonne ?', body: d.html`<a id="lnk" href="#/series?q=pikachu">Chercher par nom</a>` }); }""")
+    settle(p, 300); p.click("#lnk"); settle(p, 400)
+    s = p.evaluate(bar)
+    rec("74 lien d'une feuille vers Séries : feuille fermée, Séries affichée", s["hash"] == "#/series?q=pikachu" and s["vis"] == "v-sets" and not s["sheet"] and not s["dlg"] and s["d"] == 0, s)
+    sys_back(p); s = p.evaluate(bar)
+    rec("75 puis Retour -> Collection (écran et adresse d'accord)", s["hash"] == "#/collection/cartes" and s["vis"] == "v-collection" and s["title"] == "Collection", s)
+    p.evaluate("""() => { window.__cardex.sheet.infoSheet('Info', 'texte');
+        window.__cardex.toast('Pikachu est dans ta fourchette', { action: 'Voir', onAction: () => window.__cardex.router.openRoot('#/marche/envies') }); }""")
+    settle(p, 300); p.click(".toast .act"); settle(p, 400)
+    s = p.evaluate(bar)
+    rec("76 « Voir » d'un toast pendant une feuille : Envies, feuille fermée", s["hash"] == "#/marche/envies" and s["vis"] == "v-market" and not s["dlg"], s)
+    sys_back(p); s = p.evaluate(bar)
+    rec("76b puis Retour -> Collection", s["hash"] == "#/collection/cartes" and s["vis"] == "v-collection", s)
+    tab(p, "series"); go(p, "#/serie/sv03.5")
+    p.click(".appbar .more"); p.wait_for_selector("dialog.sheet[open]")
+    p.evaluate("() => window.__cardex.router.switchTab('series')"); settle(p, 300)
+    s = p.evaluate(bar)
+    rec("77 onglet actif touché pendant une feuille (sous-page) : racine affichée", s["hash"] == "#/series?q=pikachu" and s["vis"] == "v-sets" and not s["back"] and not s["dlg"] and s["d"] == 0, s)
+    c.close()
+
+    # 78–80 hash ancien ou inconnu tapé
+    c = ctx(); p = page(c)
+    tab(p, "market")
+    p.evaluate("() => { location.hash = '#wishlist'; }"); settle(p, 300)
+    s = p.evaluate(bar)
+    rec("78 #wishlist tapé pendant le Marché -> Envies, pas d'entrée en plus", s["hash"] == "#/marche/envies" and s["d"] == 0, s)
+    sys_back(p); s = p.evaluate(bar)
+    rec("78b puis Retour -> Collection", s["hash"] == "#/collection/cartes", s)
+    tab(p, "series")
+    p.evaluate("() => { location.hash = '#/nimporte/quoi'; }"); settle(p, 300)
+    s = p.evaluate(bar)
+    rec("79 hash inconnu tapé : annulé, Séries reste (profondeur 0)", s["hash"] == "#/series" and s["d"] == 0 and s["vis"] == "v-sets", s)
+    sys_back(p); s = p.evaluate(bar)
+    rec("80 puis Retour -> Collection (pas de doublon de Séries)", s["hash"] == "#/collection/cartes", s)
+    c.close()
+
+    # 81–84 ids avec « % » (exu-%3F) : lien encodé une fois, décodé une fois ; ancien lien non encodé ; « % » isolé
+    c = ctx(); p = page(c, "#/serie/exu")
+    t = "main a.tile[data-card=\"exu-%3F\"]"
+    p.wait_for_selector(t, state="attached")
+    s = p.evaluate("s => { const a = document.querySelector(s); return { href: a.getAttribute('href'), label: a.getAttribute('aria-label'), cap: a.querySelector('.cap').textContent }; }", t)
+    rec("81 tuile exu-%3F : lien encodé, « ? » dans le nom accessible et la légende", s["href"] == "#/carte/exu-%253F" and ", ?," in s["label"] and "%" not in s["label"] and "%" not in s["cap"], s)
+    js_click(p, t); p.wait_for_timeout(300)
+    s = p.evaluate(bar)
+    rec("82 clic -> fiche Zarbi (pas « introuvable »)", s["title"] == "Zarbi" and s["back"], s)
+    c.close()
+    c = ctx(); p = page(c, "#/carte/exu-%3F")
+    s = p.evaluate(bar)
+    rec("83 ancien lien profond #/carte/exu-%3F -> fiche Zarbi", s["title"] == "Zarbi", s)
+    n_err = len(errs)
+    p.evaluate("() => { location.hash = '#/carte/abc%'; }"); settle(p, 600)
+    s = p.evaluate(bar)
+    txt = p.evaluate("() => document.querySelector('main .view:not([hidden])').innerText")
+    rec("84 #/carte/abc% : pas d'exception, message de la fiche", len(errs) == n_err and "Écran indisponible" not in txt and s["vis"] == "v-card", s)
+    c.close()
+
+    # 85–86 onglets principaux collés sous la barre, cibles de 44 px
+    c = ctx(); p = page(c, "#/collection/cartes")
+    p.evaluate("() => scrollTo(0, 400)"); p.wait_for_timeout(300)
+    s = p.evaluate("""() => { const t = document.querySelector('#v-collection .ptabs'); return { top: Math.round(t.getBoundingClientRect().top),
+        bar: Math.round(document.querySelector('.appbar').getBoundingClientRect().bottom), y: Math.round(scrollY),
+        h: [...t.querySelectorAll('a')].map(a => Math.round(a.getBoundingClientRect().height)),
+        shadow: getComputedStyle(document.querySelector('.appbar')).boxShadow }; }""")
+    rec("85 onglets principaux collés sous la barre après défilement", s["y"] >= 300 and s["top"] == s["bar"] and s["shadow"] == "none", s)
+    rec("86 onglets principaux : 44 px de haut", all(h >= 44 for h in s["h"]), s["h"])
+    c.close()
+
+    # 87 updateAction garde le focus clavier ; 88 le toast persistant revient après un toast passager
+    c = ctx(); p = page(c, "#/produit/719691")
+    p.focus(".appbar .acts [data-act='0']")
+    p.evaluate("async () => { const a = await import('./js/core/appbar.js'); a.updateAction(0, { pressed: true, icon: 'star-fill', label: 'Ne plus suivre' }); }")
+    s = p.evaluate("() => { const e = document.activeElement; return { act: e?.dataset?.act ?? null, pressed: e?.getAttribute('aria-pressed'), label: e?.getAttribute('aria-label'), use: e?.querySelector('use')?.getAttribute('href') }; }")
+    rec("87 updateAction : bouton mis à jour en place, focus gardé", s == {"act": "0", "pressed": "true", "label": "Ne plus suivre", "use": "#i-star-fill"}, s)
+    p.evaluate("() => { window.__cardex.toast('Nouvelle version disponible', { action: 'Recharger', ms: 0 }); window.__cardex.toast('Ajoutée', { ms: 600 }); }")
+    first = p.evaluate("() => document.querySelector('.toast .msg')?.textContent")
+    p.wait_for_timeout(3200)
+    again = p.evaluate("() => [...document.querySelectorAll('.toast:not(.out) .msg')].map(m => m.textContent)")
+    rec("88 toast persistant mis de côté puis revenu", first == "Ajoutée" and again == ["Nouvelle version disponible"], [first, again])
+    c.close()
+
+    # 89–90 messages d'erreur : module absent / erreur dans la vue ; 91 une vue sans onChange n'est pas redessinée
+    c = ctx()
+    c.route(re.compile(r".*/js/views/deck\.js$"), lambda r: r.fulfill(status=404, body="absent"))
+    p = page(c, "#/decks/actuelle")
+    go(p, "#/deck/1")
+    txt = p.evaluate("() => document.querySelector('#v-deck').innerText")
+    rec("89 module de vue absent : « Un fichier de l’appli n’a pas pu être chargé »", "pas pu être chargé" in txt and "Réessayer" in txt, " ".join(txt.split())[:80])
+    c.close()
+    c = ctx(); p = page(c, "#/series")
+    go(p, "#/serie/sv03.5")
+    p.evaluate("() => { const v = window.__cardex.views.get('set'); v.mod._show = v.mod.show; v.mod.show = async () => { throw new Error('essai'); }; }")
+    go(p, "#/serie/sv02")
+    txt = p.evaluate("() => document.querySelector('#v-set').innerText")
+    rec("90 erreur dans la vue : « Cet écran n’a pas pu s’afficher » + Réessayer", "pas pu s’afficher" in txt and "pas pu être chargé" not in txt, " ".join(txt.split())[:80])
+    p.evaluate("() => { const v = window.__cardex.views.get('set'); v.mod.show = v.mod._show; }")
+    p.click("#v-set [data-retry]"); settle(p, 600)
+    s = p.evaluate("() => ({ err: !!document.querySelector('#v-set .view-err'), failed: document.querySelector('#v-set').classList.contains('failed'), tiles: document.querySelectorAll('#v-set a.tile').length })")
+    rec("90b Réessayer : la série s'affiche (structure de la vue gardée)", not s["err"] and not s["failed"] and s["tiles"] > 0, s)
+    tab(p, "scan")
+    shows = p.evaluate("__cardex.views.get('scan').shows")
+    p.evaluate("async () => { const col = await import('./js/state/collection.js'); col.add({ id: 'sv03.5-004', localId: '004', name: 'Bulbizarre', setId: 'sv03.5', image: '' }, 'normal', 1); }")
+    p.wait_for_timeout(300); settle(p)
+    rec("91 vue sans onChange (Scanner) : pas redessinée sous les yeux", p.evaluate("__cardex.views.get('scan').shows") == shows and p.evaluate("__cardex.views.get('scan').stale"))
+    c.close()
+
+    # 92 démarrage : data/cardimg.json lent -> Séries et Collection s'affichent sans l'attendre (au plus 600 ms)
+    DELAY.update(re=r"/data/cardimg\.json", ms=5000)
+    for h, sel, limit in (("#/series", "#v-sets a.row", 1500), ("#/collection/cartes", "#v-collection a.tile", 2000)):
+        c = ctx(); p = c.new_page(); p.on("pageerror", lambda e: errs.append(str(e)))
+        p.goto(base + h)
+        try:
+            p.wait_for_selector(sel, timeout=4000)
+            ms = p.evaluate("() => Math.round(performance.now())")
+        except Exception:
+            ms = None
+        rec(f"92 {h} : premier contenu sans attendre la table des images", ms is not None and ms < limit, f"{ms} ms")
+        c.close()
+    DELAY.update(re=None, ms=0)
 
 
 def main():

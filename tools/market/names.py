@@ -5,6 +5,8 @@ japonais (leurs séries n'ont pas de nom français : le nom anglais de Cardmarke
 Le type vient d'une table de formules anglaises (la plus longue l'emporte, en fin de nom ou devant « : », « ( »,
 « [ », « - »), la série de TCGdex FR (fautes corrigées), le détail est traduit : noms des Pokémon (PokéAPI), formes
 (Méga-, d'Alola…), suffixes de cartes (-EX, -GX, V…), saisons, couleurs, mentions (vide, version EU, N cartes…).
+Produits japonais : seuls les noms de Pokémon, les formules entières (Pikachu au poncho, gammes connues) et le type
+d'énergie sont traduits, jamais mot à mot (« Collector's Figure » reste tel quel, pas « de collection Figure »).
 Le nom n'est jamais vide. Relecture : python tools/build_market.py --report (.cache/mk/report/sealed-top300.md).
 """
 import re
@@ -40,6 +42,7 @@ TYPES = [
     (rf"{_N}-Tin Display(?: Box)?", "Présentoir de {0} Pokébox", "case"),
     (r"Tins? Display(?: Box)?", "Présentoir de Pokébox", "case"),
     (r"Tech Sticker Collection Display", "Présentoir de coffrets stickers", "case"),
+    (r"Premium Tournament Collection(?: Box)? Display", "Présentoir de coffrets Premium Tournoi", "case"),
     (r"Pin Collection Display", "Présentoir de coffrets pin's", "case"),
     (r"WCD (\d{4}) Display", "Présentoir de decks des Championnats du monde {0}", "case"),
     (r"Theme Decks? Display", "Présentoir de decks à thème", "case"),
@@ -100,6 +103,10 @@ TYPES = [
     (r"Expansion Pack Booster|Booster(?: Pack)?", "Booster", "booster"),
     # decks
     (r"League Battle Decks?", "Deck Combat de Ligue", "deck coffret"),
+    (r"Legendary Battle Decks?", "Deck de combat légendaire", "deck"),
+    (r"SP Deck Kit", "Kit de decks SP", "deck kit"),
+    (r"High[- ]Class Deck Double Box", "Coffret de 2 decks High Class", "deck coffret"),
+    (r"High[- ]Class Decks?", "Deck High Class", "deck"),
     (r"Master Trainer Deck", "Deck Maître Dresseur", "deck"),
     (r"Deluxe Battle Deck", "Deck de combat deluxe", "deck"),
     (r"Battle Arena Decks?", "Decks Arène de combat", "deck"),
@@ -128,6 +135,7 @@ TYPES = [
     (r"Special Illustration Collection", "Coffret illustration spéciale", "coffret"),
     (r"Illustration Collection", "Coffret illustration", "coffret"),
     (r"Legendary Collection", "Coffret légendaire", "coffret"),
+    (r"Deluxe Pin Collection", "Coffret pin's deluxe", "coffret"),
     (r"Special Pin Collection|Pin Collection", "Coffret pin's", "coffret"),
     (r"Figure Collection", "Coffret figurine", "coffret"),
     (r"Poster Collection|Poster Box|Poster Pack", "Coffret poster", "coffret"),
@@ -142,7 +150,8 @@ TYPES = [
     (r"Tech Sticker Collection", "Coffret stickers", "coffret blister"),
     (r"Special Collection|Special Box", "Coffret spécial", "coffret"),
     (r"Collector'?s? Chest", "Coffre de collection", "coffret tin"),
-    (r"Collector'?s Box", "Coffret de collection", "coffret"),
+    (r"Precious Collector Box", "Coffret Precious Collector", "coffret"),
+    (r"Collector'?s? Box", "Coffret de collection", "coffret"),
     (r"Holiday Calendar", "Calendrier des fêtes", "coffret"),
     (r"Advent (?:Countdown )?Calendar", "Calendrier de l'Avent", "coffret"),
     (r"Game Box", "Coffret de jeu", "coffret"),
@@ -173,22 +182,29 @@ FLAGS = [  # (formule, mention française) ; retirées du détail et ajoutées e
     (r"\bSealed\b", ""),
 ]
 _FLAGS = [(re.compile(rx, re.I), fr) for rx, fr in FLAGS]
-LINES = [  # gammes et époques (avant les mots)
+LINES = [  # gammes et époques, formules entières (avant les noms de Pokémon et les mots)
+    (r"\bFire ?Red (?:and|&) Leaf ?Green\b", "Rouge Feu et Vert Feuille"),
+    (r"\bLegendary Dragons of Unova\b", "Dragons légendaires d'Unys"), (r"\bOn the Case\b", "mène l'enquête"),
+    (r"\bBlack Bolt\b", "Foudre Noire"), (r"\bWhite Flare\b", "Flamme Blanche"),
+    (r"\bThree Pins?\b", "3 pin's"), (r"\bMega Evolution Products\b", "Méga-Évolution"),
     (r"\bDiamond (?:and|&) Pearl\b", "Diamant et Perle"), (r"\bBlack (?:and|&) White\b", "Noir et Blanc"),
     (r"\bSun (?:and|&) Moon\b", "Soleil et Lune"), (r"\bSword (?:and|&) Shield\b", "Épée et Bouclier"),
     (r"\bScarlet (?:and|&) Violet\b", "Écarlate et Violet"), (r"\bMega Evolution\b", "Méga-Évolution"),
     (r"\bRed (?:and|&) Blue\b", "Rouge et Bleu"), (r"\bGold (?:and|&) Silver\b", "Or et Argent"),
     (r"\b(?:Mythical|Fabulous) Pok[eé]mon\b", "Pokémon fabuleux"), (r"\bLegendary Pok[eé]mon\b", "Pokémon légendaires"),
     (r"\bEeveelutions?\b", "Évolitions"), (r"\bPok[eé]mon Demo Game\b", "jeu de démonstration Pokémon"),
-    (r"\bDemo Game\b", "jeu de démonstration"),
-    (r"\bFirst Partners?\b", "Pokémon de départ"), (r"\bUnova\b", "Unys"),
+    (r"\bDemo Game\b", "jeu de démonstration"), (r"\bUnova\b", "Unys"),
     (r"\b(Kanto|Johto|Hoenn|Sinnoh|Unys|Kalos|Alola|Galar|Paldea) Starters?\b", r"Pokémon de départ de \1"),
-    (r"\bStarters?\b", "Pokémon de départ"), (r"\b(\d+)-Pack\b", r"lot de \1"),
     (r"\bUltra Beasts?\b", "Ultra-Chimères"), (r"\bMasks of Ogerpon\b", "Masques d'Ogerpon"),
+]
+WORD_LINES = [  # mots isolés : produits internationaux seulement (mot à mot, faux dans un nom japonais)
+    (r"\bFirst Partners?\b", "Pokémon de départ"),
+    (r"\bStarters?\b", "Pokémon de départ"), (r"\b(\d+)-Pack\b", r"lot de \1"),
     (r"\bIllustrated Booklet\b", "livret illustré"), (r"\bDeck Holder\b", "range-deck"), (r"\bEraser\b", "gomme"),
     (r"\bAccessory Pouch\b", "pochette d'accessoires"), (r"\bGeneric\s+", ""),
 ]
 _LINES = [(re.compile(rx, re.I), fr) for rx, fr in LINES]
+_WORD_LINES = [(re.compile(rx, re.I), fr) for rx, fr in WORD_LINES]
 WORDS = [  # traductions mot à mot du détail (après les noms de Pokémon)
     (r"\bwith\b", "avec"), (r"\band\b", "et"), (r"\s&\s", " et "), (r"\bvs\.?(?=\s)", "contre"),
     (r"\bSpring\b", "printemps"), (r"\bFall\b|\bAutumn\b", "automne"), (r"\bSummer\b", "été"),
@@ -199,12 +215,18 @@ WORDS = [  # traductions mot à mot du détail (après les noms de Pokémon)
     (r"\(\s*(\d+) Packs?\s*\)", r"(\1 boosters)"), (r"\(\s*(\d+) Cards?\s*\)", r"(\1 cartes)"),
 ]
 _WORDS = [(re.compile(rx, re.I), fr) for rx, fr in WORDS]
+_JA_WORDS = [(re.compile(rx, re.I), fr) for rx, fr in WORDS[1:4]]  # produits japonais : « and », « & », « vs » seulement
+ENERGY = {"Fire": "Feu", "Water": "Eau", "Grass": "Plante", "Lightning": "Électrique", "Psychic": "Psy",
+          "Fighting": "Combat", "Darkness": "Obscurité", "Metal": "Métal", "Fairy": "Fée", "Colorless": "Incolore"}
+# réécritures de noms anglais japonais à la structure inhabituelle (avant l'analyse)
+JA_REWRITE = [(re.compile(r"^MEGA Starter Set (.+)$"), r"MEGA: \1 Starter Set")]
 COLORS = {"red": "rouge", "blue": "bleu", "green": "vert", "yellow": "jaune", "black": "noir", "white": "blanc",
           "pink": "rose", "purple": "violet", "orange": "orange", "gray": "gris", "grey": "gris", "gold": "or",
           "silver": "argent"}
 # mots anglais de type qui ne doivent pas rester dans le détail (avec majuscule : les traductions sont en minuscules)
 LEFTOVER = re.compile(r"(?<![\w'])(?:Collections?|Boxes|Box|Tins?|Packs?|Blisters?|Bundle|Display|Case|"
                       r"Elite Trainer|Booster)(?![\w'])")
+SOLO = {"Day": "jour", "Night": "nuit", "Legendary": "légendaire", "Mythical": "fabuleux"}  # mot seul du détail
 # lignes sans information (« Pokémon TCG: Holiday Calendar 2023 »)
 EMPTY_LINE = re.compile(r"^(?:Pok[eé]mon(?: TCG| Trading Card Game)?|TCG)$", re.I)
 BALLS = {"Repeat Ball": "Bis Ball", "Quick Ball": "Rapide Ball", "Dusk Ball": "Sombre Ball", "Luxury Ball": "Luxe Ball",
@@ -227,7 +249,7 @@ class Namer:
             "Shadow Rider Calyrex": "Sylveroy Cavalier d'Effroi", "Single Strike Urshifu": "Shifours Poing Final",
             "Rapid Strike Urshifu": "Shifours Mille Poings", "Single Strike": "Poing Final", "Rapid Strike": "Mille Poings",
             "Pikachu Libre": "Pikachu Catcheur", "Detective Pikachu": "Détective Pikachu",
-            "Team Galactic": "Team Galaxie", "Professor Oak": "Professeur Chen", "Origin Forme": "Forme Originelle",
+            "Team Galactic": "Team Galaxie", "Professor Oak": "Professeur Chen",
             **BALLS,
         }
         self.sp = {**sp, **forms}
@@ -240,6 +262,15 @@ class Namer:
         frn = sorted(self.fr_species, key=len, reverse=True)
         self.rx_color = re.compile(r"\b(" + "|".join(COLORS) + r")\s+(" + "|".join(re.escape(n) for n in frn) + r")\b",
                                    re.I)
+        # noms anglais de séries (deux mots ou plus) cités dans le détail : « Supreme Victors Poster Pack »
+        fr_of = {}
+        for sid, (fr, en) in set_names.items():
+            fr = self.set_fr(sid)
+            if en and fr and straight(en) != straight(fr) and len(straight(en).split()) >= 2:
+                fr_of.setdefault(straight(en), fr)
+        self.set_en = fr_of
+        self.rx_set_en = re.compile(r"(?<![\w'])(" + "|".join(re.escape(n) for n in sorted(fr_of, key=len, reverse=True))
+                                    + r")(?![\w'])(?! Products)") if fr_of else None  # « Mega Evolution Products »
 
     # ---------- séries ----------
     def set_fr(self, sid):
@@ -268,11 +299,12 @@ class Namer:
         return [rx for _, rx in sorted(out, key=lambda x: -x[0])]
 
     # ---------- détail ----------
-    def pokemon(self, s):
+    def pokemon(self, s, asia=False):
         """Noms de Pokémon et formes : « Mega Charizard X EX » -> « Méga-Dracaufeu X-EX »."""
         s = re.sub(r"\bM(?=[A-Z][a-z])", "Mega ", s)  # « MBlaziken EX » (Cardmarket) = Méga-Braségali-EX
         s = re.sub(r"\bM (?=[A-Z][a-z]+\s+EX\b)", "Mega ", s)
         s = re.sub(r"(.+?)\s+Poncho-wearing Pikachu", r"Pikachu au poncho \1", s)
+        s = re.sub(r"\bOrigin Forme\s+([A-Z][a-z]+)", r"\1 Originel", s)  # « Palkia Originel VSTAR » (cartes FR)
         s = re.sub(r"\bPretend (.+?) Pikachu\b", lambda m: "Pikachu déguisé en " + m.group(1).replace("Pretend ", ""), s)
         s = self.rx_sp.sub(lambda m: self.sp[m.group(1)], s)
         s = re.sub(r"\bMega\s+", "Méga-", s)
@@ -291,15 +323,46 @@ class Namer:
             return f"{w}-{m.group(2)}" if ok else m.group(0)
         s = re.sub(r"([\wéèêëàâäîïôöûüçÉ'.:-]+)[\s-]+(EX|GX|ex)\b", suffix, s)
         # « Shiny Zacian V » -> « Zacian V chromatique » ; « Inteleon Pin » -> « pin's Lézargus »
-        s = re.sub(r"\bShiny\s+([A-ZÉ][\wéèêëàâäîïôöûüç'-]+(?:\s(?:V|VMAX|VSTAR))?)", r"\1 chromatique", s)
-        s = re.sub(r"\b([A-ZÉ][\wéèêëàâäîïôöûüç'-]+(?:\s(?:V|VMAX|VSTAR|de Galar|d'Alola))?)\s+Pin\b", r"pin's \1", s)
+        # (japonais : seulement devant un nom de Pokémon, « Shiny Star V » est le nom d'une série)
+        def shiny(m):
+            return f"{m.group(1)} chromatique" if not asia or self._is_mon(m.group(1)) else m.group(0)
+        s = re.sub(r"\bShiny\s+([A-ZÉ][\wéèêëàâäîïôöûüç'-]+(?:\s(?:VMAX|VSTAR|V)\b)?)", shiny, s)
+        s = re.sub(r"\b([A-ZÉ][\wéèêëàâäîïôöûüç'-]+(?:\s(?:VMAX|VSTAR|V)\b)?)\s+Shiny\b",
+                   lambda m: f"{m.group(1)} chromatique" if self._is_mon(m.group(1)) else m.group(0), s)  # « Crobat V Shiny »
+        s = re.sub(r"\b([A-ZÉ][\wéèêëàâäîïôöûüç'-]+(?:\s(?:VMAX|VSTAR|V|de Galar|d'Alola)\b)?(?: chromatique)?)\s+Pin\b",
+                   r"pin's \1", s)
         s = re.sub(r"\bLV\.?\s?X\b", "NIV.X", s)
         s = re.sub(r"(?<=[\wé])[\s-]+BREAK\b", "-TURBO", s)
         return s
 
-    def detail(self, s):
+    def _is_mon(self, w):
+        w = re.sub(r"^(?:Méga|Primo|Ultra)-", "", w.split()[0])
+        return w.split("-")[0] in self.fr_species or w in self.suffix_ok
+
+    def lines(self, s, asia=False):
+        if not asia and self.rx_set_en:  # séries internationales citées (les séries japonaises n'ont pas de nom FR)
+            s = self.rx_set_en.sub(lambda m: self.set_en[m.group(1)], s)
         for rx, fr in _LINES:
             s = rx.sub(fr, s)
+        if not asia:
+            for rx, fr in _WORD_LINES:
+                s = rx.sub(fr, s)
+        return s
+
+    def energy(self, s):
+        """« Fire Charizard GX » (decks japonais) -> « Dracaufeu-GX (type Feu) »."""
+        def sub(m):
+            mon = m.group(2)
+            if mon.split()[0].split("-")[0] not in self.fr_species:
+                return m.group(0)
+            return f"{mon} (type {ENERGY[m.group(1)]})"
+        return re.sub(r"\b(" + "|".join(ENERGY) + r")\s+([A-ZÉ][\wéèêëàâäîïôöûüç'-]*(?:\s(?:VMAX|VSTAR|V)\b)?)", sub, s)
+
+    def detail(self, s, asia=False):
+        if asia:
+            for rx, fr in _JA_WORDS:
+                s = rx.sub(fr, s)
+            return self.energy(s)
         for rx, fr in _WORDS:
             s = rx.sub(fr, s)
         s = re.sub(r"\b(\d{4}) (printemps|automne|été|hiver|fêtes|rentrée)\b", r"\2 \1", s)
@@ -313,9 +376,12 @@ class Namer:
         s = re.sub(r'"+', '"', s).replace("BOOster", "Booster")  # « Trick or Trade BOOster »
         s = re.sub(r"\s+", " ", s).strip()
         s = re.sub(r"^(?:[A-Z]{1,5}\d+(?:\.\d+)?[A-Za-z]?|151C)\s*:\s*", "", s)  # « CSV10.6C: », « SV4a: »
+        s = re.sub(r"(Blister)\s+(Version \d)$", r"\1 (\2)", s)  # « 2-Pack Blister Version 2 »
         literal = asia and kind in SET_LIKE  # nom de série japonaise : gardé tel quel
         if asia:
             s = re.sub(r"\s+JP\b", "", s)
+            for rx, to in JA_REWRITE:
+                s = rx.sub(to, s)
         flags = []
         for rx, fr in _FLAGS:
             if rx.search(s):
@@ -367,12 +433,14 @@ class Namer:
             s = re.sub(r"(?<![\w'])Decks?(?![\w'])", " ", s)  # « … : Méga-Tortank-EX Deck » (le type le dit déjà)
         # produits japonais : noms propres, seul le mot de type final est retiré (« Limited Collection Master … »)
         drop = (lambda x: re.sub(r"\s+(?:Box|Tins?)$", "", x)) if asia else (lambda x: LEFTOVER.sub(" ", x))
-        s = _clean(drop(self.detail(self.pokemon(s))))
-        line = _clean(drop(self.detail(self.pokemon(line)))) if line else None
+        s = _clean(drop(self.detail(self.pokemon(self.lines(s, asia), asia), asia)))
+        line = _clean(drop(self.detail(self.pokemon(self.lines(line, asia), asia), asia))) if line else None
         # parenthèses de l'anglais (« Elite Trainer Box (Charizard) ») -> détail
         inner = [_clean(x) for x in re.findall(r"\(([^()]*)\)", s)]
         subj = _clean(re.sub(r"\([^()]*\)", " ", s))
         quals = [x for x in inner if x]
+        if not asia:  # mot anglais seul (« 30th Celebration Mini Tin Bundle: Day »)
+            subj, quals = SOLO.get(subj, subj), [SOLO.get(q, q) for q in quals]
         if line and EMPTY_LINE.match(line):
             line = None
         if line and line.lower() != subj.lower() and line.lower() not in subj.lower():
@@ -389,6 +457,10 @@ class Namer:
         return out or DEFAULT.get(kind, "Coffret")
 
 
+def _singular(s):
+    return re.sub(r"\b1 (carte|booster)s\b", r"1 \1", s)  # « Booster (1 carte) »
+
+
 def _clean(s):
     if not s:
         return ""
@@ -401,4 +473,4 @@ def _clean(s):
     s = re.sub(r"^[\s,:;&/+-]+|[\s,:;&/+-]+$", "", s)
     s = re.sub(r"\s*[-–]\s*$", "", s)
     s = s.replace("((", "(").replace("))", ")")
-    return s.strip()
+    return _singular(s.strip())

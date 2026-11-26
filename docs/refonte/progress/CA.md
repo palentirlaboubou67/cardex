@@ -30,3 +30,31 @@ port 8773), `cold_test.py` (cache vide), `weigh.py` (poids de l'écran Séries),
 - contract_test.py : 0 échec. app_test.py : 186 lignes, 16 couvertures générées, 302 images (0 échec),
   84 cartes d'échantillon (0 échec, 8 vignettes attendues), 0 erreur console hors 404 data/manifest.json (dev),
   0 débordement. Planches regardées (logos clair/sombre, symboles, 84 cartes de secours).
+
+## Correctifs de la relecture (26/11/2026, reprise « fixer », port 8793) — TERMINÉ
+Scripts d'essai : scratchpad `work-CAfix\` (contract_test.py, app_test.py, appshots.py, fault_test.py,
+naming_test.py, transient2.py, sxsample_test.py, sheet.py, weigh_series.py). Sauvegarde des sorties d'avant : `before\`.
+- swsh3 : source FR opaque (RGB sur blanc) -> détourage du fond relié aux bords + liseré « couleur vers alpha »
+  (logos.py unmatte), aussi pour les symboles bw1 et 2012bw ; contrôle de sortie (aucune image opaque à fond clair).
+  swsh3 détouré tombe dans la règle « surtout noir » -> plaque claire en thème sombre (comme me03).
+- Échecs passagers : une image FR n'est « absente » que sur 404/410 ; sinon i=1 gardé et signalé (rep.images.unsure),
+  code de sortie 3. Logos/symboles : source mieux placée en échec passager -> choix précédent gardé (logoSure/symSure).
+- --verify : tirage frais de 40 identifiants Scrydex (≤ 1 req/s, ETag du dos de carte) ; un identifiant absent ou dos
+  de carte sort de `ok` ; ≥ 25 % d'échecs -> alerte, code 3.
+- Robustesse : toute exception d'une série -> fichier précédent ; JSON illisible / réponse coupée -> HttpError
+  (réessai) ; liste des séries qui perd > 3 séries publiées -> code 2, rien d'écrit ; @locale en panne -> pl4 gardé ;
+  série en échec : légalité et entrées `fix` précédentes gardées.
+- Noms des images : hash de la source (octets) + réglages + PIPE, fichier existant jamais réécrit (autre libwebp en CI
+  = mêmes noms). Tous les fichiers renommés une fois (280).
+- Tables : LOGO_SOURCE (swsh4.5 : logo FR de Poképédia), FR_LOGO_IS_EN, PARENT_SYMBOL (exu -> ex10),
+  EXTRA_SETS pl4 ownTotal (total 9), SPECIAL_BLOCS (mc, tk, pop après les grandes périodes), étiquettes année
+  McDonald's et numéro POP retirées. Cartes non-Pokémon : jamais de numéro de Pokédex (hgssp-HGSS18).
+- sets.json : blocs avec `dark` et `special` (ajouts). @locale vérifié à chaque exécution (ttl 0).
+
+## État des tests (fixer, final)
+- Exécution normale 13 s (4 requêtes) ; incrémentale 6,5 s (1 requête : sonde @locale) ; --only sv03.5 6,9 s ;
+  --verify 148 s (441 requêtes : 40 Scrydex, 400 FR fraîches), 0 échec. Code de sortie 0.
+- contract_test 0 échec ; fault_test 9/9 ; naming_test 4/4 ; transient2 / sxsample_test conformes ;
+  tools/tests/data_test.py (F2) 21/21 sur le port 8793 ; app_test : 186 lignes, 16 couvertures, 0 image en échec ;
+  vraie appli (#/series, #/serie) clair/sombre 390/1280 : 0 image cassée, 0 débordement (404 hors CA :
+  css/views/*, data/manifest.json). Planches logos clair/sombre et symboles regardées.

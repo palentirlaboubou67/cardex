@@ -62,15 +62,41 @@ def test_sealed():
     eur, low = sealed.sealed_price({"trend": 2239.24, "avg": 2103, "low": 100000})
     check(eur == 2239.24 and low is None, "Phantom Forces : « dès 100 000 € » masqué")
     eur, low = sealed.sealed_price({"trend": None, "avg": 12.5, "low": 10})
-    check(eur == 12.5 and low == 10, "sans tendance : moyenne de vente")
+    check(eur == 12.5 and low == 10, "sans tendance : moyenne de vente confirmée par l'offre")
     eur, low = sealed.sealed_price({"trend": 0, "avg": None, "low": 5, "trend-holo": 3.93})
     check(eur is None and low is None, "jamais les champs -holo pour le scellé")
+    sp = sealed.sealed_price
+    check(sp({"trend": 0.02, "avg": None, "low": None})[0] is None, "tendance 0,02 € (plancher) : pas de prix")
+    check(sp({"trend": 0.02, "avg": 69.95, "low": None})[0] is None,
+          "plancher + moyenne seule non confirmée (display EX Émeraude à 69,95 €) : pas de prix")
+    check(sp({"trend": 0.02, "avg": 1.91, "low": 0.99})[0] == 1.91, "plancher + moyenne confirmée par l'offre : moyenne")
+    check(sp({"trend": 24261, "avg": 150, "low": None})[0] == 24261,
+          "pas de garde tendance/moyenne générale (display Collection Légendaire 24 261 €)")
+    check(sp({"trend": 43.41, "avg": 1.27, "low": 0.6}, "booster", "2026-05-22")[0] == 1.27,
+          "pic d'un booster récent (fun pack à 43,41 €) : moyenne")
+    check(sp({"trend": 447.47, "avg": 839.96, "low": 1.7}, "booster", "2022-09-09")[0] is None,
+          "pic d'un booster récent, moyenne aussi aberrante : pas de prix")
+    check(sp({"trend": 7.15, "avg": 6.53, "low": 2}, "booster", "2025-09-26")[0] == 7.15,
+          "booster récent sans pic : tendance")
+    check(sp({"trend": 2.01, "avg": 1.87, "low": 0.4}, "booster", "2025-03-28")[0] == 2.01,
+          "petit écart (2,01 € pour 0,40 € d'offre) : tendance gardée")
+    check(sp({"trend": 182.82, "avg": 200, "low": 9.95}, "booster", "2008-11-01")[0] == 182.82,
+          "booster ancien (offre la moins chère peu fiable) : tendance gardée")
+    check(sp({"trend": 5292.92, "avg": 100, "low": 250}, "coffret", None)[0] == 5292.92,
+          "coffret Mario Pikachu : tendance gardée")
+    check(sealed.lang_hint("High-Class Deck Double Box: Gengar VMAX & Inteleon VMAX") == "ja",
+          "High Class Deck = japonais (même dans l'extension 1645)")
+    check(sealed.lang_hint("Silver Lance & Jet Black Spirit Expansion Pack Special Edition") == "ja",
+          "Silver Lance / Jet-Black Spirit = japonais")
+    check(sealed.lang_hint("Crimson Invasion Booster Box") is None, "Crimson Invasion reste sans indice (série internationale)")
 
 
 def test_names():
     print("noms français")
     sp = {"Charizard": "Dracaufeu", "Iron Leaves": "Vert-de-Fer", "Milotic": "Milobellus", "Pikachu": "Pikachu",
-          "Zekrom": "Zekrom", "Vulpix": "Goupix", "Gyarados": "Léviator", "Magikarp": "Magicarpe"}
+          "Zekrom": "Zekrom", "Vulpix": "Goupix", "Gyarados": "Léviator", "Magikarp": "Magicarpe", "Moltres": "Sulfura",
+          "Garchomp": "Carchacrok", "Palkia": "Palkia", "Gengar": "Ectoplasma", "Crobat": "Nostenfer",
+          "Victini": "Victini"}
     sets = {"sv03.5": ("151", "151"), "sv05": ("Forces Temporelles", "Temporal Forces"),
             "swsh2": ("Clash des Rebelles", "Rebel Clash"), "bw8": ("Tempète Plasma", "Plasma Storm"),
             "swsh3.5": ("La Voie du Maître", "Champion's Path"), "hgss1": ("HeartGold SoulSilver", "HeartGold SoulSilver")}
@@ -90,6 +116,21 @@ def test_names():
         (("HeartGold & SoulSilver Booster Box", "box", "hgss1"), "Display – HeartGold SoulSilver"),
         (("Tag Team Tins: Pikachu & Zekrom GX Tin", "tin", None), "Pokébox Pikachu et Zekrom-GX (Tag Team)"),
         (("Pokémon Card 151 Booster Box Case", "case", None, True), "Carton de displays – Pokémon Card 151"),
+        (("Pokémon Card Gym Promo MEGA Vol. 2 Booster (1 Card)", "booster", None, True),
+         "Booster (1 carte) – Pokémon Card Gym Promo MEGA Vol. 2"),
+        (("EX Deck Tins: Fire Red and Leaf Green Tin", "tin", None), "Pokébox Rouge Feu et Vert Feuille (EX Deck)"),
+        (("Legendary Battle Deck: Moltres", "deck", None), "Deck de combat légendaire Sulfura"),
+        (("Garchomp vs Charizard SP Deck Kit", "deck", None), "Kit de decks SP Carchacrok contre Dracaufeu"),
+        (("Cyrus / Klara Premium Tournament Collection Display", "case", None),
+         "Présentoir de coffrets Premium Tournoi Cyrus / Klara"),
+        (("Origin Forme Palkia VSTAR Premium Collection", "coffret", None), "Coffret Premium Palkia Originel VSTAR"),
+        (("30th Celebration Charizard Collector’s Figure Box", "coffret", None, True),
+         "Coffret 30th Celebration Dracaufeu Collector's Figure"),
+        (("The Glory of Team Rocket Collector's Set", "coffret", None, True), "Coffret The Glory of Team Rocket Collector's Set"),
+        (("MEGA Starter Set Mega Gengar ex", "deck", None, True), "Set de démarrage Méga-Ectoplasma-ex (MEGA)"),
+        (("Fire Charizard GX Deck", "deck", None, True), "Deck Dracaufeu-GX (type Feu)"),
+        (("Shiny Star V: Crobat V Shiny Box", "coffret", None, True), "Coffret Nostenfer V chromatique (Shiny Star V)"),
+        (("Black & White Victini Box", "coffret", None), "Coffret Noir et Blanc Victini"),
     ]
     for args, want in cases:
         got = n.name(args[0], args[1], args[2], asia=len(args) > 3)
@@ -130,6 +171,27 @@ def test_hist():
         H3.compact(date(2026, 11, 25))
         check(H3.points("8") == [("2025-06-02", 70)] and H3.points("9") == [("2025-06-02", 50)],
               "compactage : un point par semaine, valeur de chaque produit gardée")
+        # valeurs fausses : 0,02 € jamais relu, jour recalculé (correction), colonne retirée si tout était faux
+        d5 = tempfile.mkdtemp(prefix="mk-hist-")
+        with open(os.path.join(d5, "7.json"), "w", encoding="utf8") as f:
+            json.dump({"d": ["2026-11-01", "2026-11-02"], "p": {"70": [2, 2], "71": [2, 500], "72": [4300, 120]}}, f)
+        with open(os.path.join(d5, "8.json"), "w", encoding="utf8") as f:
+            json.dump({"d": ["2026-11-01"], "p": {"80": [2]}}, f)
+        H5 = hist.History(d5)
+        check(H5.points("71") == [("2026-11-02", 500)] and not H5.points("70"), "0,02 € n'est jamais relu")
+        H5.set_day("2026-11-01", {"72": 130}, ["70", "71", "72"])
+        H5.set_day("2026-11-02", {}, ["72"])
+        check(H5.points("72") == [("2026-11-01", 130)], "jour recalculé : valeur remplacée ou retirée")
+        H5.compact(date(2026, 11, 25))
+        files, _ = H5.prepare()
+        H5.commit(files)
+        h5 = json.load(open(os.path.join(d5, "7.json"), encoding="utf8"))
+        check(set(h5["p"]) == {"71", "72"} and not os.path.exists(os.path.join(d5, "8.json")),
+              "colonne et fichier qui n'avaient que des valeurs fausses retirés, rien d'autre")
+        check(H5.shard_of("70") is None and H5.shard_of("71") == "7", "fichier d'historique seulement avec des points")
+        s5 = hist.summary([("2026-10-01", 2), ("2026-11-24", 100), ("2026-11-25", 110)], date(2026, 11, 25))
+        check(s5["first"] == 1.0 and s5["since"] == "2026-11-24", "variations : jamais le plancher comme base")
+        shutil.rmtree(d5, ignore_errors=True)
         # ne rétrécit jamais
         H4 = hist.History(d)
         H4.series["2"] = {}
@@ -174,10 +236,47 @@ def test_end_to_end():
         m1 = json.load(open(os.path.join(out, "meta.json"), encoding="utf8"))
         hist0 = {f: open(os.path.join(out, "hist", f), "rb").read() for f in os.listdir(os.path.join(out, "hist"))}
         # même guide : pas de nouveau point d'historique
+        sealed0 = open(os.path.join(out, "sealed.json"), "rb").read()
         r = run(["--offline", "--out", out])
         check(r.returncode == 0 and "pas de nouveau point" in r.stdout, "même createdAt : pas de nouveau point")
         hist1 = {f: open(os.path.join(out, "hist", f), "rb").read() for f in os.listdir(os.path.join(out, "hist"))}
         check(hist0 == hist1, "même createdAt : historique inchangé")
+        check(open(os.path.join(out, "sealed.json"), "rb").read() == sealed0 and "sealed.json inchangé" in r.stdout,
+              "même guide : sealed.json identique (updatedAt gardé, même hachage dans le manifeste)")
+        check("table TCGdex -> Cardmarket refaite" not in r.stdout, "table à jour : pas reconstruite par le quotidien")
+        cmj = json.load(open(os.path.join(out, "cm-map.json"), encoding="utf8"))
+        check(isinstance(cmj.get("unlinked"), list), f"cm-map.json : {len(cmj.get('unlinked') or [])} cartes sans lien notées")
+        app = {}
+        for sp in os.listdir(os.path.join(ROOT, "data", "sets")):
+            j = json.load(open(os.path.join(ROOT, "data", "sets", sp), encoding="utf8"))
+            for c in j.get("cards", []):
+                app[f"{j['id']}-{c['l']}"] = c.get("f") or []
+        extra = [(sid, loc, f) for sid in os.listdir(os.path.join(out, "prices"))
+                 for loc, fins in json.load(open(os.path.join(out, "prices", sid), encoding="utf8"))["c"].items()
+                 for f in fins if f"{sid[:-5]}-{loc}" not in app or (f in ("stamp", "firstEdition")
+                                                                    and f not in app[f"{sid[:-5]}-{loc}"])]
+        check(not extra, f"cotes : seulement les cartes de l'appli, 1re édition / tampon là où elles sont listées {extra[:3]}")
+        same = bad_same = 0
+        for sid, cards in cmj["cards"].items():
+            pf = os.path.join(out, "prices", f"{sid}.json")
+            if not os.path.exists(pf):
+                continue
+            c = json.load(open(pf, encoding="utf8"))["c"]
+            for loc, fins in cards.items():
+                base = fins.get("normal") or fins.get("holo")
+                for f in ("firstEdition", "stamp"):
+                    if f in fins and base and fins[f] == base and f in c.get(loc, {}):
+                        same += 1
+                        b = c[loc].get("normal" if "normal" in fins and fins["normal"] == base else "holo")
+                        bad_same += c[loc][f] != b
+        check(same > 100 and not bad_same, f"1re édition sans produit à part : tableau identique à la carte de base ({same})")
+        # carte de l'appli inconnue de la table : le quotidien refait la table
+        cmj2 = dict(cmj, unlinked=[])
+        with open(os.path.join(out, "cm-map.json"), "w", encoding="utf8") as f:
+            json.dump(cmj2, f, ensure_ascii=False)
+        r = run(["--offline", "--out", out])
+        check(r.returncode == 0 and "table TCGdex -> Cardmarket refaite" in r.stdout,
+              "carte de l'appli inconnue de la table : table refaite par le quotidien")
         snap = {f: open(os.path.join(dp, f), "rb").read() for dp, _, fs in os.walk(out) for f in fs}
         # source cassée : sortie 2, rien n'est modifié
         bad = tempfile.mkdtemp(prefix="mk-cache-")

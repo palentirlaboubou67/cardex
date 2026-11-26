@@ -8,11 +8,17 @@ const codeOf = m => String(m?.code || m?.id || '?').toUpperCase().replace(/[^A-Z
 // image d'un autre hôte : toujours en CORS (le service worker ne garde que des réponses lisibles, SPEC §7)
 const cors = u => (/^https?:\/\//.test(u) && !u.startsWith(location.origin) ? ' crossorigin="anonymous"' : '');
 
+// étiquette d'une sous-série qui reprend le logo de sa série mère (« Galerie », « 2021 ») : écrite sous le logo
+const tagged = (m, size) => !!(m?.tag && size !== 'bloc');
+const tagHTML = (m, size) => (tagged(m, size) ? `<span class="setlogo-tag">${esc(m.tag)}</span>` : '');
+
 function monoHTML(m, size) {
   const sym = m?.sym ? `<img class="setsym" src="${esc(m.sym)}"${cors(m.sym)} alt="" decoding="async">` : '';
-  return `<span class="setlogo setlogo-${size} mono" aria-hidden="true">${sym}<span class="code">${esc(codeOf(m))}</span>${tagHTML(m, size)}</span>`;
+  const inner = `${sym}<span class="code">${esc(codeOf(m))}</span>`;
+  return tagged(m, size)
+    ? `<span class="setlogo setlogo-${size} mono tagged" aria-hidden="true"><span class="mono-in">${inner}</span>${tagHTML(m, size)}</span>`
+    : `<span class="setlogo setlogo-${size} mono" aria-hidden="true">${inner}</span>`;
 }
-const tagHTML = (m, size) => (m?.tag && size !== 'bloc' ? `<span class="setlogo-tag">${esc(m.tag)}</span>` : '');
 
 // setLogoHTML(setMeta, { size: 'row' (64 × 36) | 'hero' (160 × 64) | 'bloc' (16 px de haut) }) → Safe
 export function setLogoHTML(meta, { size = 'row' } = {}) {
@@ -20,7 +26,7 @@ export function setLogoHTML(meta, { size = 'row' } = {}) {
   installFallback();
   if (!meta?.logo) return raw(monoHTML(meta, s));
   const eager = s === 'hero';
-  return html`<span class="setlogo setlogo-${s}${meta.dark ? ' dark' : ''}" aria-hidden="true" data-code="${codeOf(meta)}"${meta.sym ? raw(` data-sym="${esc(meta.sym)}"`) : ''}${meta.tag ? raw(` data-tag="${esc(meta.tag)}"`) : ''}><img src="${meta.logo}"${raw(cors(meta.logo))} alt=""${eager ? raw(' fetchpriority="high"') : raw(' loading="lazy"')} decoding="async">${raw(tagHTML(meta, s))}</span>`;
+  return html`<span class="setlogo setlogo-${s}${meta.dark ? ' dark' : ''}${tagged(meta, s) ? ' tagged' : ''}" aria-hidden="true" data-code="${codeOf(meta)}"${meta.sym ? raw(` data-sym="${esc(meta.sym)}"`) : ''}${meta.tag ? raw(` data-tag="${esc(meta.tag)}"`) : ''}><img src="${meta.logo}"${raw(cors(meta.logo))} alt=""${eager ? raw(' fetchpriority="high"') : raw(' loading="lazy"')} decoding="async">${raw(tagHTML(meta, s))}</span>`;
 }
 
 // setSymHTML(setMeta, { size }) → Safe : le petit symbole imprimé sur les cartes, ou rien

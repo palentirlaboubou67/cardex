@@ -5,10 +5,14 @@
   python -P tools/scan_bench.py synth [--preset standard|hard|wide] [--n 300] [--seed 1] [--cpu 1,4] [--absent]
   python -P tools/scan_bench.py real --real DIR                       photos réelles (non versionnées)
   python -P tools/scan_bench.py live                                  fausse caméra (clip y4m) et boucle complète
-  python -P tools/scan_bench.py ocr                                   lecture du numéro (tesseract.js)
-  python -P tools/scan_bench.py all --real DIR                        tout, avec un résumé final
+  python -P tools/scan_bench.py loop                                  scénarios de la boucle (hors ligne, destroy,
+                                                                      déclencheur, netteté, base indisponible, OCR)
+  python -P tools/scan_bench.py api [--no-offscreen]                  API publique (import, ocrFallback, erreurs)
+  python -P tools/scan_bench.py ocr [--ocr-mode net]                  lecture du numéro (tesseract.js)
+  python -P tools/scan_bench.py all --real DIR --cases JSON           tout, avec un résumé final
 
-Fichiers générés : .cache/sc/bench/ (photos synthétiques, clips, résultats JSON). Port local : 8775.
+Fichiers générés : .cache/sc/bench/ (photos synthétiques, clips, résultats JSON). Port local : 8775 (--port N).
+Décision « hors ligne » (*_off) : la même décision sans images high.webp (réimpressions et sosies → choix).
 """
 import argparse
 import functools
@@ -32,7 +36,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools", "scanbench"))
 CACHE = os.path.join(ROOT, ".cache", "sc")
 IMG = os.path.join(CACHE, "tcgdex")
 BENCH = os.path.join(CACHE, "bench")
-PORT = 8775
+PORT = int(os.environ.get("CARDEX_SCAN_PORT", "8775"))     # --port pour un autre banc en parallèle
 BASE = f"http://127.0.0.1:{PORT}"
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -73,6 +77,7 @@ def urllib_unquote(s):
 def serve():
     handler = functools.partial(Handler, directory=ROOT)
     http.server.ThreadingHTTPServer.allow_reuse_address = True
+    http.server.ThreadingHTTPServer.request_queue_size = 128   # file d'attente : 5 par défaut, Windows refuse les rafales
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
@@ -81,11 +86,13 @@ def serve():
 class Browser:
     """Chromium sans interface ; console et erreurs de page relevées."""
 
-    def __init__(self, args=None, page="tools/scanbench/bench.html", permissions=None, init_script=None):
+    def __init__(self, args=None, page="tools/scanbench/bench.html", permissions=None, init_script=None, routes=None):
         from playwright.sync_api import sync_playwright
         self.pw = sync_playwright().start()
         self.b = self.pw.chromium.launch(args=args or [])
         self.ctx = self.b.new_context(viewport={"width": 390, "height": 844}, permissions=permissions or [])
+        for pattern, handler in routes or []:
+            self.ctx.route(pattern, handler)
         self.page = self.ctx.new_page()
         if init_script:
             self.page.add_init_script(init_script)
@@ -336,40 +343,87 @@ def corner_err(quad, corners):
     return float(np.max(np.linalg.norm(qd - c, axis=1)) / ch)
 
 
-REGION_MARGIN = 0.01
+REGION_MARGIN = 0.01    # js/scan/loop.js LOOP.regionMargin
+SELF_MIN = None         # contrôle de la zone de la seule carte n° 1 : mesuré (--self), non appliqué (voir loop.js)
 
 
-def settle_py(r, margin=REGION_MARGIN):
-    """Décision finale comme js/scan/loop.js settle() sur une seule image : (« accept » | « choose » | None, id)."""
+def settle_py(r, margin=REGION_MARGIN, self_min=SELF_MIN, offline=False):
+    """Décision finale comme js/scan/loop.js settle() sur une seule image : (« accept » | « choose » | None, id).
+    offline = images high.webp indisponibles (hors ligne, réseau lent, image manquante) : pas de zone du numéro."""
     top = r.get("top") or []
     if not top:
         return None, None
     top1 = top[0][0]
     if r.get("level") not in ("strong", "normal"):
         return ("choose" if r.get("d1", 9) <= 1.45 else None), top1
-    ids = list(dict.fromkeys([top1] + (r.get("group") or []) + (r.get("rivals") or [])))
-    if len(ids) > 1:
-        regs = r.get("regions")
-        if regs:
-            m = regs[0][1] - regs[1][1] if len(regs) > 1 else 1
-            return ("accept" if m >= margin else "choose"), regs[0][0]
-        if r.get("rivals"):
-            return "choose", top1
+    fam = list(dict.fromkeys([top1] + (r.get("group") or []) + (r.get("rivals") or [])))
+    twins = r.get("twins") or []
+    if len(fam) > 1:
+        regs = None if offline else r.get("regions")
+        if not regs or len(regs) < len(fam) or any(sc is None for _, sc in regs):
+            return "choose", top1                       # versions non comparables : jamais acceptées
+        best = regs[0][0]
+        m = regs[0][1] - regs[1][1] if len(regs) > 1 else 1
+        if twins or m < margin or (self_min is not None and regs[0][1] < self_min):
+            return "choose", best
+        return "accept", best
+    if twins:
+        return "choose", top1
+    sc = None if offline else r.get("self")
+    if self_min is not None and sc is not None and sc < self_min:
+        return "choose", top1
     return "accept", top1
+
+
+LOOKALIKE_NN = 1.1
+_NN = {}
+
+
+def ref_nn(cards):
+    """{id: distance de référence (hashes.bin) à la carte la plus proche hors de son groupe de réimpressions}."""
+    if "nn" not in _NN:
+        h = np.unpackbits(np.frombuffer(open(os.path.join(ROOT, "data", "scan", "hashes.bin"), "rb").read(), np.uint8).reshape(-1, 64), axis=1)
+        hf = h.astype(np.float32)
+        s1 = hf.sum(1)
+        row = {c: i for i, c in enumerate(cards["ids"])}
+        gid = np.full(len(row), -1)
+        for k, g in enumerate(cards["dups"]):
+            for c in g:
+                gid[row[c]] = k
+        out = np.full(len(row), 999.0)
+        for a in range(0, len(row), 2048):
+            b = min(len(row), a + 2048)
+            d = s1[a:b, None] + s1[None, :] - 2 * (hf[a:b] @ hf.T)
+            d[np.arange(b - a), np.arange(a, b)] = 999
+            same = (gid[a:b, None] == gid[None, :]) & (gid[a:b, None] >= 0)
+            d[same] = 999
+            out[a:b] = d.min(1)
+        _NN["nn"] = {c: float(out[i]) / 128 for c, i in row.items()}
+    return _NN["nn"]
 
 
 def score(results, truth, cards, absent=False):
     """Métriques d'une série de résultats (voir FINAL-scanner §8.3). « accept_final » / « prec_final » : décision
-    finale de la boucle (départage par la zone du numéro compris), sur une seule image (sans vote 2 sur 3)."""
+    finale de la boucle (départage et contrôle par la zone du numéro compris), sur une seule image (sans vote 2 sur 3).
+    « *_off » : même décision sans images high.webp (hors ligne)."""
     grp = groups_of(cards)
     n = len(results)
     m = {"n": n}
     if absent:
         acc_s = sum(1 for r in results if r.get("level") == "strong")
         acc = sum(1 for r in results if r.get("level") in ("strong", "normal"))
-        fin = sum(1 for r in results if settle_py(r)[0] == "accept")
-        m.update(fa_strong=pct(acc_s, n), fa=pct(acc, n), fa_final=pct(fin, n))
+        fin = [settle_py(r)[0] == "accept" for r in results]
+        off = sum(1 for r in results if settle_py(r, offline=True)[0] == "accept")
+        # carte sans réimpression de même illustration dans la base (plus proche voisin de référence hors de son
+        # groupe à d > 1,1) / avec : une carte réellement absente de la base est une carte sans image (jumelles → choix)
+        # ou d'une série pas encore construite
+        nn = ref_nn(cards)
+        uni = [f for f, t in zip(fin, truth) if nn.get(t["id"], 9) > LOOKALIKE_NN]
+        lka = [f for f, t in zip(fin, truth) if nn.get(t["id"], 9) <= LOOKALIKE_NN]
+        m.update(fa_strong=pct(acc_s, n), fa=pct(acc, n), fa_final=pct(sum(fin), n), fa_off=pct(off, n),
+                 fa_unique=pct(sum(uni), len(uni)), n_unique=len(uni), fa_lookalike=pct(sum(lka), len(lka)), n_lookalike=len(lka))
         return m
+    oacc = ook = 0
     s1 = t1 = t5 = 0
     acc_s = acc = ok_s = ok = 0
     strict_after = 0
@@ -409,6 +463,10 @@ def score(results, truth, cards, absent=False):
             facc += 1
             fok += fid in g
             fstrict += fid == cid
+        dec, fid = settle_py(r, offline=True)
+        if dec == "accept":
+            oacc += 1
+            ook += fid == cid
         if len(g) > 1:
             reprint_n += 1
             reprint_ok += final == cid
@@ -423,6 +481,7 @@ def score(results, truth, cards, absent=False):
              accept_strong=pct(acc_s, n), prec_strong=pct(ok_s, acc_s), accept=pct(acc, n), prec=pct(ok, acc),
              wrong_accepts=acc - ok, strict_after_region=pct(strict_after, n),
              accept_final=pct(facc, n), prec_final=pct(fok, facc), prec_final_strict=pct(fstrict, facc), wrong_final=facc - fok,
+             accept_off=pct(oacc, n), prec_off_strict=pct(ook, oacc), wrong_off_strict=oacc - ook,
              reprints=f"{reprint_ok}/{reprint_n}",
              err_p50=q(errs, 0.5) * 100, err_p90=q(errs, 0.9) * 100,
              ms_p50=q(ms, 0.5), ms_p90=q(ms, 0.9), nev_p50=q(nev, 0.5), nev_p90=q(nev, 0.9),
@@ -433,9 +492,9 @@ def score(results, truth, cards, absent=False):
 
 def fmt(m):
     keys = ["n", "top1", "top1_strict", "top5", "accept_strong", "prec_strong", "accept", "prec", "wrong_accepts",
-            "accept_final", "prec_final", "prec_final_strict", "wrong_final",
+            "accept_final", "prec_final", "prec_final_strict", "wrong_final", "accept_off", "prec_off_strict", "wrong_off_strict",
             "strict_after_region", "reprints", "err_p50", "err_p90", "ms_p50", "ms_p90", "nev_p50", "nev_p90",
-            "region_ms_p50", "fa_strong", "fa", "fa_final"]
+            "region_ms_p50", "fa_strong", "fa", "fa_final", "fa_off", "fa_unique", "n_unique", "fa_lookalike", "n_lookalike"]
     parts = []
     for k in keys:
         if k in m and m[k] is not None:
@@ -458,7 +517,7 @@ def cmd_synth(a, br=None):
         for rate in [int(x) for x in a.cpu.split(",") if x.strip() and int(x) > 0]:
             br.cpu(rate)
             sub = cases if rate == 1 else cases[:a.n_slow]
-            res = run_cases(br, sub, {"exclude": False, "self": a.self_check}, label=f"{a.preset} ×{rate}")
+            res = run_cases(br, sub, {"exclude": False, "self": a.self}, label=f"{a.preset} ×{rate}")
             m = score(res, truth[:len(sub)], cards)
             print(f"[{a.preset} CPU ×{rate}] {fmt(m)}")
             if rate == 1:
@@ -468,10 +527,12 @@ def cmd_synth(a, br=None):
         br.cpu(1)
         if a.absent:
             sub = cases[:a.n_absent]
-            res = run_cases(br, sub, {"exclude": True, "self": a.self_check}, label=f"{a.preset} absente")
+            res = run_cases(br, sub, {"exclude": True, "self": a.self}, label=f"{a.preset} absente")
             m = score(res, truth[:len(sub)], cards, absent=True)
             print(f"[{a.preset} carte absente] n={m['n']}  fausses acceptations : forte {m['fa_strong']:.1f} %  "
-                  f"forte+normale {m['fa']:.1f} %  décision finale {m['fa_final']:.1f} %")
+                  f"forte+normale {m['fa']:.1f} %  décision finale {m['fa_final']:.1f} % (hors ligne {m['fa_off']:.1f} %) ; "
+                  f"illustration unique {m['fa_unique']:.1f} % (n={m['n_unique']}), réimpression de même illustration "
+                  f"dans la base {m['fa_lookalike']:.1f} % (n={m['n_lookalike']})")
             out["absent"] = m
             json.dump(res, open(os.path.join(BENCH, f"res_{a.preset}_absent.json"), "w"))
         if br.errors:
@@ -620,30 +681,47 @@ def cmd_real(a, br=None):
         br.ev("bench.init()")
         br.ev("l => bench.setLocal(l)", sorted(set(high_index().values())))
         rows = []
-        res = br.ev("([c, o]) => bench.runCases(c, o)", [[g[0] for g in guided], {"self": a.self_check}])
-        res += br.ev("([c, o]) => bench.runCases(c, o)", [[g[0] for g in unguided], {"unguided": True, "self": a.self_check}])
+        det = br.ev("c => bench.detectCases(c)", [g[0] for g in guided])
+        res = br.ev("([c, o]) => bench.runCases(c, o)", [[g[0] for g in guided], {"self": a.self}])
+        res += br.ev("([c, o]) => bench.runCases(c, o)", [[g[0] for g in unguided], {"unguided": True, "self": a.self}])
         grp = groups_of(cards)
         stats = {}
+        gate = {}
+        for (case, c), r, dt in zip(guided, res, det):
+            s = gate.setdefault(c["holder"], {"n": 0, "seen": 0, "auto": 0})
+            s["n"] += 1
+            s["seen"] += dt["present"]
+            s["auto"] += dt["present"] and settle_py(r)[0] == "accept"
+            if not dt["present"]:
+                print(f"    détection de la boucle : {c['id']} {c['holder']} côtés {dt['found']} quad {dt['quad']} → carte non vue")
+        for h, s in gate.items():
+            print(f"[réel · boucle · {h}] n={s['n']} carte vue par la détection {s['seen']} ; vue et acceptée (capture auto) {s['auto']}")
+        out["gate"] = gate
         for (case, c), r in zip(guided + unguided, res):
             g = grp.get(c["id"], {c["id"]})
             top = [x[0] for x in r.get("top") or []]
             ok1 = bool(top) and top[0] in g
-            acc = r.get("level") in ("strong", "normal")
+            dec, fid = settle_py(r)
+            acc = dec == "accept"
+            deo, fio = settle_py(r, offline=True)
             h = c["holder"]
-            s = stats.setdefault(h, {"n": 0, "top1": 0, "top5": 0, "accept": 0, "wrong": 0, "d": []})
+            s = stats.setdefault(h, {"n": 0, "top1": 0, "top5": 0, "accept": 0, "wrong": 0, "accept_off": 0, "wrong_off": 0, "d": []})
             s["n"] += 1
             s["top1"] += ok1
             s["top5"] += any(x in g for x in top)
             s["accept"] += acc
-            s["wrong"] += acc and not ok1
+            s["wrong"] += acc and fid not in g
+            s["accept_off"] += deo == "accept"
+            s["wrong_off"] += deo == "accept" and fio != c["id"]
             if ok1:
                 s["d"].append(r["d1"])
             rows.append(f"    {c['id']:<16} {h:<10} {'ok ' if ok1 else 'NON'} top1={top[0] if top else None} d1={r.get('d1', 0):.3f} "
-                        f"d2={r.get('d2', 0):.3f} {r.get('level')} {r.get('stage')} nev={r.get('nev')} {r.get('ms', 0):.0f} ms")
+                        f"d2={r.get('d2', 0):.3f} {r.get('level')} {r.get('stage')} self={r.get('self')} → {dec} {fid} "
+                        f"nev={r.get('nev')} {r.get('ms', 0):.0f} ms")
         print("\n".join(rows))
         for h, s in stats.items():
             print(f"[réel · {h}] n={s['n']} top1={s['top1']} top5={s['top5']} acceptées={s['accept']} fausses={s['wrong']} "
-                  f"d médiane={statistics.median(s['d']) if s['d'] else float('nan'):.3f}")
+                  f"(hors ligne {s['accept_off']} / {s['wrong_off']}) d médiane={statistics.median(s['d']) if s['d'] else float('nan'):.3f}")
         out["holders"] = {h: {k: v for k, v in s.items() if k != "d"} | {"d_med": statistics.median(s["d"]) if s["d"] else None}
                           for h, s in stats.items()}
         json.dump([dict(r, truth=c["id"], holder=c["holder"]) for (case, c), r in zip(guided + unguided, res)],
@@ -676,7 +754,9 @@ def cmd_live(a, br=None):
     grp = groups_of(cards)
     have = high_index()
     out = {}
-    ids = a.clip or ["sv03.5-025", "base1-4"]
+    # base1-4 a une jumelle sans image (Collection Classique cel25cc-CC002) : un choix attendu, jamais d'acceptation
+    ids = a.clip or ["sv03.5-025", "base1-4", "neo1-9"]
+    twins = cards.get("twins", {})
     for cid in ids:
         if cid not in have:
             print(f"  ! pas d'image haute définition pour {cid}")
@@ -724,6 +804,7 @@ def cmd_live(a, br=None):
         full = [i for i in range(len(bounds) - 1)]          # passages complets
         ok_pass = 0
         rows = []
+        tw = set(twins.get(cid, []))
         for i in full:
             pa = [e for e in acc if pass_of(e["t"]) == i]
             good = [e for e in pa if e["best"]["id"] in grp.get(cid, {cid})]
@@ -731,7 +812,14 @@ def cmd_live(a, br=None):
             late = [e for e in pa if e["f"] > s0 + 2 * FPS]   # plus de 2 s après l'arrêt
             stop_t = bounds[i] + s0 / FPS * 1000
             delay = [round(e["t"] - stop_t) for e in pa]
-            ok = len(pa) == 1 and len(good) == 1 and not early and not late
+            if tw:
+                # jumelle sans image : un choix (image) qui la liste, dans les 2 s après l'arrêt, aucune acceptation
+                pc = [e for e in cho if pass_of(e["t"]) == i]
+                listed = all(tw & {c["id"] for c in e["candidates"]} for e in pc)
+                delay = [round(e["t"] - stop_t) for e in pc]
+                ok = not pa and bool(pc) and listed and pc[0]["f"] >= s0 and pc[0]["f"] <= s0 + 2 * FPS
+            else:
+                ok = len(pa) == 1 and len(good) == 1 and not early and not late
             ok_pass += ok
             rows.append(f"    passage {i + 1} : {len(pa)} acceptation(s) {[(e['best']['id'], e['f'], e['ms']) for e in pa]} "
                         f"délai après l'arrêt {delay} ms, choix {len([e for e in cho if pass_of(e['t']) == i])} → {'OK' if ok else 'ÉCHEC'}")
@@ -877,14 +965,18 @@ def cmd_ocr(a, br=None):
     rows = []
     for r in res:
         k = kinds[r["id"]]
-        s = stats.setdefault(k, {"n": 0, "exact": 0, "free_ok": 0, "free_in": 0, "free_wrong": 0, "ver_ok": 0, "ver_wrong": 0})
+        s = stats.setdefault(k, {"n": 0, "exact": 0, "num": 0, "code": 0, "free_ok": 0, "free_in": 0, "free_wrong": 0, "ver_ok": 0, "ver_wrong": 0})
         s["n"] += 1
         if r.get("error"):
             continue
         exp = r["exp"]
         code, num = (exp.split("FR", 1) if "FR" in exp[3:5] else ("", exp))
-        exact = any(num in norm(t["text"]) and (not code or code in norm(t["text"])) for t in r["texts"])
+        has_num = any(num in norm(t["text"]) for t in r["texts"])
+        has_code = bool(code) and any(code in norm(t["text"]) for t in r["texts"])
+        exact = has_num and (not code or has_code)
         s["exact"] += exact
+        s["num"] += has_num
+        s["code"] += has_code
         fr, ve = r["free"], r["ver"]
         if fr:
             s["free_in"] += r["id"] in fr["ids"]
@@ -899,9 +991,10 @@ def cmd_ocr(a, br=None):
             rows.append(f"    {r['id']:<16} attendu {exp:<18} lu {[t['text'] for t in r['texts']]}")
     print("\n".join(rows[:30]))
     for k, s in stats.items():
-        print(f"[OCR · {k}] n={s['n']} lecture exacte {s['exact']} · grammaire seule : carte unique juste {s['free_ok']}, "
-              f"fausse {s['free_wrong']}, carte parmi les candidats {s['free_in']} · vérification (candidats image) : "
-              f"juste {s['ver_ok']}, fausse {s['ver_wrong']}")
+        print(f"[OCR · {k}] n={s['n']} numéro lu {s['num']}" + (f", code lu {s['code']}" if k.startswith("sv") else "") +
+              f" · grammaire seule (carte sans image) : acceptée juste {s['free_ok']}, fausse {s['free_wrong']}, "
+              f"carte parmi les propositions {s['free_in']} · vérification (candidats de l'image) : juste {s['ver_ok']}, "
+              f"fausse {s['ver_wrong']}")
     ok_raw = sum(1 for r in rres if any(r["exp"] in norm(t) for t in r["texts"]))
     in_raw = sum(1 for r in rres if r["free"] and r["id"] in r["free"]["ids"])
     print(f"[OCR · lignes rendues TG/GG] n={len(rres)} lecture exacte {ok_raw} · carte parmi les candidats {in_raw} "
@@ -967,6 +1060,9 @@ def cmd_api(a):
         for x in o:
             r = x["r"]
             print(f"    ocrFallback {x['id']:<16} {r and r['decision']} {r and r['best']['id']} lu {r and r.get('text')} {x['ms']:.0f} ms")
+        bad = b.ev("""async () => { try { await window.live.scan.identifyImage(new Blob(['bonjour'], { type: 'text/plain' })); return 'pas d’erreur'; }
+                      catch (e) { return e.name + ' / ' + e.kind + ' / ' + e.message; } }""")
+        print(f"    fichier qui n'est pas une image : {bad}")
         warm = b.ev("async () => { const S = window.live.scan; const t0 = performance.now(); const n = await S.warmOcr(); return [n, performance.now() - t0]; }")
         print(f"    warmOcr : {warm[0]} octets en {warm[1]:.0f} ms")
         cam = b.ev("""async () => { try { await window.live.scan.openCamera(document.getElementById('v')); return 'ouverte'; }
@@ -975,6 +1071,201 @@ def cmd_api(a):
         print(f"    erreurs console : {b.errors[:5]}")
     finally:
         b.close()
+
+
+# ----------------------------------------------------------------------------------------------------------
+# loop : scénarios de la boucle et de l'API (vraie page tools/scanbench/live.html, worker, flux de canvas)
+
+def cmd_loop(a):
+    cards = load_cards()
+    grp = groups_of(cards)
+    twins = cards.get("twins", {})
+    _, truth = gen_synth("standard", 300, a.seed)
+    rel = f"standard_300_s{a.seed}"
+
+    def url(t):
+        return f"/__bench/{rel}/{t['file']}"
+
+    def frac(t):
+        from PIL import Image
+        with Image.open(os.path.join(BENCH, rel, t["file"])) as im:
+            W, H = im.size
+        g = t["guide"]
+        return [g[0] / W, g[1] / H, g[2] / W, g[3] / H]
+
+    def block(route):
+        route.abort()
+
+    out = {}
+    # carte sans réimpression ni jumelle, reconnue « forte » (voir res_standard_x1.json si présent)
+    strong = set()
+    rp = os.path.join(BENCH, "res_standard_x1.json")
+    if os.path.exists(rp):
+        strong = {r["id"] for r in json.load(open(rp)) if r.get("level") == "strong"}
+    single = next(t for t in truth if t["id"] not in grp and t["id"] not in twins and (not strong or t["id"] in strong))
+
+    # 1. hors ligne (high.webp bloquées) : réimpressions et sosies jamais acceptés sur l'image seule
+    b = Browser(page="tools/scanbench/live.html", routes=[("https://assets.tcgdex.net/**", block)])
+    try:
+        b.ev("() => window.live.ready")
+        fam = [t for t in truth if t["id"] in grp]
+        res = [b.ev("([u, g]) => window.live.identifyGuided(u, g)", [url(t), t["guide"]]) for t in fam]
+        acc = [(t["id"], r["res"]["best"]) for t, r in zip(fam, res) if r["res"] and r["res"]["decision"] == "accept"]
+        wrong = [x for x in acc if x[0] != x[1]]
+        ok = not acc
+        print(f"[loop · hors ligne] {len(fam)} cartes avec réimpressions : acceptées {len(acc)}, mauvaise série {len(wrong)} → {'OK' if ok else 'ÉCHEC'}")
+        out["offline"] = ok
+    finally:
+        b.close()
+
+    # 2. stop() / destroy() pendant l'identification (zone du numéro lente) : plus aucun événement
+    t = next(t for t in truth if t["id"] in grp)
+
+    def slow(route):
+        time.sleep(3)
+        route.abort()
+    b = Browser(page="tools/scanbench/live.html", routes=[("https://assets.tcgdex.net/**", slow)])
+    try:
+        b.ev("() => window.live.ready")
+        b.ev("([u, f]) => window.live.startSeq(u, f)", [url(t), frac(t)])
+        b.page.wait_for_function("window.live.events.some(e => e.state === 'identifying')", timeout=20000)
+        b.page.wait_for_timeout(300)
+        n0 = b.ev("() => { const l = window.live.loop; l.stop(); l.destroy(); window.live.scan.closeCamera(); return window.live.events.length; }")
+        b.page.wait_for_timeout(7000)
+        after = b.ev("n => window.live.events.slice(n)", n0)
+        ok = not after
+        print(f"[loop · destroy] événements après destroy() : {len(after)} → {'OK' if ok else 'ÉCHEC ' + str(after[:3])}")
+        out["destroy"] = ok
+    finally:
+        b.close()
+
+    # 3. stop() puis shutter() : une seule identification, la boucle reste arrêtée ; auto: false
+    b = Browser(page="tools/scanbench/live.html", routes=[("https://assets.tcgdex.net/**", block)])
+    try:
+        b.ev("() => window.live.ready")
+        b.ev("([u, f]) => window.live.startSeq(u, f)", [url(single), frac(single)])
+        b.page.wait_for_function("window.live.events.some(e => e.type === 'result')", timeout=20000)
+        b.ev("() => { window.live.loop.stop(); return 1; }")
+        b.page.wait_for_timeout(800)
+        n0 = b.ev("() => window.live.events.length")
+        b.ev("() => { window.live.loop.shutter(); return 1; }")
+        b.page.wait_for_timeout(2500)
+        after = b.ev("n => window.live.events.slice(n)", n0)
+        st = b.ev("() => window.live.loop.state")
+        res = [e for e in after if e["type"] == "result"]
+        ok = len(res) == 1 and not st["running"] and len(after) <= 4
+        print(f"[loop · stop puis shutter] {len(after)} événements, {len(res)} résultat, en marche {st['running']} → {'OK' if ok else 'ÉCHEC'}")
+        out["shutter"] = ok
+    finally:
+        b.close()
+    b = Browser(page="tools/scanbench/live.html", routes=[("https://assets.tcgdex.net/**", block)])
+    try:
+        b.ev("() => window.live.ready")
+        b.ev("([u, f]) => window.live.startSeq(u, f, { auto: false })", [url(single), frac(single)])
+        b.page.wait_for_timeout(3000)
+        res0 = b.ev("() => window.live.events.filter(e => e.type === 'result').length")
+        hints = b.ev("() => [...new Set(window.live.events.map(e => e.hint))]")
+        b.ev("() => { window.live.loop.shutter(); return 1; }")
+        b.page.wait_for_timeout(2000)
+        res1 = b.ev("() => window.live.events.filter(e => e.type === 'result')")
+        # hold() (carte choisie par l'utilisateur) : pause jusqu'à ce que la carte sorte, même après un nouvel appui
+        b.ev("() => { window.live.loop.start(); window.live.loop.hold(); return 1; }")
+        b.page.wait_for_timeout(1500)
+        held = b.ev("() => window.live.loop.state")
+        res2 = b.ev("() => window.live.events.filter(e => e.type === 'result').length")
+        ok = res0 == 0 and len(res1) == 1 and res1[0]["best"]["id"] == single["id"] and held["phase"] == "paused" and res2 == 1
+        print(f"[loop · auto: false] résultats avant l'appui {res0}, après {len(res1)} ({res1[0]['best']['id'] if res1 else None}) ; "
+              f"hold() → {held['phase']}, résultats ensuite {res2 - len(res1)} ; indications {hints} → {'OK' if ok else 'ÉCHEC'}")
+        out["manual"] = ok
+    finally:
+        b.close()
+
+    # 4. carte peu contrastée après une carte très contrastée : résultat rapide (netteté propre à chaque carte)
+    b = Browser(routes=[("https://assets.tcgdex.net/**", block)])
+    try:
+        b.ev("bench.init()")
+        cand = [t for t in truth[:100] if t["id"] not in grp and t["id"] not in twins and (not strong or t["id"] in strong)][:60]
+        det = b.ev("c => bench.detectCases(c)", [{"url": url(t), "id": t["id"], "guide": t["guide"]} for t in cand])
+        vis = sorted([(d["sharp"], t) for d, t in zip(det, cand) if d["present"]], key=lambda x: x[0])
+        lo_t, hi_t = vis[0][1], vis[-1][1]
+        print(f"    force des bords : {vis[0][0]:.1f} ({lo_t['id']}) → {vis[-1][0]:.1f} ({hi_t['id']})")
+    finally:
+        b.close()
+    b = Browser(page="tools/scanbench/live.html", routes=[("https://assets.tcgdex.net/**", block)])
+    try:
+        b.ev("() => window.live.ready")
+        b.ev("([u, f]) => window.live.startSeq(u, f)", [url(hi_t), frac(hi_t)])
+        b.page.wait_for_function("window.live.events.some(e => e.type === 'result')", timeout=20000)
+        b.ev("() => window.live.seqShow(null)")
+        b.page.wait_for_timeout(1500)
+        t_show = b.ev("u => window.live.seqShow(u)", url(lo_t))
+        b.page.wait_for_timeout(6000)
+        ev = b.ev("t => window.live.events.filter(e => e.t >= t)", t_show)
+        res = [e for e in ev if e["type"] == "result"]
+        blur = sum(1 for e in ev if (e.get("hint") or "").startswith("Image floue"))
+        delay = (res[0]["t"] - t_show) / 1000 if res else None
+        ok = bool(res) and delay < 3
+        print(f"[loop · netteté] carte peu contrastée après une très contrastée : résultat après {delay} s, "
+              f"« Image floue » ×{blur} → {'OK' if ok else 'ÉCHEC'}")
+        out["sharp"] = ok
+    finally:
+        b.close()
+
+    # 5. base des cartes indisponible au départ (hashes.bin refusé 6 s) : état 'error', puis reprise et résultat
+    t_block = time.time() + 6
+
+    def hashes(route):
+        if time.time() < t_block:
+            route.abort()
+        else:
+            route.continue_()
+    b = Browser(page="tools/scanbench/live.html", routes=[("**/data/scan/hashes.bin*", hashes), ("https://assets.tcgdex.net/**", block)])
+    try:
+        b.ev("([u, f]) => window.live.startSeq(u, f)", [url(single), frac(single)])
+        b.page.wait_for_function("window.live.events.some(e => e.type === 'result')", timeout=40000)
+        ev = b.ev("() => window.live.events")
+        errs = [e for e in ev if e.get("state") == "error"]
+        res = [e for e in ev if e["type"] == "result"]
+        ok = bool(errs) and bool(res) and res[0]["best"]["id"] == single["id"]
+        print(f"[loop · base indisponible] états 'error' {len(errs)} ({errs[0]['hint'] if errs else '-'}), puis résultat "
+              f"{res[0]['best']['id'] if res else None} à {res[0]['t'] / 1000 if res else 0:.1f} s → {'OK' if ok else 'ÉCHEC'}")
+        out["retry"] = ok
+    finally:
+        b.close()
+
+    # 6. carte absente de la base (masquée) : le choix de l'image, puis la proposition de l'OCR arrive à la vue
+    d = os.path.join(BENCH, f"ocrnet_s{a.seed}")
+    picks = []
+    for k in range(40):
+        p = os.path.join(d, f"o{k:03d}.jpg.json")
+        if os.path.exists(p):
+            tt = json.load(open(p))
+            if cards["sets"].get(tt["id"].rsplit("-", 1)[0], {}).get("c"):
+                picks.append((f"/__bench/ocrnet_s{a.seed}/o{k:03d}.jpg", tt))
+    oks = []
+    for u, tt in picks[1:4]:
+        from PIL import Image
+        with Image.open(os.path.join(d, os.path.basename(u))) as im:
+            W, H = im.size
+        g = tt["guide"]
+        b = Browser(page="tools/scanbench/live.html", routes=[("https://assets.tcgdex.net/**", block)])
+        try:
+            b.ev("() => window.live.ready")
+            b.ev("id => window.live.call('exclude', { ids: [id] })", tt["id"])
+            b.ev("([u, f]) => window.live.startSeq(u, f)", [u, [g[0] / W, g[1] / H, g[2] / W, g[3] / H]])
+            b.page.wait_for_timeout(10000)
+            res = b.ev("() => window.live.events.filter(e => e.type === 'result')")
+            o = [e for e in res if e["source"] == "ocr"]
+            ok = bool(o) and tt["id"] in [c["id"] for c in o[-1]["candidates"]]
+            oks.append(ok)
+            print(f"[loop · carte masquée + OCR] {tt['id']} : résultats {[(e['decision'], e['source'], e['best']['id']) for e in res]} "
+                  f"→ {'OK' if ok else 'ÉCHEC'}")
+            if b.errors:
+                print("    erreurs console :", b.errors[:3])
+        finally:
+            b.close()
+    out["ocr"] = f"{sum(oks)}/{len(oks)}"
+    return out
 
 
 # ----------------------------------------------------------------------------------------------------------
@@ -999,7 +1290,10 @@ def cmd_all(a):
         ("top-1 synthétique (réimpressions tolérées)", f"{st['top1']:.1f} %", "≥ 97 %", st["top1"] >= 97),
         ("précision des acceptations (décision finale)", f"{st['prec_final']:.1f} %", "≥ 99,5 %", st["prec_final"] >= 99.5),
         ("précision des acceptations, difficile", f"{hd['prec_final']:.1f} %", "≥ 99 %", hd["prec_final"] >= 99),
+        ("précision hors ligne (sans high.webp, stricte)", f"{st['prec_off_strict']:.1f} %", "≥ 99,5 %", st["prec_off_strict"] >= 99.5),
         ("fausses acceptations, carte absente", f"{ab.get('fa_final', float('nan')):.1f} %", "≤ 2 %", ab.get("fa_final", 99) <= 2),
+        ("  dont illustration unique", f"{ab.get('fa_unique', float('nan')):.1f} %", "≤ 2 %", ab.get("fa_unique", 99) <= 2),
+        ("  dont même illustration dans la base", f"{ab.get('fa_lookalike', float('nan')):.1f} %", "(choix via jumelles)", True),
         ("identification p50 à CPU ×4", f"{x4.get('ms_p50', float('nan')):.0f} ms", "≤ 300 ms", x4.get("ms_p50", 9999) <= 300),
         ("bit-exactitude JS / Python", f"{out['bitexact']['worst']}/512", "≤ 4/512", out["bitexact"]["ok"]),
         ("boucle en direct (fausse caméra)", ", ".join(f"{k} {v['ok']}/{v['passes']}" for k, v in out["live"].items()), "1 acceptation par passage", all(v["ok"] == v["passes"] > 0 for v in out["live"].values())),
@@ -1016,7 +1310,7 @@ def cmd_all(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["prep", "bitexact", "synth", "rescore", "real", "live", "ocr", "calib", "api", "all"])
+    ap.add_argument("cmd", choices=["prep", "bitexact", "synth", "rescore", "real", "live", "loop", "ocr", "calib", "api", "all"])
     ap.add_argument("--seed", action="append", default=[], help="(prep) dossier de téléchargements existants")
     ap.add_argument("--fetch", type=int, default=0, help="(prep) images high.webp supplémentaires à télécharger")
     ap.add_argument("--preset", default="standard", choices=["standard", "hard", "wide"])
@@ -1031,10 +1325,13 @@ def main():
     ap.add_argument("--seconds", type=float, default=11.0, help="(live) durée d'observation")
     ap.add_argument("--ocr-mode", default="standard", choices=["standard", "net"], help="(ocr) netteté des photos")
     ap.add_argument("--cases", default=None, help="(real) liste des cas (défaut : tools/scanbench/real.json)")
-    ap.add_argument("--self-check", action="store_true", help="(synth, real) corrélation de la zone du numéro avec la carte n° 1")
+    ap.add_argument("--self", action="store_true", help="(synth, real) mesure la corrélation de la zone du numéro avec la carte n° 1")
     ap.add_argument("--no-offscreen", action="store_true", help="(api) page sans OffscreenCanvas (repli du fil principal)")
+    ap.add_argument("--port", type=int, default=None, help="port du serveur local (défaut 8775 ou CARDEX_SCAN_PORT)")
     a = ap.parse_args()
-    a.seed_val = a.seed_val
+    global PORT, BASE
+    if a.port:
+        PORT, BASE = a.port, f"http://127.0.0.1:{a.port}"
     if a.cmd != "prep":
         a.seed = a.seed_val
     # serveur local seulement pour les commandes qui lancent Chromium (un seul banc à la fois sur le port 8775)
@@ -1060,6 +1357,8 @@ def main():
             cmd_ocr(a)
         elif a.cmd == "api":
             cmd_api(a)
+        elif a.cmd == "loop":
+            cmd_loop(a)
         elif a.cmd == "all":
             cmd_all(a)
         else:

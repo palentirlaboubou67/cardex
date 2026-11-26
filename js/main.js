@@ -1,7 +1,7 @@
 // Démarrage de Cardex : thème, routeur, vues (chargées à la demande et gardées en cache), barre d'onglets,
 // liens internes, tâches de fond (succès, valeur du jour, envies), service worker et annonce des mises à jour.
 import * as router from './core/router.js';
-import { setBar, getBar, focusTitle } from './core/appbar.js';
+import { setBar, getBar, focusTitle, barSignal, barOf } from './core/appbar.js';
 import * as sheet from './core/sheet.js';
 import { toast } from './core/toast.js';
 import { whenIdle } from './core/idle.js';
@@ -25,8 +25,13 @@ export function applyTheme(t = prefs.get('theme', 'auto')) {
 // ---------- Vues : un module par route, une <section> par vue, gardée en cache ----------
 // Contrat (SPEC §3.1) : mount(el) une fois ; show(r, el) à chaque nouvelle route (appelle setBar, résout quand le
 // premier écran est dans le DOM) ; hide() quand une autre vue s'affiche ; onChange(events) pour la collection.
-// Retour sur une vue qui montre encore les mêmes paramètres : show() n'est PAS rappelée (DOM et défilement intacts),
-// la barre d'app est remise telle quelle et resume?(r, el) est appelée si la vue la définit (caméra, minuteries).
+// r.signal (AbortSignal) est annulé dès que la route change : la vue le passe à setBar({ …, signal: r.signal })
+// (une barre posée après coup par une vue quittée est ignorée), à ses fetch, et s'arrête après chaque await
+// si r.signal.aborted. Filet de sécurité : quand un show() périmé se termine, la barre de la vue courante est remise.
+// Retour sur une vue qui montre encore les mêmes paramètres (et dont le show() était allé au bout) : show() n'est
+// PAS rappelée (DOM et défilement intacts), la barre d'app est remise telle quelle et resume?(r, el) est appelée.
+// Collection modifiée : onChange(events) de chaque vue montée ; une vue SANS onChange est seulement marquée périmée
+// (refaite à son prochain affichage) : une vue qui montre la collection doit donc définir onChange.
 const FILES = {
   collection: 'collection', poke: 'pokemon', settings: 'reglages', sets: 'series', set: 'serie', card: 'carte',
   scan: 'scanner', market: 'marche', product: 'produit', decks: 'decks', deck: 'deck',
@@ -35,10 +40,29 @@ const TITLES = {
   collection: 'Collection', poke: 'Pokémon', settings: 'Réglages', sets: 'Séries', set: 'Série', card: 'Carte',
   scan: 'Scanner', market: 'Marché', product: 'Produit', decks: 'Decks', deck: 'Deck',
 };
-const views = new Map();            // nom -> { el, mod, loading, hash, bar, stale, shows }
+// vues qui affichent des images de cartes : leur premier affichage attend un peu la table des images
+const IMG_VIEWS = new Set(['collection', 'poke', 'set', 'card', 'market', 'decks', 'deck']);
+const views = new Map();            // nom -> { el, mod, loading, hash, bar, ok, stale, shows }
 const log = [];                     // « hash|onglet » de chaque rendu (tests)
-let outlet = null, current = null, token = 0, rendering = 0;
+let outlet = null, current = null, token = 0, rendering = 0, ctl = null;
 const safe = fn => { try { return fn(); } catch (e) { console.error(e); } };
+
+// table des images (data/cardimg.json) : jamais plus de 600 ms d'attente ; arrivée en retard → vignettes corrigées
+let imgReady = false;
+const imgSoon = () => (imgReady ? null : Promise.race([images.ready, new Promise(r => setTimeout(r, 600))]));
+
+// squelette affiché du démarrage jusqu'au premier show() (grille ou lignes selon la première route)
+const GRID_VIEWS = new Set(['collection', 'poke', 'set']);
+function bootSkeleton(view) {
+  if (view === 'scan') return '';                 // le viseur a son propre fond
+  const n = GRID_VIEWS.has(view) ? 9 : 7;
+  const item = GRID_VIEWS.has(view)
+    ? '<span class="sk-tile"><span class="sk-img"></span><span class="sk-l1"></span><span class="sk-l2"></span></span>'
+    : '<span class="row sk-row"><span class="sk-a"></span><span class="body"><span class="sk-t"></span><span class="sk-s"></span></span></span>';
+  const body = item.repeat(n);
+  return `<div class="boot-sk" aria-busy="true" aria-label="Chargement">${GRID_VIEWS.has(view) ? `<div class="grid">${body}</div>` : `<div class="group">${body}</div>`}</div>`;
+}
+const dropSkeleton = () => outlet?.querySelector(':scope > .boot-sk')?.remove();
 
 function section(name) {
   let v = views.get(name);
@@ -49,7 +73,7 @@ function section(name) {
     el.hidden = true;
     el.setAttribute('aria-labelledby', 'bar-title');
     outlet.appendChild(el);
-    v = { el, mod: null, loading: null, hash: null, bar: null, stale: false, shows: 0 };
+    v = { el, mod: null, loading: null, hash: null, bar: null, ok: false, stale: false, shows: 0 };
     views.set(name, v);
   }
   return v;
@@ -66,16 +90,42 @@ function loadView(name) {
   return v.loading;
 }
 
-function failView(v, r, e) {
+// kind : 'load' (le module de la vue n'a pas pu être chargé) | 'show' (erreur dans la vue elle-même)
+function failView(v, r, e, kind) {
   console.error(e);
+  dropSkeleton();
   v.stale = true;
-  setBar({ title: TITLES[r.view] || 'Cardex', back: !r.root });
-  v.el.innerHTML = String(html`<div class="empty" data-content><span class="ic">${icon('alert')}</span><b>Écran indisponible</b><p>${navigator.onLine === false ? 'Tu es hors ligne et cet écran n’est pas encore enregistré sur l’appareil.' : 'Un fichier de l’appli n’a pas pu être chargé.'}</p><button type="button" class="btn" data-retry>Réessayer</button></div>`);
-  v.el.querySelector('[data-retry]')?.addEventListener('click', () => { v.el.textContent = ''; renderRoute(router.parse() || r, router.currentTab(), { kind: 'refresh' }); }, { once: true });
+  v.ok = false;
+  setBar({ title: TITLES[r.view] || 'Cardex', back: !r.root }, { signal: r.signal, shell: true });
+  const msg = kind === 'load'
+    ? (navigator.onLine === false ? 'Tu es hors ligne et cet écran n’est pas encore enregistré sur l’appareil.' : 'Un fichier de l’appli n’a pas pu être chargé.')
+    : 'Cet écran n’a pas pu s’afficher.';
+  const box = html`<div class="empty view-err" data-content><span class="ic">${icon('alert')}</span><b>Écran indisponible</b><p>${msg}</p><button type="button" class="btn" data-retry>Réessayer</button></div>`;
+  // module absent : la section est vide ; erreur de la vue : sa structure (posée par mount) reste, masquée
+  v.el.querySelector(':scope > .view-err')?.remove();
+  if (kind === 'load') v.el.innerHTML = String(box);
+  else { v.el.insertAdjacentHTML('afterbegin', String(box)); v.el.classList.add('failed'); }
+  v.el.querySelector('[data-retry]')?.addEventListener('click', () => {
+    v.el.querySelector(':scope > .view-err')?.remove();
+    v.el.classList.remove('failed');
+    renderRoute(router.parse() || r, router.currentTab(), { kind: 'refresh' });
+  }, { once: true });
+}
+
+// un show() périmé s'est terminé : si la dernière barre posée ne vient pas du rendu courant, on remet la sienne
+function reassert() {
+  const v = views.get(current);
+  const sig = ctl?.signal;
+  if (!v?.ok || !sig || sig.aborted || barSignal() === sig) return;
+  const c = barOf(sig) || v.bar;
+  if (c) setBar(c, { signal: sig, shell: true });
 }
 
 async function renderRoute(r, tab, info = {}) {
   const my = ++token;
+  ctl?.abort();                                   // la vue précédente (encore en chargement) ne touche plus à rien
+  const ac = ctl = new AbortController();
+  r.signal = ac.signal;
   rendering++;
   try {
     log.push(`${r.hash}|${tab}`);
@@ -96,18 +146,27 @@ async function renderRoute(r, tab, info = {}) {
     }
     current = r.view;
     v.el.hidden = false;
-    const hit = v.hash === r.hash && !v.stale && v.mod && (prev === r.view || v.bar);
+    const hit = v.ok && v.hash === r.hash && !v.stale && v.mod && (prev === r.view || v.bar);
     if (hit) {
-      if (prev !== r.view) { setBar(v.bar); safe(() => v.mod.resume?.(r, v.el)); }
+      if (prev !== r.view) { setBar(v.bar, { signal: ac.signal, shell: true }); safe(() => v.mod.resume?.(r, v.el)); }
     } else {
-      if (prev !== r.view || !v.mod) setBar({ title: TITLES[r.view] || 'Cardex', back: !r.root });   // défaut, la vue le remplace
+      // barre par défaut (la vue la remplace)
+      if (prev !== r.view || !v.mod) setBar({ title: TITLES[r.view] || 'Cardex', back: !r.root }, { signal: ac.signal, shell: true });
+      v.ok = false;
       let mod;
-      try { mod = await loadView(r.view); } catch (e) { if (my === token) failView(v, r, e); return; }
+      try {
+        [mod] = await Promise.all([loadView(r.view), IMG_VIEWS.has(r.view) ? imgSoon() : null]);
+      } catch (e) { if (my === token) failView(v, r, e, 'load'); return; }
       if (my !== token) return;
+      dropSkeleton();
+      if (v.el.classList.contains('failed')) { v.el.classList.remove('failed'); v.el.querySelector(':scope > .view-err')?.remove(); }
       v.hash = r.hash;
       v.stale = false;
       v.shows++;
-      try { await mod.show(r, v.el); } catch (e) { if (my === token) failView(v, r, e); return; }
+      try { await mod.show(r, v.el); } catch (e) { if (my === token) failView(v, r, e, 'show'); else reassert(); return; }
+      if (my !== token) { reassert(); return; }
+      v.ok = true;
+      v.bar = getBar();
     }
     if (my !== token) return;
     if (info.kind && info.kind !== 'start' && info.kind !== 'refresh' && (info.kind !== 'replace' || prev !== r.view)) focusTitle();
@@ -177,10 +236,47 @@ async function maybeCheckWishes() {
     { action: 'Voir', onAction: () => router.openRoot('#/marche/envies') });
 }
 
+// ---------- Enregistrement de la collection en échec : toast persistant (« Exporter ») ----------
+// js/state/collection.js publie 'cardex:storage' (detail { error, message, repeat, recovered }) ; un problème vu au
+// démarrage est aussi lisible dans storageState().message (l'événement a pu partir avant cet écouteur).
+let storeToast = null, storeMsg = '';
+function onStorage(d = {}) {
+  if (d.recovered || !d.error) {                       // l'enregistrement remarche : le toast part
+    if (d.recovered) { storeToast?.close(); storeToast = null; storeMsg = ''; }
+    return;
+  }
+  const msg = d.message || collection.STORAGE_MESSAGES?.[d.error] || '';
+  if (!msg || (storeToast && (d.repeat || msg === storeMsg))) return;
+  storeToast?.close();
+  storeMsg = msg;
+  if (d.error === 'corrupt') {                         // information : une copie a été gardée (Réglages la propose)
+    storeToast = toast(msg, { action: 'Réglages', ms: 10000, onAction: () => router.go('#/reglages') });
+    return;
+  }
+  const act = d.error === 'readonly'
+    ? { action: 'Réglages', onAction: () => { storeToast = null; storeMsg = ''; router.go('#/reglages'); } }
+    : { action: 'Exporter', onAction: () => { storeToast = null; storeMsg = ''; safe(() => collection.exportFile()); } };
+  storeToast = toast(msg, { ...act, ms: 0 });
+}
+function watchStorage() {
+  addEventListener('cardex:storage', e => onStorage(e.detail));
+  const st = safe(() => collection.storageState?.());
+  if (st?.message) onStorage({ error: st.readOnly ? 'readonly' : st.error || st.notice, message: st.message });
+}
+
 // ---------- Service worker : hors ligne, et « Nouvelle version disponible · Recharger » ----------
 function registerSW() {
   if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
   const sw = navigator.serviceWorker;
+  // clic sur une notification d'envie quand la fenêtre n'est pas contrôlée par le worker : il nous écrit
+  sw.addEventListener('message', e => {
+    if (e.data?.type !== 'navigate' || typeof e.data.url !== 'string') return;
+    let h = '';
+    try { h = new URL(e.data.url, location.href).hash; } catch { return; }
+    const r = router.parse(h);
+    if (!r || h === location.hash) return;
+    if (r.root && r.tab !== router.currentTab()) router.openRoot(h); else router.go(h);
+  });
   let controlled = !!sw.controller, reloading = false;
   sw.addEventListener('controllerchange', () => {
     if (!controlled) { controlled = true; return; }      // première installation : rien à recharger
@@ -203,12 +299,12 @@ function registerSW() {
 }
 
 // ---------- Changements de la collection : chaque vue montée corrige son DOM ----------
+// une vue sans onChange n'est jamais redessinée sous les yeux (caméra, saisie en cours) : refaite à son prochain affichage
 function onCollection(events) {
-  for (const [name, v] of views) {
+  for (const v of views.values()) {
     if (!v.mod) continue;
     if (v.mod.onChange) safe(() => v.mod.onChange(events));
-    else if (name !== current) v.stale = true;                       // redessinée au prochain affichage
-    else { v.stale = true; const r = router.parse(); if (r) renderRoute(r, router.currentTab(), { kind: 'refresh' }); }
+    else v.stale = true;
   }
 }
 
@@ -217,7 +313,23 @@ const hasCards = () => {
   return (Array.isArray(a) ? a.length : a && typeof a === 'object' ? Object.keys(a).length : 0) > 0;
 };
 
+// Collection venue de la v1 : finitions revues d'après les fichiers des séries possédées (collection.repairFinishes)
+async function checkFinishes() {
+  if (!collection.needsFinishCheck?.()) return;
+  const catalog = await import('./data/catalog.js');
+  const ids = [...collection.ownedBySet().keys()];
+  await catalog.loadSets(ids);
+  let complete = true;
+  for (const id of ids) {
+    const s = catalog.setSync(id);
+    if (!s || (s.live && !s.finishesKnown)) { complete = false; continue; }   // hors ligne, ou finitions inconnues
+    collection.repairFinishes(s.cards);
+  }
+  if (complete) collection.finishCheckDone();
+}
+
 function idleTasks() {
+  checkFinishes().catch(e => console.error(e));
   import('./features/achievements.js').then(m => safe(() => m.init())).catch(e => console.error(e));
   import('./features/valuehistory.js').then(m => safe(() => m.init())).catch(e => console.error(e));
   // stockage persistant : seulement pour l'appli installée (Firefox afficherait une demande à chaque visite)
@@ -260,11 +372,16 @@ async function boot() {
   safe(() => images.installFallback?.(document));
   document.addEventListener('click', onClick);
   safe(() => collection.on(onCollection));
+  safe(watchStorage);
   window.__cardex = { router, sheet, toast, views, log, settled, open, applyTheme, refreshMarketBadge, version: 2 };
-  // le module de la première vue se charge pendant que la table des images arrive
+  // squelette tout de suite ; le module de la première vue se charge pendant que la table des images arrive
   const first = router.parse() || router.parse(router.LEGACY[location.hash] || '');
+  outlet.insertAdjacentHTML('afterbegin', bootSkeleton(first?.view || (hasCards() ? 'collection' : 'scan')));
   if (first) import(`./views/${FILES[first.view]}.js`).catch(() => {});
-  try { await Promise.race([images.ready, new Promise(r => setTimeout(r, 3000))]); } catch {}
+  images.ready.then(() => {
+    imgReady = true;
+    if (outlet.querySelector('.tile .card-ph')) import('./components/tile.js').then(m => m.refreshImages(outlet)).catch(e => console.error(e));
+  });
   await router.start(renderRoute, {
     hasCards,
     isSheetOpen: sheet.isOpen,

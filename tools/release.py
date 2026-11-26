@@ -1,7 +1,7 @@
 """Prépare un déploiement de Cardex (bibliothèque standard uniquement).
 
 - sw.js : VERSION = hash du contenu des fichiers de l'appli (fins de ligne normalisées en LF, donc identique
-  sous Windows et sous Linux), SHELL = index.html, manifest, icône et tous les fichiers de css/, js/, fonts/,
+  sous Windows et sous Linux), SHELL = index.html, manifest, icônes (svg, png) et tous les fichiers de css/, js/, fonts/,
   VENDOR = hash de vendor/ (cache séparé, gardé d'une version à l'autre tant que vendor/ ne change pas).
 - data/manifest.json : {"v": "<date ISO>", "files": {"data/…": "<8 hex>"}} pour chaque data/**/*.json et *.bin.
 
@@ -20,7 +20,7 @@ import re
 import sys
 
 TOPS = ('css', 'js', 'fonts')
-FIXED = ['index.html', 'manifest.webmanifest', 'icon.svg']
+FIXED = ['index.html', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-512.png']
 TEXT = ('.html', '.css', '.js', '.mjs', '.json', '.webmanifest', '.svg', '.txt', '.md')
 
 
@@ -102,6 +102,12 @@ def data_manifest(root):
 
 
 def main(argv=None):
+    # sortie en UTF-8 quelle que soit la console (cp1252 sous Windows quand la sortie est redirigée)
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--check', action='store_true', help='vérifie que sw.js est à jour, sans rien écrire')
     ap.add_argument('--root', default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

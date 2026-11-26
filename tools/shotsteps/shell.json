@@ -1,5 +1,5 @@
 {
-  "about": "F1 : une étape par route de SPEC §3 (vues provisoires de la vague 1), plus une feuille ouverte. Chaque propriétaire de vue ajoute son propre fichier (collection.json, series.json…).",
+  "about": "F1 : une étape par route de SPEC §3 (vues provisoires de la vague 1), plus une feuille ouverte, les sous-séries (étiquette sous le logo) et la carte « ? » de exu (id avec « % »). Chaque propriétaire de vue ajoute son propre fichier (collection.json, series.json…).",
   "steps": [
     {"name": "collection-cartes", "hash": "#/collection/cartes", "wait": 800},
     {"name": "collection-pokedex", "hash": "#/collection/pokedex"},
@@ -11,6 +11,10 @@
     {"name": "series-recherche", "hash": "#/series?q=flammes"},
     {"name": "serie", "hash": "#/serie/sv03.5", "wait": 1200},
     {"name": "carte", "hash": "#/carte/sv03.5-025", "wait": 1200},
+    {"name": "series-sous-series", "hash": "#/series?q=galerie", "wait": 800},
+    {"name": "serie-exu", "hash": "#/serie/exu", "wait": 1200},
+    {"name": "carte-exu-interrogation", "hash": "#/carte/exu-%253F", "wait": 1200},
+    {"name": "serie-logo-sombre", "hash": "#/serie/tk-ex-p", "wait": 1200},
     {"name": "scanner", "hash": "#/scanner"},
     {"name": "marche-cotes", "hash": "#/marche/cotes"},
     {"name": "marche-scelle", "hash": "#/marche/scelle"},

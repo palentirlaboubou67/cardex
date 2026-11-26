@@ -14,8 +14,8 @@ export default {
   mount(el) {
     setHTML(el, html`<div class="empty" data-content><span class="ic">${icon('camera')}</span><b>Scanner · écran en construction</b><p>Le scanner arrive à l’étape suivante. En attendant, cherche tes cartes dans Séries.</p><a class="btn" href="#/series">Ouvrir Séries</a></div>`);
   },
-  async show() {
-    setBar({ title: 'Scanner', actions: [{ icon: 'info', label: 'Conseils de scan', onClick: () => infoSheet('Conseils de scan', TIPS) }] });
+  async show(r) {
+    setBar({ title: 'Scanner', signal: r.signal, actions: [{ icon: 'info', label: 'Conseils de scan', onClick: () => infoSheet('Conseils de scan', TIPS) }] });
   },
   hide() {},
 };

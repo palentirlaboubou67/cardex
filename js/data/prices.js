@@ -19,6 +19,8 @@ export const on = fn => (subs.add(fn), () => subs.delete(fn));   // fn([setIds c
 export const version = () => VER;                                // change à chaque fichier chargé (clé de mémo)
 export const has = setId => FILES.has(setId);                    // fichier chargé (avec ou sans cotes)
 export const date = () => DATE;                                  // date du guide Cardmarket (createdAt), 'YYYY-MM-DD'
+// mention complète (SPEC §8) pour Réglages et les feuilles ⓘ : « … chaque nuit · prix du 26/11/2026. Cardex n'est pas affilié à Cardmarket. »
+export const creditText = () => `${CREDIT}${DATE ? ` · prix du ${DATE.slice(8, 10)}/${DATE.slice(5, 7)}/${DATE.slice(0, 4)}` : ''}. Cardex n’est pas affilié à Cardmarket.`;
 
 function normalize(f) {
   const c = {};
@@ -77,13 +79,19 @@ function shape(trend, avg1, avg7, avg30, low, avg = null) {
   return { eur, trend, avg1, avg7, avg30, low };
 }
 
-// { eur, trend, avg1, avg7, avg30, low } en euros, ou null (série non chargée, carte ou finition sans cote)
+// { eur, trend, avg1, avg7, avg30, low[, allEditions] } en euros, ou null (série non chargée, carte ou finition sans cote).
+// 1re édition / tampon sans produit Cardmarket à part : MK y recopie la cote de la carte de base (même tableau que la
+// normale ou la holo) -> allEditions: true, à afficher « prix toutes éditions », jamais comme une vraie cote 1re édition.
+const sameArr = (a, b) => Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
 export function get(cardId, finish = 'normal') {
   const s = setIdOf(cardId), f = FILES.get(s);
   if (!f) return null;
-  const a = f.c[String(cardId).slice(s.length + 1)]?.[finish];
+  const row = f.c[String(cardId).slice(s.length + 1)];
+  const a = row?.[finish];
   if (!a) return null;
-  return shape(c2e(a[0]), c2e(a[1]), c2e(a[2]), c2e(a[3]), c2e(a[4]));
+  const p = shape(c2e(a[0]), c2e(a[1]), c2e(a[2]), c2e(a[3]), c2e(a[4]));
+  if (p && (finish === 'firstEdition' || finish === 'stamp') && (sameArr(a, row.normal) || sameArr(a, row.holo))) p.allEditions = true;
+  return p;
 }
 
 export const eur = (cardId, finish = 'normal') => get(cardId, finish)?.eur ?? null;

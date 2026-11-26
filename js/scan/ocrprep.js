@@ -106,10 +106,50 @@ function charLike(comps, lh) {
   return n;
 }
 
-// Une ligne découpée (rapport local n et gris g, w×lh) → deux images pour tesseract, recadrées sur le groupe de
-// caractères le plus fourni : « raw » = gris d'origine, contraste étiré (tesseract lit lui-même le texte blanc sur
-// noir de la boîte du code SV/ME, mieux que toute inversion de notre part) ; « norm » = fond normalisé localement
-// (bords jaunes, panneaux, dégradés → blancs ; texte clair sur fond sombre inversé).
+// Étirement entre les percentiles 2 et 98 d'une zone (x0..x1, y0..y1) du gris g (largeur w) → Uint8 cw×ch
+function stretch(g, w, x0, y0, x1, y1, invert = false) {
+  const cw = x1 - x0 + 1, ch = y1 - y0 + 1, vals = new Float32Array(cw * ch);
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) vals[y * cw + x] = g[(y0 + y) * w + x0 + x];
+  const srt = Float32Array.from(vals).sort();
+  const lo = srt[Math.floor(0.02 * (srt.length - 1))], hi = Math.max(lo + 1, srt[Math.floor(0.98 * (srt.length - 1))]);
+  const out = new Uint8ClampedArray(cw * ch);
+  for (let i = 0; i < vals.length; i++) { const v = 255 * (vals[i] - lo) / (hi - lo); out[i] = invert ? 255 - v : v; }
+  return { a: out, w: cw, h: ch };
+}
+
+// Agrandissement bilinéaire jusqu'à une hauteur donnée (petits caractères du cartouche : tesseract lit mieux ≥ 30 px)
+function upscale(img, H) {
+  if (img.h >= H) return img;
+  const k = H / img.h, W = Math.round(img.w * k), out = new Uint8ClampedArray(W * H);
+  for (let y = 0; y < H; y++) {
+    const sy = Math.min(img.h - 1.001, Math.max(0, (y + 0.5) / k - 0.5)), iy = sy | 0, fy = sy - iy;
+    for (let x = 0; x < W; x++) {
+      const sx = Math.min(img.w - 1.001, Math.max(0, (x + 0.5) / k - 0.5)), ix = sx | 0, fx = sx - ix, p = iy * img.w + ix;
+      const t = img.a[p] + (img.a[p + 1] - img.a[p]) * fx, b = img.a[p + img.w] + (img.a[p + img.w + 1] - img.a[p + img.w]) * fx;
+      out[y * W + x] = t + (b - t) * fy;
+    }
+  }
+  return { a: out, w: W, h: H };
+}
+
+// Boîte du code de série SV/ME (lettres blanches sur un cartouche noir, à gauche du numéro) : composante sombre du
+// gris étiré, pleine, plus large que haute ; null si absente (autres ères)
+function codeBox(g, w, lh) {
+  const s = stretch(g, w, 0, 0, w - 1, lh - 1), dark = new Uint8Array(w * lh);
+  for (let i = 0; i < dark.length; i++) dark[i] = s.a[i] < 90 ? 1 : 0;
+  let best = null;
+  for (const b of components(dark, w, lh).comps) {
+    const r = b.bw / b.bh;
+    if (b.bh < 0.4 * lh || b.bh > 0.97 * lh || r < 1.3 || r > 4.5 || b.fill < 0.45 || b.x0 < 1) continue;
+    if (!best || b.n > best.n) best = b;
+  }
+  return best;
+}
+
+// Une ligne découpée (rapport local n et gris g, w×lh) → images pour tesseract, recadrées sur le groupe de
+// caractères le plus fourni : « code » = cartouche SV/ME seul, inversé (texte noir sur blanc) ; « raw » = gris
+// d'origine, contraste étiré ; « norm » = fond normalisé localement (bords jaunes, panneaux, dégradés → blancs ;
+// texte clair sur fond sombre inversé). Avec un cartouche, raw et norm ne gardent que le numéro à sa droite.
 function lineImages(n, g, w, lh) {
   const dark = new Uint8Array(w * lh), light = new Uint8Array(w * lh);
   for (let i = 0; i < dark.length; i++) { dark[i] = n[i] < INK ? 1 : 0; light[i] = n[i] > 1 / INK ? 1 : 0; }
@@ -120,6 +160,7 @@ function lineImages(n, g, w, lh) {
     const r = inv ? 1 / Math.max(0.05, n[i]) : n[i];          // texte sombre dans les deux cas
     v[i] = 255 * Math.min(1, Math.max(0, (r - 0.35) / 0.65));
   }
+  const box = inv ? null : codeBox(g, w, lh);
   // composantes : effacer bords et panneaux, repérer le groupe de caractères principal
   const ink = new Uint8Array(w * lh);
   for (let i = 0; i < ink.length; i++) ink[i] = v[i] < 150 ? 1 : 0;
@@ -129,11 +170,11 @@ function lineImages(n, g, w, lh) {
     const b = comps[k];
     if (b.bh >= 0.97 * lh || b.bw > 6 * lh) {
       for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) if (lab[y * w + x] === k) v[y * w + x] = 255;
-    } else if (b.bh >= 0.25 * lh && b.bh <= 0.95 * lh && b.n >= 15 && b.bw <= 2.2 * lh) {
+    } else if (b.bh >= 0.25 * lh && b.bh <= 0.95 * lh && b.n >= 15 && b.bw <= 2.2 * lh && (!box || b.x0 > box.x1)) {
       chars.push(b);
     }
   }
-  let x0 = 0, x1 = w - 1;
+  let x0 = box ? box.x1 + 1 : 0, x1 = w - 1;
   if (chars.length) {
     chars.sort((a, b) => a.x0 - b.x0);
     // groupes : écart horizontal ≤ 1,4 × la hauteur de ligne ; on garde le plus fourni
@@ -145,17 +186,32 @@ function lineImages(n, g, w, lh) {
     }
     const best = groups.reduce((a, b) => (b.n > a.n || (b.n === a.n && b.ink > a.ink) ? b : a));
     const pad = Math.round(0.6 * lh);
-    x0 = Math.max(0, best.x0 - pad); x1 = Math.min(w - 1, best.x1 + pad);
+    x0 = Math.max(box ? box.x1 + Math.round(0.1 * lh) : 0, best.x0 - pad); x1 = Math.min(w - 1, best.x1 + pad);
   }
-  const cw = x1 - x0 + 1, a = new Uint8ClampedArray(cw * lh), b = new Uint8ClampedArray(cw * lh);
-  // gris d'origine étiré entre ses percentiles 2 et 98 (sur la zone recadrée)
-  const vals = new Float32Array(cw * lh);
-  for (let y = 0; y < lh; y++) for (let x = 0; x < cw; x++) vals[y * cw + x] = g[y * w + x0 + x];
-  const srt = Float32Array.from(vals).sort();
-  const lo = srt[Math.floor(0.02 * (srt.length - 1))], hi = Math.max(lo + 1, srt[Math.floor(0.98 * (srt.length - 1))]);
-  for (let i = 0; i < vals.length; i++) a[i] = 255 * (vals[i] - lo) / (hi - lo);
+  if (x1 - x0 < 8) { x0 = 0; x1 = w - 1; }
+  const a = stretch(g, w, x0, 0, x1, lh - 1);
+  const cw = a.w, b = new Uint8ClampedArray(cw * lh);
   for (let y = 0; y < lh; y++) for (let x = 0; x < cw; x++) b[y * cw + x] = v[y * w + x0 + x];
-  return [{ variant: 'raw', img: toImage(a, cw, lh) }, { variant: 'norm', img: toImage(b, cw, lh) }];
+  const out = [];
+  if (box) {
+    // cartouche inversé (lettres noires sur blanc) ; ce qui est hors du cartouche (coins arrondis, carte autour),
+    // atteint depuis le bord du rectangle sans traverser le noir du cartouche, est blanchi
+    const c = stretch(g, w, box.x0, box.y0, box.x1, box.y1, true);
+    const seen = new Uint8Array(c.w * c.h), st = [];
+    const push = i => { if (!seen[i] && c.a[i] < 165) { seen[i] = 1; st.push(i); } };
+    for (let x = 0; x < c.w; x++) { push(x); push((c.h - 1) * c.w + x); }
+    for (let y = 0; y < c.h; y++) { push(y * c.w); push(y * c.w + c.w - 1); }
+    while (st.length) {
+      const i = st.pop(), x = i % c.w, y = (i / c.w) | 0;
+      c.a[i] = 255;
+      if (x > 0) push(i - 1); if (x < c.w - 1) push(i + 1); if (y > 0) push(i - c.w); if (y < c.h - 1) push(i + c.w);
+    }
+    const u = upscale(c, 64);
+    out.push({ variant: 'code', img: toImage(u.a, u.w, u.h) });
+  }
+  out.push({ variant: 'raw', img: toImage(a.a, cw, lh) }, { variant: 'norm', img: toImage(b, cw, lh) });
+  for (const o of out) o.box = !!box;
+  return out;
 }
 
 // Prépare une fenêtre déjà redressée (g, w×h) : lignes candidates triées par vraisemblance
@@ -200,7 +256,7 @@ export function prepWindow(g, w, h, { yc = h / 2, dy = h / 2, maxLines = 2 } = {
   const out = [];
   centers.forEach((c, i) => {
     const y0 = Math.max(0, c - half), lh = Math.min(h - y0, LINE_H);
-    for (const l of lineImages(n.subarray(y0 * w, (y0 + lh) * w), g.subarray(y0 * w, (y0 + lh) * w), w, lh)) out.push({ variant: `l${i}-${l.variant}`, img: l.img });
+    for (const l of lineImages(n.subarray(y0 * w, (y0 + lh) * w), g.subarray(y0 * w, (y0 + lh) * w), w, lh)) out.push({ variant: `l${i}-${l.variant}`, img: l.img, box: l.box });
   });
   return out;
 }

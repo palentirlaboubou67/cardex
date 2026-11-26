@@ -5,6 +5,8 @@
     srv.close()
 
 - overlays : un chemin qui commence par la clé est d'abord cherché dans le dossier associé.
+- exclusive : préfixes dont les fichiers viennent seulement des surcouches (absent de la surcouche = 404, jamais le
+  vrai fichier du dépôt) : ex. ('data/market/prices/',) pour des tests qui ne doivent voir que les cotes des fixtures.
 - pages : chemins virtuels (pages de test à la racine, pour que 'data/…' se résolve comme dans l'appli) ;
   valeur = texte HTML, ou (contenu, type MIME).
 - srv.delay[path_prefix] = secondes, srv.fail[path_prefix] = code HTTP : pour simuler un réseau lent ou en panne.
@@ -25,8 +27,9 @@ TYPES = {
 
 
 class Server:
-    def __init__(self, root, port, overlays=None, pages=None):
+    def __init__(self, root, port, overlays=None, pages=None, exclusive=()):
         self.root = os.path.abspath(root)
+        self.exclusive = tuple(exclusive)
         self.overlays = {k: os.path.abspath(v) for k, v in (overlays or {}).items()}
         self.pages = dict(pages or {})
         self.delay, self.fail, self.log = {}, {}, []
@@ -45,6 +48,7 @@ class Server:
             def do_HEAD(self):
                 srv._handle(self, head=True)
 
+        http.server.ThreadingHTTPServer.request_queue_size = 128   # file d'attente : 5 par défaut, Windows refuse les rafales
         self.httpd = http.server.ThreadingHTTPServer(('127.0.0.1', port), H)
         self.httpd.daemon_threads = True
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -57,6 +61,8 @@ class Server:
                 p = os.path.join(d, path[len(k):])
                 if os.path.isfile(p):
                     return p
+        if any(path.startswith(x) for x in self.exclusive):
+            return None
         p = os.path.normpath(os.path.join(self.root, path))
         if not p.startswith(self.root):
             return None
@@ -113,8 +119,8 @@ class Server:
         self.httpd.server_close()
 
 
-def serve(root, port=8772, overlays=None, pages=None):
-    return Server(root, port, overlays, pages)
+def serve(root, port=8772, overlays=None, pages=None, exclusive=()):
+    return Server(root, port, overlays, pages, exclusive)
 
 
 # page de test minimale : importe un module et expose ses exports dans window.M

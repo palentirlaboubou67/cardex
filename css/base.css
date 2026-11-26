@@ -70,7 +70,7 @@ main {
   transition: box-shadow var(--dur-1);
 }
 .appbar.scrolled { box-shadow: 0 1px 0 var(--line); }
-body:has(.view:not([hidden]) > .ptabs) .appbar.scrolled { box-shadow: none; }   /* les onglets ont déjà leur filet */
+body:has(.view:not([hidden]) .ptabs) .appbar.scrolled { box-shadow: none; }   /* les onglets ont déjà leur filet */
 .appbar .title { flex: 1; min-width: 0; padding-left: 12px; }
 .appbar .back:not([hidden]) + .title { padding-left: 0; }
 .appbar h1 {
@@ -159,23 +159,26 @@ body:has(.view:not([hidden]) > .ptabs) .appbar.scrolled { box-shadow: none; }   
 }
 
 /* ---------- Onglets principaux (sections d'une racine) (FINAL-design §6.3) ---------- */
+.ptabs-slot { display: contents; }   /* conteneur sans boîte : les onglets restent collants dans la section */
 .ptabs {
   position: sticky; top: var(--top); z-index: var(--z-sticky);
-  display: flex; gap: 20px; padding: 0 var(--gutter);
+  display: flex; gap: 8px; padding: 0 calc(var(--gutter) - 6px);
   background: var(--bg); border-bottom: 1px solid var(--line);
   overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
 }
 .ptabs::-webkit-scrollbar { display: none; }
 .ptabs a, .ptabs button {
   position: relative; flex: none; display: inline-flex; align-items: center; gap: 4px;
-  padding: 10px 0 11px; border: 0; background: none;
+  min-height: var(--tap); padding: 12px 6px; border: 0; border-radius: 8px; background: none;
   font-size: 14px; line-height: 20px; font-weight: 500; color: var(--text-2); text-decoration: none;
 }
 .ptabs a:hover { text-decoration: none; color: var(--text); }
 .ptabs [aria-current="page"] { color: var(--text); font-weight: 600; }
 .ptabs [aria-current="page"]::after {
-  content: ''; position: absolute; inset: auto 0 -1px; height: 2px; border-radius: 2px; background: var(--accent);
+  content: ''; position: absolute; inset: auto 6px 0; height: 2px; border-radius: 2px; background: var(--accent);
 }
+/* la rangée défile en x, donc coupe aussi en y : l'anneau de focus est dessiné à l'intérieur */
+.ptabs a:focus-visible, .ptabs button:focus-visible { outline-offset: -2px; }
 .ptabs .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 
 /* ---------- Contrôle segmenté (façon de voir un même contenu) (FINAL-design §6.4) ---------- */
@@ -250,9 +253,10 @@ select.chip {
 .search input::-webkit-search-cancel-button, .search input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
 .search:focus-within { box-shadow: inset 0 0 0 2px var(--accent); }
 .search-clear {
-  flex: none; width: 36px; height: 36px; border: 0; border-radius: 18px; background: none; color: var(--text-2);
+  position: relative; flex: none; width: 36px; height: 36px; border: 0; border-radius: 18px; background: none; color: var(--text-2);
   display: grid; place-items: center; padding: 0;
 }
+.search-clear::after { content: ''; position: absolute; inset: -4px; }   /* cible 44 px */
 .search-clear svg { width: 18px; height: 18px; }
 .search input:placeholder-shown ~ .search-clear { visibility: hidden; }
 .searchbar { padding: 4px 0 0; }
@@ -475,13 +479,17 @@ a.row:active, button.row:active, label.row:active { background: var(--fill); }
 .setlogo-hero.mono .setsym { width: 36px; height: 36px; }
 .setlogo-bloc.mono { padding: 0 4px; border-radius: 4px; font-size: var(--fs-micro); min-width: 24px; }
 .setlogo-bloc.mono .setsym { width: 12px; height: 12px; }
+/* sous-série qui reprend le logo de sa série mère : le logo rétrécit et l'étiquette s'écrit dessous */
+.setlogo.tagged { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; }
+.setlogo.tagged > img { flex: 1; min-height: 0; }
+.setlogo.mono.tagged { gap: 0; padding-top: 2px; padding-bottom: 2px; }
+.setlogo.mono.tagged > .mono-in { display: inline-flex; align-items: center; gap: 4px; flex: 1; min-height: 0; }
 .setlogo-tag {
-  position: absolute; right: -2px; bottom: -4px; z-index: 1;
-  height: 16px; padding: 0 5px; border-radius: 8px; background: var(--surface); color: var(--text-2);
-  box-shadow: 0 0 0 1px var(--line);
-  font: 600 var(--fs-micro)/16px var(--font); font-stretch: 80%; white-space: nowrap;
+  flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-2); font: 600 var(--fs-micro)/12px var(--font); font-stretch: 80%; white-space: nowrap;
 }
-.setlogo-hero .setlogo-tag { bottom: -6px; height: 18px; line-height: 18px; }
+.setlogo-hero .setlogo-tag { line-height: 16px; font-size: var(--fs-cap); }
+.setlogo-hero.mono.tagged > .mono-in { gap: 8px; }
 .setsym { display: inline-block; flex: none; object-fit: contain; vertical-align: middle; }
 /* thème sombre : plaque claire derrière les logos sombres, liseré clair autour des autres et des symboles */
 @media (prefers-color-scheme: dark) {
@@ -492,7 +500,15 @@ a.row:active, button.row:active, label.row:active { background: var(--fill); }
 :root[data-theme="dark"] .setlogo.dark { background: var(--logo-plate); border-radius: var(--r-2); padding: 3px 5px; }
 :root[data-theme="dark"] .setlogo:not(.dark):not(.mono) img { filter: drop-shadow(0 0 .5px rgb(255 255 255 / .6)); }
 :root[data-theme="dark"] .setsym, :root[data-theme="dark"] .card-ph-sym { filter: drop-shadow(0 0 1px rgb(255 255 255 / .75)); }
-.setlogo-hero.dark { padding: 6px 10px; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .setlogo-hero.dark { padding: 6px 10px; }
+  :root:not([data-theme="light"]) .setlogo.dark .setlogo-tag { color: rgb(0 0 0 / .66); }   /* écrit sur la plaque claire */
+  /* logo de bloc (16 px) : la plaque s'ajoute autour du logo au lieu de le rogner */
+  :root:not([data-theme="light"]) .setlogo-bloc.dark { height: auto; padding: 2px 4px; border-radius: 4px; }
+}
+:root[data-theme="dark"] .setlogo-hero.dark { padding: 6px 10px; }
+:root[data-theme="dark"] .setlogo.dark .setlogo-tag { color: rgb(0 0 0 / .66); }
+:root[data-theme="dark"] .setlogo-bloc.dark { height: auto; padding: 2px 4px; border-radius: 4px; }
 /* en-tête de bloc (Séries), collant sous la barre d'app */
 .blochead {
   position: sticky; top: var(--top); z-index: var(--z-sticky);
@@ -567,6 +583,7 @@ button.summary:active { background: var(--fill); }
 .btn.primary { background: var(--accent); color: var(--on-accent); }
 .btn.primary:active { background: var(--accent); filter: brightness(.94); }
 .btn.text { height: 36px; padding: 0 8px; background: none; color: var(--accent); }
+.btn.text::after { content: ''; position: absolute; inset: -4px 0; }   /* cible 44 px */
 .btn.text:active { background: var(--accent-weak); }
 .btn.danger { color: var(--down); }
 .btn.block { display: flex; width: 100%; }
@@ -623,9 +640,10 @@ dialog .toasts { bottom: calc(var(--sab) + 16px); }
 .toast.has-act { padding-right: 6px; }
 .toast .msg { flex: 1; min-width: 0; }
 .toast .act {
-  flex: none; height: 36px; padding: 0 10px; border: 0; border-radius: var(--r-2); background: none;
+  position: relative; flex: none; height: 36px; padding: 0 10px; border: 0; border-radius: var(--r-2); background: none;
   color: var(--toast-action); font: 600 14px/20px var(--font);
 }
+.toast .act::after { content: ''; position: absolute; inset: -4px 0; }   /* cible 44 px */
 .toast .act:active { background: rgb(128 128 128 / .2); }
 .toast.out { animation: toast-out var(--dur-2) var(--ease) forwards; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(12px); } }
@@ -712,6 +730,10 @@ dialog.sheet.closing::backdrop { animation: scrim-out var(--dur-2) ease-in forwa
 .errrow > svg { width: 18px; height: 18px; color: var(--text-2); }
 .errrow .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+.boot-sk { max-width: var(--col); margin: 0 auto; padding-top: 12px; pointer-events: none; }
+.boot-sk .sk-tile { display: block; min-width: 0; }
+.view.failed > :not(.view-err) { display: none !important; }
+
 /* ---------- Courbe (composant chart.js) ---------- */
 .chart { position: relative; display: block; min-width: 0; outline-offset: 4px; }
 .chart-read {
@@ -773,6 +795,9 @@ dialog.sheet.closing::backdrop { animation: scrim-out var(--dur-2) ease-in forwa
 .ptile-img img { width: 88%; height: 88%; object-fit: contain; }
 .ptile-img > svg { width: 40%; height: 40%; color: var(--text-3); stroke-width: 1.25; }
 .ptile .cap b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ptile .cap > span { flex-wrap: wrap; justify-content: flex-start; column-gap: 6px; row-gap: 0; }
+.ptile .cap > span > * { min-width: 0; max-width: 100%; }
+.ptile .cap .delta { overflow: hidden; }
 /* symboles d'énergie des attaques (au lieu des codes {R}, {W}…) : pastilles de couleur 16 px */
 .nrg { display: inline-block; flex: none; width: 16px; height: 16px; border-radius: 50%; vertical-align: -3px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .18); background: #b9b9c2; }
 .nrg + .nrg { margin-left: 2px; }

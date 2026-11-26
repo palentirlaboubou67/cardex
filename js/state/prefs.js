@@ -6,10 +6,30 @@ let data = load();
 const subs = new Set();
 
 function load() {
+  let d = {};
   try {
-    const d = JSON.parse(localStorage.getItem(KEY));
-    return d && typeof d === 'object' && !Array.isArray(d) ? d : {};
-  } catch { return {}; }
+    const v = JSON.parse(localStorage.getItem(KEY));
+    if (v && typeof v === 'object' && !Array.isArray(v)) d = v;
+  } catch { /* illisible : valeurs par défaut */ }
+  return fromLegacy(d);
+}
+
+// Ancienne appli : blocs ouverts dans 'cardex.blocs' (ids des séries TCGdex, comme ceux de data/sets.json)
+function fromLegacy(d) {
+  try {
+    const old = localStorage.getItem('cardex.blocs');
+    if (old == null) return d;
+    if (!Object.prototype.hasOwnProperty.call(d, 'openBlocs')) {
+      let v = null;
+      try { v = JSON.parse(old); } catch { /* illisible */ }
+      if (Array.isArray(v)) {
+        d = { ...d, openBlocs: [...new Set(v.filter(x => typeof x === 'string' && x.length <= 40))].slice(0, 100) };
+        localStorage.setItem(KEY, JSON.stringify(d));
+      }
+    }
+    localStorage.removeItem('cardex.blocs');
+  } catch { /* stockage bloqué ou plein : on réessaiera au prochain démarrage */ }
+  return d;
 }
 
 function save() {

@@ -23,7 +23,10 @@ const toInt = (v, min, max) => {
   return Number.isInteger(n) && n >= min && n <= max ? n : null;
 };
 const toQty = v => toInt(v, 1, 999) || 0;
-const cleanUrl = v => (typeof v === 'string' && v.length <= MAX_STR && /^https:\/\/[^\s"'<>`]+$/.test(v) ? v : '');
+// seule base d'image gardée : TCGdex FR (le résolveur déduit l'anglais et Scrydex de l'id) ; une sauvegarde piégée
+// ne peut donc pas faire charger un autre hôte à chaque tuile
+const IMG_BASE = 'https://assets.tcgdex.net/fr/';
+const cleanUrl = v => (typeof v === 'string' && v.length <= MAX_STR && v.startsWith(IMG_BASE) && /^[\w:/.%!-]+$/.test(v) ? v : '');
 const cleanDex = v => (Array.isArray(v) ? [...new Set(v.map(x => toInt(x, 1, 2000)).filter(Boolean))].slice(0, 6) : []);
 const cleanTime = v => (Number.isFinite(v) && v > 0 && v < 4102444800000 ? Math.floor(v) : Date.now());
 
@@ -105,18 +108,29 @@ export function migrate(d, { strict = false } = {}) {
   if (Object.keys(tcg.sealed).length || tcg.watch.length) out.tcg = tcg;
   out.savedAt = Number.isFinite(d.savedAt) ? d.savedAt : 0;
   if (Number.isFinite(d.exportedAt)) out.exportedAt = d.exportedAt;
+  // données de la v1 : finitions à revoir d'après le catalogue (repairFinishes), une fois les séries chargées
+  if ((d.v !== 2 || d.fixFin === 1) && Object.keys(out.cards).length) out.fixFin = 1;
   Object.defineProperty(out, 'skipped', { value: skipped, enumerable: false });
   return out;
 }
 
 // ---------- état ----------
-const state = { readOnly: false, corrupt: null, corruptRaw: null, error: null };
+const state = { readOnly: false, corrupt: null, corruptRaw: null, error: null, notice: null, failures: 0, alert: false, lastKind: null };
+const BACKUP = `${KEY}.corrupt.`;
 let data = load();
 let REV = 0, queue = null, dirty = false;
 const subs = new Set(), memo = new Map();
 
 function readRaw() {
   try { return { raw: localStorage.getItem(KEY) }; } catch (e) { return { raw: null, blocked: e }; }
+}
+
+// clés des copies de secours (les plus anciennes d'abord)
+function backupKeys() {
+  const out = [];
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(BACKUP)) out.push(k); } }
+  catch { /* stockage bloqué */ }
+  return out.sort((a, b) => (+a.slice(BACKUP.length) || 0) - (+b.slice(BACKUP.length) || 0));
 }
 
 function load() {
@@ -127,43 +141,95 @@ function load() {
   try { d = JSON.parse(raw); } catch { d = undefined; }
   if (d && typeof d === 'object' && d.cards && typeof d.cards === 'object') return migrate(d);
   if (d === null) return empty();
-  // JSON illisible ou inattendu : copie de secours avant de repartir de zéro
-  const k = `${KEY}.corrupt.${Date.now()}`;
-  try { localStorage.setItem(k, raw); state.corrupt = k; }
-  catch { state.readOnly = true; state.corruptRaw = raw; }   // pas de place : on ne touche à rien
+  // JSON illisible ou inattendu : copie de secours (une seule par texte), puis on repart de zéro tout de suite,
+  // sinon chaque démarrage referait une copie et remplirait le stockage (partagé par tout le domaine github.io)
+  let k = null;
+  try { k = backupKeys().find(x => localStorage.getItem(x) === raw) || null; } catch { /* rien */ }
+  if (!k) {
+    k = `${BACKUP}${Date.now()}`;
+    try { localStorage.setItem(k, raw); }
+    catch { state.readOnly = true; state.corruptRaw = raw; return empty(); }   // pas de place : on ne touche à rien
+  }
+  state.corrupt = k;
+  state.notice = 'corrupt';
+  try { localStorage.removeItem(KEY); } catch { /* rien : la copie existe, le prochain enregistrement remplacera */ }
   return empty();
 }
 
 const isQuota = e => e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014);
 
-// caches qui n'ont plus leur place dans localStorage (l'ancienne appli, et les nôtres)
-const CACHE_PREFIX = ['cardex.sets.cache', 'cardex.series.cache', 'cardex.fin.', 'cardex.dexfin.', 'cardex.cotes', 'cardex.cache.', 'cardex.live.'];
-function evictCaches() {
+// caches de l'ancienne appli (jamais relus par la nouvelle) : retirés au démarrage, sans attendre un quota plein
+const LEGACY_CACHE = ['cardex.sets.cache', 'cardex.series.cache', 'cardex.fin.', 'cardex.dexfin.', 'cardex.cotes.'];
+// caches qui peuvent partir quand le stockage est plein (l'ancienne appli, et les nôtres)
+const CACHE_PREFIX = [...LEGACY_CACHE, 'cardex.cache.', 'cardex.live.'];
+function evictCaches(prefixes = CACHE_PREFIX) {
+  let n = 0;
   try {
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
-    for (const k of keys) if (k && CACHE_PREFIX.some(p => k.startsWith(p))) localStorage.removeItem(k);
+    for (const k of keys) if (k && prefixes.some(p => k.startsWith(p))) { localStorage.removeItem(k); n++; }
+  } catch { /* rien */ }
+  return n;
+}
+export const cleanLegacyCaches = () => evictCaches(LEGACY_CACHE);
+
+// Messages prêts à afficher (toast persistant avec l'action « Exporter », et Réglages)
+export const STORAGE_MESSAGES = {
+  quota: 'Stockage plein : tes derniers changements ne sont pas enregistrés. Exporte ta collection.',
+  unknown: 'Enregistrement impossible : tes derniers changements ne sont pas enregistrés. Exporte ta collection.',
+  readonly: 'Ta collection n’a pas pu être lue et il n’y a plus de place pour en garder une copie : rien n’est enregistré.',
+  blocked: 'Le stockage du navigateur est bloqué : rien n’est enregistré sur cet appareil.',
+  corrupt: 'Ta collection enregistrée était illisible : une copie a été gardée et une collection vide a été créée.',
+};
+
+// Événement window 'cardex:storage' : detail { error, readOnly, message, repeat, recovered, corrupt }.
+// error = 'quota' | 'unknown' | 'readonly' | 'blocked' | 'corrupt' (info) | null (enregistrement revenu à la normale).
+// repeat = même erreur que la précédente (le toast est sans doute déjà affiché).
+function signal(kind, extra = {}) {
+  if (kind && kind !== 'corrupt') { state.alert = true; state.lastKind = kind; }   // problème d'enregistrement affiché
+  try {
+    globalThis.dispatchEvent?.(new CustomEvent('cardex:storage', { detail: {
+      error: kind, readOnly: state.readOnly, message: kind ? STORAGE_MESSAGES[kind] || '' : '', corrupt: state.corrupt, ...extra } }));
   } catch { /* rien */ }
 }
 
-function signal(kind) {
-  try { globalThis.dispatchEvent?.(new CustomEvent('cardex:storage', { detail: { error: kind, readOnly: state.readOnly } })); } catch { /* rien */ }
+function failed(kind) {
+  state.failures++;
+  const repeat = state.alert && state.lastKind === kind;   // déjà signalé (au démarrage ou au dernier échec)
+  state.error = kind;
+  signal(kind, { repeat });
+  return false;
+}
+function saved() {
+  state.error = null; state.failures = 0;
+  if (state.alert) { state.alert = false; state.lastKind = null; signal(null, { recovered: true }); }   // le toast peut partir
+  return true;
 }
 
 function persist() {
-  if (state.readOnly) { signal('readonly'); return false; }
+  if (state.readOnly) return failed('readonly');
+  if (state.error === 'blocked') return failed('blocked');
   data.savedAt = Date.now();
   const s = JSON.stringify(data);
-  try { localStorage.setItem(KEY, s); state.error = null; return true; }
+  try { localStorage.setItem(KEY, s); return saved(); }
   catch (e) {
-    if (isQuota(e)) {
-      evictCaches();
-      try { localStorage.setItem(KEY, s); state.error = null; return true; } catch { /* toujours plein */ }
+    if (isQuota(e) && evictCaches()) {
+      try { localStorage.setItem(KEY, s); return saved(); } catch { /* toujours plein */ }
     }
-    state.error = isQuota(e) ? 'quota' : 'unknown';
-    signal(state.error);
-    return false;
+    return failed(isQuota(e) ? 'quota' : 'unknown');
   }
+}
+
+// Démarrage : problème de lecture signalé (après l'évaluation des modules, pour que main.js écoute déjà),
+// puis ménage des caches de l'ancienne appli quand la page est au repos.
+if (typeof window !== 'undefined') {
+  setTimeout(() => {
+    if (state.readOnly) signal('readonly');
+    else if (state.error === 'blocked') signal('blocked');
+    else if (state.notice) signal(state.notice);
+  }, 0);
+  const idle = window.requestIdleCallback || (fn => setTimeout(fn, 2000));
+  idle(() => cleanLegacyCaches(), { timeout: 10000 });
 }
 
 function flush() {
@@ -180,17 +246,50 @@ function emit(ev, save = true) {
   (queue ??= []).push(ev);
   if (queue.length === 1) queueMicrotask(flush);
 }
+// même chose, enregistré sans attendre la microtâche -> true si l'enregistrement a réussi
+function emitNow(ev) {
+  emit(ev, false);
+  dirty = false;
+  return persist();
+}
 
 // fn(events) une fois par microtâche ; renvoie la fonction de désabonnement
 export const on = fn => (subs.add(fn), () => subs.delete(fn));
 export const rev = () => REV;
 export const lastSave = () => data.savedAt || 0;
 export const lastExport = () => data.exportedAt || 0;
-// { readOnly, corrupt (clé de la copie), error ('quota'|'blocked'|'unknown'|null) } — pour Réglages
-export const storageState = () => ({ readOnly: state.readOnly, corrupt: state.corrupt, error: state.error, hasCorruptText: !!state.corruptRaw });
-// texte illisible gardé en mémoire faute de place (à proposer au téléchargement), puis on peut repartir de zéro
-export const corruptText = () => state.corruptRaw;
-export function discardCorrupt() { state.readOnly = false; state.corruptRaw = null; persist(); }
+// Pour Réglages et le toast de main.js : { readOnly, error ('quota'|'unknown'|'readonly'|'blocked'|null),
+// notice ('corrupt' : copie faite à ce démarrage | null), message (texte à afficher, '' si tout va bien),
+// corrupt (clé de cette copie), backups: [{ key, at (ms), size (caractères) }], hasCorruptText, bytes }
+export function storageState() {
+  const backups = [];
+  let bytes = 0;
+  try {
+    for (const key of backupKeys()) backups.push({ key, at: +key.slice(BACKUP.length) || 0, size: (localStorage.getItem(key) || '').length });
+    bytes = (localStorage.getItem(KEY) || '').length;
+  } catch { /* bloqué */ }
+  const kind = state.readOnly ? 'readonly' : state.error || state.notice;
+  return { readOnly: state.readOnly, error: state.error, notice: state.notice, message: kind ? STORAGE_MESSAGES[kind] || '' : '',
+    corrupt: state.corrupt, backups, hasCorruptText: !!state.corruptRaw, bytes };
+}
+// texte d'une copie de secours (à proposer au téléchargement) ; sans clé : le texte illisible gardé en mémoire
+export function corruptText(key) {
+  if (key == null) return state.corruptRaw;
+  if (typeof key !== 'string' || !key.startsWith(BACKUP)) return null;
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+// supprime une copie de secours (Réglages, après l'avoir téléchargée) -> true si elle existait
+export function deleteBackup(key) {
+  if (typeof key !== 'string' || !key.startsWith(BACKUP)) return false;
+  try {
+    if (localStorage.getItem(key) == null) return false;
+    localStorage.removeItem(key);
+  } catch { return false; }
+  if (state.corrupt === key) { state.corrupt = null; state.notice = null; }
+  return true;
+}
+// repartir de zéro sans copie (lecture seule faute de place, après téléchargement du texte) -> enregistré ?
+export function discardCorrupt() { state.readOnly = false; state.corruptRaw = null; return persist(); }
 
 // autre onglet (appli installée + onglet du navigateur) : on relit au lieu de s'écraser mutuellement
 if (typeof addEventListener === 'function') {
@@ -333,6 +432,31 @@ export function updateMeta(card) {
   return true;
 }
 
+// ---------- finitions de la v1 ----------
+// L'ancien scanner enregistrait la finition préréglée (« Normale ») même sur une carte qui n'existe qu'en holo
+// (Dracaufeu-ex 151 : f = ['holo']) ; Cardmarket ne la cote qu'en « holo » (le produit de base EST la holo).
+// main.js charge les séries possédées au repos puis appelle repairFinishes(cartes de la série) : « normale » devient
+// « holo » sur ces cartes (quantités additionnées). Rien d'autre n'est deviné. -> nombre de cartes corrigées
+export const needsFinishCheck = () => data.fixFin === 1;
+export function repairFinishes(cards) {
+  let n = 0;
+  for (const c of cards || []) {
+    const rec = data.cards[c?.id];
+    const f = Array.isArray(c?.finishes) ? c.finishes : null;
+    if (!rec?.qty.normal || !f?.length || f.includes('normal') || !f.includes('holo')) continue;
+    rec.qty.holo = Math.min(999, (rec.qty.holo || 0) + rec.qty.normal);
+    delete rec.qty.normal;
+    n++;
+  }
+  if (n) emit({ type: 'reload' });
+  return n;
+}
+export function finishCheckDone() {
+  if (data.fixFin !== 1) return;
+  delete data.fixFin;
+  persist();
+}
+
 // ---------- produits scellés : possédés (prix d'achat) et suivis — comme l'ancienne appli ----------
 export const sealedAll = () => Object.values(data.sealed);
 export const sealedGet = id => data.sealed[String(id)];
@@ -441,6 +565,7 @@ export function importText(text) {
     if (!cur.dexId?.length && r.dexId.length) cur.dexId = r.dexId;
     if (up) updated++;
   }
+  if (inc.fixFin && (cards || updated)) data.fixFin = 1;
   for (const [k, s] of Object.entries(inc.sealed)) if (!data.sealed[k]) { data.sealed[k] = s; sealed++; }
   for (const w of inc.watch) if (!watching(w)) { data.watch.push(w); watch++; }
   // scellé de l'ancienne version (identifiants TCGplayer) : gardé à part, sans doublon
@@ -449,17 +574,19 @@ export function importText(text) {
     for (const [k, s] of Object.entries(inc.tcg.sealed)) if (!tcg.sealed[k]) { tcg.sealed[k] = s; sealed++; }
     for (const w of inc.tcg.watch) if (!tcg.watch.some(x => String(x) === String(w))) { tcg.watch.push(w); watch++; }
   }
-  if (cards || updated || sealed || watch) emit({ type: 'reload' });
-  return { cards, updated, sealed, watch, skipped: inc.skipped };
+  // enregistré tout de suite : saved dit à l'écran si l'import est vraiment gardé (stockage plein…)
+  const ok = cards || updated || sealed || watch ? emitNow({ type: 'reload' }) : true;
+  return { cards, updated, sealed, watch, skipped: inc.skipped, saved: ok };
 }
 
+// -> true si la collection vide est enregistrée
 export function clearAll() {
   const exportedAt = data.exportedAt;
   data = empty();
   if (exportedAt) data.exportedAt = exportedAt;
   state.readOnly = false; state.corruptRaw = null;
-  emit({ type: 'reload' });
+  return emitNow({ type: 'reload' });
 }
 
 // Pour les tests (ne pas utiliser dans l'appli)
-export const _debug = { reload() { state.readOnly = false; state.corrupt = null; state.corruptRaw = null; state.error = null; data = load(); REV++; memo.clear(); }, data: () => data };
+export const _debug = { reload() { Object.assign(state, { readOnly: false, corrupt: null, corruptRaw: null, error: null, notice: null, failures: 0, alert: false, lastKind: null }); data = load(); REV++; memo.clear(); }, data: () => data };

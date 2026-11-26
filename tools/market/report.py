@@ -17,6 +17,14 @@ ENGLISH = re.compile(r"(?<![\w'])(?:Empty|Cards?|Packs?|Boxes|Box|Tins?|Collecti
                      r"Booster Box|Sleeved Booster Case|with|and|Version|Special|Premium Collection|Display Box|"
                      r"Figure|Poster|Binder|Chest|Stadium|League|Battle Deck|Theme Deck|Checklane)(?![\w'])")
 STRUCT = re.compile(r"\(\(|\)\)|’|‘|\s{2,}|\(\s*\)|\s[,)]|[,(:–-]\s*$|^\s|\s$|\?\?")
+# les deux langues : traduction mot à mot au milieu d'anglais (« de collection Figure », « spécial Set », « The série »),
+# accords, adjectif anglais seul entre parenthèses, forme mal placée
+MIXED = re.compile(r"\b(?:spécial|de collection|série|avec|exclusif|version)\s+(?:Set|Box|Card|Cards|Pack|Packs|Figure|"
+                   r"Edition|Collection|Bundle|Storage|Jumbo|Battle)\b|\b(?:The|of|Collector'?s?)\s+(?:série|spécial|"
+                   r"de collection)\b|\bPokémon de départ Set\b")
+GRAMMAR = re.compile(r"\b1 (?:cartes|boosters)\b")
+LONE_ADJ = re.compile(r"\((?:Legendary|Mythical|Shiny|Special|Collector'?s?|Promo|Deluxe)\)")
+ENERGY = re.compile(r"\b(?:Fire|Water|Grass|Lightning|Psychic|Fighting|Darkness|Metal|Fairy|Colorless)\s+([A-ZÉ][\w'éèêëàâîïôöûüç-]*)")
 
 
 def _gz(path):
@@ -43,6 +51,7 @@ def write(out_dir, cache_dir, log=print):
     # 2. noms suspects (le libellé de type et le nom de série sont français par construction : on lit le détail)
     from .names import DEFAULT, TYPES
     labels = sorted({fr.split("{")[0].strip() for _, fr, _ in TYPES} | set(DEFAULT.values()), key=len, reverse=True)
+    fr_species = set(((read_json(os.path.join(out_dir, "cm-map.json")) or {}).get("species") or {}).values())
     issues = []
     for p in ps:
         fr, why = p["fr"], []
@@ -50,6 +59,15 @@ def write(out_dir, cache_dir, log=print):
             why.append("vide")
         if STRUCT.search(fr):
             why.append("ponctuation")
+        for rx, what in ((MIXED, "mot à mot"), (GRAMMAR, "accord"), (LONE_ADJ, "adjectif anglais")):
+            m = rx.search(fr)
+            if m:
+                why.append(f"{what} « {m.group(0)} »")
+        m = ENERGY.search(re.sub(r'"[^"]*"', " ", fr))  # sauf le nom d'un deck entre guillemets (Mondiaux)
+        if m and re.sub(r"^(?:Méga|Primo)-", "", m.group(1)).split("-")[0] in fr_species:
+            why.append(f"type d'énergie anglais « {m.group(0)} »")
+        if re.search(r"\bForme Originelle [A-ZÉ]", fr):
+            why.append("forme avant le nom (« Palkia Originel »)")
         det = fr
         for lab in labels:
             if det.startswith(lab):

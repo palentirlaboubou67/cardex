@@ -127,7 +127,18 @@ function sidePoints(img, geo, h, nLines = 60, step = 0.5, inLen = 0.12, outLen =
       const a = der[j - 1], b = der[j], c = der[j + 1], den = a - 2 * b + c;
       let off = den < 0 ? 0.5 * (a - c) / den : 0;
       if (off > 0.5) off = 0.5; else if (off < -0.5) off = -0.5;
-      pts.push({ s, d: d0 + (j + off) * step, w: b, k: li });
+      // amplitude de la marche (moyennes à 1,5–4 px de part et d'autre) : netteté = pente / marche (sans contraste)
+      let amp = 0;
+      if (j >= 8 && j < nd - 8) {
+        for (let ci = 0; ci < 3; ci++) {
+          const p = prof[ci];
+          let lo = 0, hi = 0;
+          for (let q = 3; q <= 8; q++) { lo += p[j - q]; hi += p[j + q]; }
+          const v = Math.abs(hi - lo) / 6;
+          if (v > amp) amp = v;
+        }
+      }
+      pts.push({ s, d: d0 + (j + off) * step, w: b, k: li, n: amp >= 8 ? b / amp : -1 });
     }
   }
   return pts;
@@ -171,23 +182,25 @@ function houghPeaks(pts, h, maxPeaks = 6) {
 // Moindres carrés sur les points proches (≤ 1,2 px) : angle et décalage affinés, couverture (part des profils)
 function refine(pts, th, d, nLines = 60, tol = 1.2) {
   const t = Math.tan(th * DEG), c = Math.cos(th * DEG);
-  let n = 0, ss = 0, sd = 0, sss = 0, ssd = 0, sw = 0;
+  let n = 0, ss = 0, sd = 0, sss = 0, ssd = 0, sw = 0, sn = 0, nn = 0;
   const seen = new Uint8Array(nLines);
   for (const p of pts) {
     if (Math.abs(p.d - (p.s * t + d)) * c < tol) {
       n++; ss += p.s; sd += p.d; sss += p.s * p.s; ssd += p.s * p.d; sw += p.w; seen[p.k] = 1;
+      if (p.n >= 0) { sn += p.n; nn++; }
     }
   }
   let cov = 0;
   for (let i = 0; i < nLines; i++) cov += seen[i];
+  const nsh = nn ? sn / nn : 0;
   if (n >= 6) {
     const den = n * sss - ss * ss;
     if (Math.abs(den) > 1e-9) {
       const a = (n * ssd - ss * sd) / den, b = (sd - a * ss) / n;
-      return { th: Math.atan(a) / DEG, d: b, cov: cov / nLines, str: sw / n };
+      return { th: Math.atan(a) / DEG, d: b, cov: cov / nLines, str: sw / n, nsh };
     }
   }
-  return { th, d, cov: cov / nLines, str: n ? sw / n : 0 };
+  return { th, d, cov: cov / nLines, str: n ? sw / n : 0, nsh };
 }
 
 // Droite d'un côté à partir de (th, d) dans le repère du côté
@@ -251,7 +264,7 @@ export function quadFrom(lines, { tol = 0.08, landscape = false } = {}) {
 // sinon la droite la plus forte. Retourne aussi le nombre de côtés trouvés et la netteté moyenne des bords.
 export function displayQuad(so) {
   const lines = [], h = so.h;
-  let found = 0, str = 0;
+  let found = 0, str = 0, nsh = 0;
   for (const side of so.sides) {
     const b = side.best;
     if (!b) { lines.push(side.opts[0]); continue; }
@@ -262,9 +275,28 @@ export function displayQuad(so) {
       if (o && Math.abs(o.th - b.th) <= 2 && o.d - b.d >= 0.015 * h && o.d - b.d <= 0.05 * h && o.v >= 0.25 * b.v) { pick = i; break; }
     }
     lines.push(side.opts[pick]);
-    if (b.cov >= 0.4) { found++; str += b.str; }
+    if (b.cov >= 0.4) { found++; str += b.str; nsh += b.nsh || 0; }
   }
-  return { quad: quadFrom(lines, { tol: 0.12 }), found, sharp: found ? str / found : 0 };
+  let quad = quadFrom(lines, { tol: 0.12 });
+  // pas de quad aux proportions d'une carte (étui, sleeve : bord de l'étui sur un côté, de la carte sur un autre) :
+  // combinaisons des 3 premiers pics de chaque côté, la plus soutenue aux bonnes proportions
+  if (!quad && found >= 3) {
+    const opts = so.sides.map((side, k) => {
+      const o = [];
+      for (let i = 0; i < side.opts.length && o.length < 3; i += 2) if (i === 0 || (side.info[i]?.cov ?? 0) >= 0.3) o.push(i);
+      return o.length ? o : [0];
+    });
+    let best = -1;
+    for (const a of opts[0]) for (const b of opts[1]) for (const c of opts[2]) for (const d of opts[3]) {
+      const ch = [a, b, c, d], q = quadFrom(ch.map((i, k) => so.sides[k].opts[i]), { tol: 0.12 });
+      if (!q) continue;
+      let v = 0;
+      ch.forEach((i, k) => { v += so.sides[k].info[i]?.v ?? 0; });
+      if (v > best) { best = v; quad = q; }
+    }
+  }
+  // netteté : force moyenne des bords (dépend du contraste) et pente / marche (indépendante du contraste)
+  return { quad, found, sharp: found ? str / found : 0, nsharp: found ? nsh / found : 0 };
 }
 
 // Recherche « analyse par synthèse » : descente par coordonnées sur les options de chaque côté,

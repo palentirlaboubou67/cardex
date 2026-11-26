@@ -8,7 +8,10 @@ import traceback
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 FIX = os.path.join(HERE, 'fixtures', 'data')
-PORT = 8772
+# port du serveur de test : --port N ou CARDEX_TEST_PORT (chaque agent a le sien), sinon 8772
+PORT = int(os.environ.get('CARDEX_TEST_PORT') or 8772)
+if '--port' in sys.argv:
+    PORT = int(sys.argv[sys.argv.index('--port') + 1])
 sys.path.insert(0, HERE)
 from server import serve, HARNESS  # noqa: E402
 
@@ -31,37 +34,50 @@ def eq(a, b, msg):
     check(a == b, f'{msg} : attendu {b!r}, obtenu {a!r}')
 
 
+class Skip(Exception):
+    """Test sauté (ex. --offline) : compté à part, jamais comme réussi."""
+
+
 class Runner:
     def __init__(self, title):
         self.title, self.results, self.t0 = title, [], time.time()
 
+    def _record(self, name, t, out=None, exc=None, limit=3):
+        dt = time.time() - t
+        if exc is None:
+            self.results.append((name, True, '', dt))
+            return f'PASS  {name}' + (f'  ({out})' if out else '')
+        if isinstance(exc, Skip):
+            self.results.append((name, None, str(exc), dt))
+            return f'SKIP  {name}  ({exc})'
+        msg = str(exc) if isinstance(exc, Fail) else traceback.format_exc(limit=limit)
+        self.results.append((name, False, msg, dt))
+        return f'FAIL  {name}\n      {msg}'
+
     def run(self, name, fn, *a):
         t = time.time()
         try:
-            out = fn(*a)
-            self.results.append((name, True, '', time.time() - t))
-            print(f'PASS  {name}' + (f'  ({out})' if out else ''))
+            line = self._record(name, t, fn(*a))
         except Exception as e:
-            msg = str(e) if isinstance(e, Fail) else traceback.format_exc(limit=3)
-            self.results.append((name, False, msg, time.time() - t))
-            print(f'FAIL  {name}\n      {msg}')
+            line = self._record(name, t, exc=e)
+        print(line, flush=True)
 
     async def arun(self, name, fn, *a):
         """Même chose pour une fonction asynchrone (API asynchrone de Playwright)."""
         t = time.time()
         try:
-            out = await fn(*a)
-            self.results.append((name, True, '', time.time() - t))
-            print(f'PASS  {name}' + (f'  ({out})' if out else ''), flush=True)
+            line = self._record(name, t, await fn(*a))
         except Exception as e:
-            msg = str(e) if isinstance(e, Fail) else traceback.format_exc(limit=4)
-            self.results.append((name, False, msg, time.time() - t))
-            print(f'FAIL  {name}\n      {msg}', flush=True)
+            line = self._record(name, t, exc=e, limit=4)
+        print(line, flush=True)
 
     def done(self):
-        ok = sum(1 for r in self.results if r[1])
-        print(f'\n{self.title} : {ok}/{len(self.results)} réussis en {time.time() - self.t0:.1f} s')
-        return 0 if ok == len(self.results) else 1
+        ok = sum(1 for r in self.results if r[1] is True)
+        skipped = sum(1 for r in self.results if r[1] is None)
+        ran = len(self.results) - skipped
+        extra = f' ({skipped} sautés)' if skipped else ''
+        print(f'\n{self.title} : {ok}/{ran} réussis{extra} en {time.time() - self.t0:.1f} s')
+        return 0 if ok == ran else 1
 
 
 def console_watch(page, bucket, ignore=()):

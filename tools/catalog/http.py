@@ -6,6 +6,7 @@
 - mode hors ligne : seulement le cache, jamais le réseau.
 """
 import hashlib
+import http.client
 import json
 import os
 import random
@@ -135,8 +136,9 @@ class Client:
                     with self._lock:  # toute l'équipe attend : on respecte la limite de l'hôte
                         self._next[g] = time.monotonic() + wait
                     continue
-            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-                last = str(e)[:80]
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
+                # HTTPException : réponse tronquée (IncompleteRead), en-têtes illisibles… -> nouvel essai
+                last = str(e)[:80] or type(e).__name__
                 self.stats['retry'] += 1
                 time.sleep(2.0 * (2 ** i) + random.random())
                 continue
@@ -156,11 +158,17 @@ class Client:
         meta = self._read_meta(key)
         fresh = meta and (self.offline or (not self.refresh and time.time() - meta['t'] < ttl))
         if fresh:
-            self.stats['cache'] += 1
             if meta['status'] != 200:
+                self.stats['cache'] += 1
                 return None
-            with open(key + '.bin', 'rb') as f:
-                return json.loads(f.read().decode('utf-8'))
+            try:
+                with open(key + '.bin', 'rb') as f:
+                    obj = json.loads(f.read().decode('utf-8'))
+                self.stats['cache'] += 1
+                return obj
+            except (OSError, ValueError):  # copie en cache illisible : on la redemande
+                if self.offline:
+                    raise Offline(url)
         if self.offline:
             raise Offline(url)
         hdr = {'Accept': 'application/json'}
@@ -168,7 +176,10 @@ class Client:
             hdr['Content-Type'] = 'application/json'
         st, h, raw = self._do(method, url, body, hdr, timeout)
         if st == 200:
-            obj = json.loads(raw.decode('utf-8'))
+            try:
+                obj = json.loads(raw.decode('utf-8'))
+            except ValueError:  # page d'erreur d'un intermédiaire, réponse coupée : échec, rien en cache
+                raise HttpError(url, 'json', 'réponse illisible')
             self._write(key, {'t': time.time(), 'status': 200, 'url': url}, raw)
             return obj
         if st == 404:

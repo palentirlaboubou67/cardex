@@ -119,3 +119,18 @@ export function data(path, { timeout = 15000 } = {}) {
 
 // Pour les tests et le rechargement après mise à jour des données.
 export function _reset() { files.clear(); manifestP = null; manifestAt = 0; inflight.clear(); }
+
+// ---------- Première visite ----------
+// La page a tout chargé avant que le service worker prenne la main : quand il la prend, on lui donne la liste
+// (fichiers de l'appli, données, images déjà affichées) pour qu'il en garde une copie (rechargement hors ligne).
+try {
+  const sw = globalThis.navigator?.serviceWorker;
+  if (sw && !sw.controller && typeof performance?.getEntriesByType === 'function') {
+    sw.addEventListener('controllerchange', () => {
+      try {
+        const urls = [location.href.split('#')[0], ...performance.getEntriesByType('resource').map(e => e.name)];
+        sw.controller?.postMessage({ type: 'seen', urls: urls.filter(u => /^https?:/.test(u)) });
+      } catch { /* rien */ }
+    }, { once: true });
+  }
+} catch { /* pas de service worker (http local, navigation privée) */ }

@@ -13,7 +13,7 @@ export default {
   mount(el) { el.innerHTML = '<div class="ptabs-slot"></div><div class="stub-body"></div>'; },
   async show(r, el) {
     setBar({
-      title: 'Decks',
+      title: 'Decks', signal: r.signal,
       actions: [{ icon: 'info', label: 'À propos de cet écran', onClick: () => infoSheet('Decks', 'Jouables : tu as déjà les 60 cartes. Presque : au moins 70 %. Listes : Limitless.') }],
     });
     setHTML(el.querySelector('.ptabs-slot'), primaryTabs(SECTIONS, `#/decks/${r.m[1]}`));

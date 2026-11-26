@@ -42,6 +42,8 @@
 <script type="module">
 // Page de test de la boucle de scan (vraie caméra ou fausse caméra Chromium) : pilotée aussi par tools/scan_bench.py live.
 import * as scan from '../../js/scan/index.js';
+import { call, frameOf } from '../../js/scan/client.js';
+import { settle } from '../../js/scan/loop.js';
 
 const $ = id => document.getElementById(id);
 const v = $('v'), ov = $('ov'), pill = $('pill'), logEl = $('log');
@@ -134,7 +136,42 @@ const p = scan.preload(x => { pill.textContent = `Chargement de la base ${Math.r
 p.then(info => { log(`base : ${info.cards} cartes, ${info.groups} groupes, ${info.noimg} sans image (${info.built})`); pill.textContent = 'Prêt'; },
        e => { pill.textContent = 'Base indisponible : ' + e.message; });
 
-window.live = { events, frames, start, scan, get loop() { return loop; }, clipFrame, ready: p };
+// --- aides du banc (tools/scan_bench.py loop) : identification guidée par le worker, boucle sur un flux de canvas
+async function bmpOf(url) { return createImageBitmap(await (await fetch(url)).blob()); }
+async function identifyGuided(url, g) {
+  const bmp = await bmpOf(url);
+  const f = await frameOf(bmp, 0, 0, bmp.width, bmp.height);
+  const r = await call('identify', { bmp: f.img, guide: { x: g[0], y: g[1], w: g[2], h: g[3] } }, f.transfer);
+  const res = await settle(r, { single: true });
+  return { level: r.level, top: r.top && r.top.map(x => x.id), res: res && { decision: res.decision, best: res.best.id, why: res.why, candidates: res.candidates.map(c => c.id) } };
+}
+// flux 1440×1920 (rapport 3:4) dessiné en continu ; image remplacée par seqShow(url | null = fond sans carte)
+let seqImg = null, seqTimer = 0;
+async function seqShow(url) { seqImg = url ? await bmpOf(url) : null; return performance.now() - t0; }
+async function startSeq(url0, frac, opts = {}) {
+  const c = document.createElement('canvas');
+  c.width = 1440; c.height = 1920;
+  const x = c.getContext('2d');
+  await seqShow(url0);
+  const draw = () => { if (seqImg) x.drawImage(seqImg, 0, 0, 1440, 1920); else { x.fillStyle = '#7a6a55'; x.fillRect(0, 0, 1440, 1920); } };
+  draw();
+  seqTimer = setInterval(draw, 33);
+  v.srcObject = c.captureStream(30);
+  await v.play();
+  await new Promise(r => setTimeout(r, 300));
+  const b = v.getBoundingClientRect(), k = Math.max(b.width / 1440, b.height / 1920);    // object-fit: cover
+  const ox = (b.width - 1440 * k) / 2, oy = (b.height - 1920 * k) / 2;
+  const guide = { x: ox + frac[0] * 1440 * k, y: oy + frac[1] * 1920 * k, width: frac[2] * 1440 * k, height: frac[3] * 1920 * k };
+  loop = scan.createLoop({
+    video: v, guide, ...opts,
+    onState: s => { const last = events.findLast?.(e => e.type === 'state'); if (!last || last.state !== s.state || last.hint !== s.hint) events.push({ t: now(), type: 'state', state: s.state, hint: s.hint, error: s.error }); },
+    onResult: r => events.push({ t: now(), type: 'result', decision: r.decision, best: r.best, candidates: r.candidates, alternatives: r.alternatives, source: r.source, why: r.why, text: r.text }),
+  });
+  loop.start();
+  return true;
+}
+
+window.live = { events, frames, start, scan, get loop() { return loop; }, clipFrame, ready: p, call, identifyGuided, startSeq, seqShow, now };
 window.__ready = true;
 if (new URLSearchParams(location.search).has('auto')) p.then(start);
 </script>

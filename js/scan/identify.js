@@ -143,7 +143,7 @@ export function detectOnly(frame, guide, { small = null } = {}) {
   }
   return {
     quad: res.quad ? res.quad.map(p => fromSmall(img, p)) : null,
-    found: res.found, sharp: res.sharp, far,
+    found: res.found, sharp: res.sharp, nsharp: res.nsharp, far,
   };
 }
 

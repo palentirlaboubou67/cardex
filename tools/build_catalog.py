@@ -15,9 +15,14 @@ Débit : TCGdex ≤ 4 req/s, attente croissante sur 429/503 ; Scrydex : seulemen
 Les adresses d'images que la sortie précédente servait déjà sont tenues pour vérifiées : un cache vide (CI)
 ne refait pas le scan des 17 000 images FR, seules les cartes nouvelles sont vérifiées (--verify revoit tout
 ce qui est en cache et un échantillon frais).
-Si une source échoue, la sortie précédente de la série est conservée ; si la liste des séries échoue, rien
-n'est écrit (code de sortie 2).
-Durées mesurées le 25/11/2026 : complète (--refresh) 6 min, 1 112 requêtes ; incrémentale 13 s ; --verify 2 min.
+Si une source échoue (n'importe quelle erreur), la sortie précédente de la série est conservée ; si la liste des
+séries échoue ou perd plus de MAX_GONE séries publiées, rien n'est écrit (code de sortie 2). Une image n'est
+déclarée absente que sur un 404/410 : une erreur passagère laisse la carte comme l'annonce l'API, et un logo ou un
+symbole dont une source mieux placée a échoué en passant garde le choix précédent. Dans ces cas, et si le tirage
+Scrydex de --verify s'alarme, les sorties sont écrites mais le code de sortie est 3 (à relancer plus tard).
+Exécution mensuelle conseillée (CI) : python -P tools/build_catalog.py --verify.
+Durées mesurées : complète (--refresh, 25/11/2026) 6 min, 1 112 requêtes ; incrémentale (26/11) 7 s, 1 requête ;
+--verify (26/11) 2 min 30, 441 requêtes (dont 40 Scrydex à 1 req/s).
 """
 import argparse
 import collections
@@ -37,13 +42,18 @@ from catalog import cards as C  # noqa: E402
 from catalog import images as I  # noqa: E402
 from catalog import tables as T  # noqa: E402
 from catalog.dex import Dex  # noqa: E402
-from catalog.http import DAY, Client, HttpError, Offline  # noqa: E402
+from catalog.http import DAY, Client, HttpError  # noqa: E402
 from catalog.tcgdex import TCGdex, set_ttl  # noqa: E402
 
 ROOT = os.path.dirname(HERE)
 DATA = os.path.join(ROOT, 'data')
 API = 'https://api.tcgdex.net/v2'
 NEVER = 10 ** 9
+# Au-delà de ce nombre de séries publiées absentes de /v2/fr/sets, la liste est tenue pour tronquée.
+MAX_GONE = 3
+# Codes de sortie : 0 = tout vérifié ; 2 = rien d'écrit (liste des séries indisponible ou suspecte) ;
+# 3 = sorties écrites, mais des vérifications n'ont pas pu se faire (échecs passagers, alerte Scrydex) : relancer.
+EXIT_UNSURE = 3
 
 
 def log(*a):
@@ -121,9 +131,17 @@ def main():
     try:
         lst = td.set_list()
         series = td.series()
-    except (HttpError, Offline) as e:
+    except Exception as e:  # HttpError, Offline, réponse inattendue
         log(f'Liste des séries indisponible ({e}) : rien n\'est écrit, sorties précédentes conservées.')
         return 2
+    # liste tronquée ou incomplète : on ne supprime pas en masse des séries publiées
+    gone = sorted(set(prev_meta) - {s['id'] for s in lst} - set(T.EXTRA_SETS))
+    if len(gone) > MAX_GONE:
+        log(f'Liste des séries suspecte : {len(gone)} séries publiées en sont absentes ({", ".join(gone[:8])}…) : '
+            f'rien n\'est écrit, sorties précédentes conservées.')
+        return 2
+    if gone:
+        rep['problems'].append(('sets', f'séries retirées par TCGdex : {", ".join(gone)}'))
     entries = {s['id']: s for s in lst}
     tc_index = {sid: i for i, sid in enumerate(entries)}
     for sid in T.EXTRA_SETS:
@@ -151,7 +169,7 @@ def main():
             else:
                 d = td.set_detail(sid, 'fr', e, force=args.only == sid)
             return sid, d
-        except (HttpError, Offline) as ex:
+        except Exception as ex:  # toute erreur : série en échec, fichier précédent conservé
             return sid, ex
 
     with concurrent.futures.ThreadPoolExecutor(3) as ex:
@@ -175,14 +193,19 @@ def main():
         d = fr.get(sid)
         try:
             if entries[sid].get('extra'):
-                g = td.gql_cards(sid, ttl_for(sid, None)) if td.locale_ok else []
+                # pas de liste REST pour ces séries : sans @locale fiable, on garde le fichier précédent
+                if not td.locale_ok:
+                    raise HttpError(f'{API}/graphql', 'locale', '@locale indisponible')
+                g = td.gql_cards(sid, ttl_for(sid, None))
+                if not g:
+                    raise HttpError(f'{API}/graphql', 'vide', 'aucune carte')
                 return sid, g, 'gql'
             if not d or not d.get('cards'):
                 return sid, [], 'vide'
             ttl = ttl_for(sid, d.get('releaseDate'))
             cs, h = td.cards_of(sid, d, ttl)
             return sid, cs, h
-        except (HttpError, Offline) as ex:
+        except Exception as ex:  # toute erreur : série en échec, fichier précédent conservé
             return sid, ex, None
 
     todo = [sid for sid in entries if sid not in failed]
@@ -205,7 +228,7 @@ def main():
             d = client.get_json(f'{API}/en/sets/{sid}', ttl=NEVER if (args.only and sid != args.only) else 30 * DAY)
             if d:
                 en[sid] = d
-        except (HttpError, Offline) as ex2:
+        except Exception as ex2:
             rep['problems'].append((sid, f'détail EN : {ex2}'))
 
     # ---------- 3. lignes compactes par série ----------
@@ -268,9 +291,15 @@ def main():
 
     # ---------- 4. images de secours ----------
     catalog = to_catalog({sid: set_files[sid] for sid in visible})
+    # série en échec (fichier précédent) : ses cartes à l'image FR annoncée mais absente (`fix` précédent) y sont
+    # en i=0 ; on leur rend l'image annoncée pour qu'elles retrouvent leur entrée `fix` (sortie inchangée)
+    for sid in failed & set(catalog):
+        for c in catalog[sid]['cards']:
+            if c['id'] in (prev_img.get('fix') or {}) and not c['img']:
+                c['img'] = C.fr_image_base(catalog[sid]['serie'], sid, c['l'])
     try:
         en_cards = td.en_cards()
-    except (HttpError, Offline) as ex3:
+    except Exception as ex3:
         rep['problems'].append(('en', f'cartes EN : {ex3}'))
         en_cards = []
     if not en_cards and prev_img:
@@ -314,10 +343,15 @@ def main():
         # code : abbreviation.official de TCGdex (FR, sinon EN), sinon la table faite main
         ab = (d.get('abbreviation') or {}).get('official') or (e_meta.get('abbreviation') or {}).get('official')
         name = T.NAME_FIX.get(sid) or (T.EXTRA_SETS.get(sid) or {}).get('name') or d.get('name') or old.get('name') or sid
-        lg = legal_of.get(sid) or (old.get('legal') if not src else None) or {k: bool((src.get('legal') or {}).get(k)) for k in ('standard', 'expanded')}
+        # légalité : celle des cartes ; série en échec (cartes non relues) : celle de la sortie précédente
+        # (jamais celle de la série chez TCGdex, figée à standard=false)
+        lg = legal_of.get(sid) or (old.get('legal') if (sid in failed or not src) else None) \
+            or {k: bool((src.get('legal') or {}).get(k)) for k in ('standard', 'expanded')}
+        own_total = (T.EXTRA_SETS.get(sid) or {}).get('ownTotal')
         metas.append({
             'id': sid, 'name': name, 'bloc': set_files[sid]['serie'], 'date': date_of(sid),
-            'total': (src.get('cardCount') or {}).get('official') or old.get('total') or len(set_files[sid]['cards']),
+            'total': len(set_files[sid]['cards']) if own_total else
+            (src.get('cardCount') or {}).get('official') or old.get('total') or len(set_files[sid]['cards']),
             'count': len(set_files[sid]['cards']),
             'code': ab or T.CODES.get(sid) or old.get('code'),
             'logo': None, 'logoLang': None, 'sym': None,
@@ -330,34 +364,61 @@ def main():
     metas.sort(key=lambda m: (m['date'], m['id'] not in minor, -tc_index.get(m['id'], 0)), reverse=True)
 
     # ---------- 6. logos et symboles ----------
-    bloc_logo = {}
+    LOGO_KEYS = ('logo', 'logoLang', 'tag', 'dark')
+    prev_blocs = {b['id']: b for b in prev_sets.get('blocs', [])}
+    bloc_art = {}
     art = None
+    rep['artKept'] = []
+
+    def file_ok(p):  # adresse liée (Scrydex) ou fichier encore présent
+        return not p or not p.startswith('img/') or os.path.exists(os.path.join(ROOT, p))
+
     if args.skip_logos:
         for m in metas:
             old = prev_meta.get(m['id']) or {}
-            for k in ('logo', 'logoLang', 'sym', 'tag', 'dark'):
+            for k in LOGO_KEYS + ('sym',):
                 m[k] = old.get(k, m[k])
-        bloc_logo = {b['id']: b.get('logo') for b in prev_sets.get('blocs', [])}
+        bloc_art = {b['id']: {'logo': b.get('logo'), 'dark': bool(b.get('dark'))} for b in prev_blocs.values()}
     else:
         from catalog.logos import Art
         art = Art(client, ROOT, log)
-        info, bloc_logo = art.build(metas, fr, en, series)
+        info, bloc_art = art.build(metas, fr, en, series)
         for m in metas:
             x = info[m['id']]
-            m.update(logo=x['logo'], logoLang=x['logoLang'], sym=x['sym'], tag=x['tag'], dark=x['dark'])
-        rep['art'] = {sid: {k: x[k] for k in ('logoSrc', 'symSrc', 'metrics', 'dark')} for sid, x in info.items()}
+            old = prev_meta.get(m['id'])
+            # série en échec, ou source mieux placée en échec passager : on garde le choix précédent
+            keep_logo = old and (m['id'] in failed or not x['logoSure']) and file_ok(old.get('logo'))
+            keep_sym = old and (m['id'] in failed or not x['symSure']) and file_ok(old.get('sym'))
+            for k in LOGO_KEYS:
+                m[k] = old.get(k) if keep_logo else x[k]
+            m['sym'] = old.get('sym') if keep_sym else x['sym']
+            if keep_logo or keep_sym:
+                rep['artKept'].append(m['id'])
+        for bid, b in bloc_art.items():
+            old = prev_blocs.get(bid)
+            if not b['sure'] and old and file_ok(old.get('logo')):
+                bloc_art[bid] = {'logo': old.get('logo'), 'dark': bool(old.get('dark'))}
+                rep['artKept'].append('bloc:' + bid)
+        rep['art'] = {sid: {k: x[k] for k in ('logoSrc', 'symSrc', 'metrics', 'dark', 'logoSure', 'symSure')}
+                      for sid, x in info.items()}
         rep['hotlinks'] = sorted(set(art.hotlinks))
         rep['artFails'] = art.fails
+        rep['artUnsure'] = sorted(set(art.unsure))
+        rep['artMatted'] = art.matted
+        rep['artOpaque'] = art.opaque
 
-    # ---------- 7. blocs ----------
+    # ---------- 7. blocs : grandes périodes du plus récent au plus ancien, puis les blocs à part ----------
     blocs = []
     firsts = collections.OrderedDict()
     for m in metas:
         b = m['bloc']
         firsts[b] = min(firsts.get(b, m['date']), m['date'])
-    for b, first in sorted(firsts.items(), key=lambda kv: kv[1], reverse=True):
+    for b, first in sorted(firsts.items(), key=lambda kv: (kv[0] not in T.SPECIAL_BLOCS, kv[1]), reverse=True):
         s = series.get(b) or {}
-        blocs.append({'id': b, 'name': s.get('name') or b, 'logo': bloc_logo.get(b), 'first': first})
+        ba = bloc_art.get(b) or {}
+        blocs.append({'id': b, 'name': s.get('name') or (prev_blocs.get(b) or {}).get('name') or b,
+                      'logo': ba.get('logo'), 'first': first, 'dark': bool(ba.get('dark')),
+                      'special': b in T.SPECIAL_BLOCS})
 
     # ---------- 8. écriture ----------
     out_sets = {'v': 1, 'built': None, 'blocs': blocs,
@@ -395,11 +456,23 @@ def main():
     rep['changed'] = changed
     rep['seconds'] = round(time.time() - t0, 1)
     rep['http'] = client.stats
+    im = rep.get('images') or {}
+    why = []
+    if im.get('unsure'):
+        why.append(f'{len(im["unsure"])} images non vérifiables (échec passager)')
+    if (im.get('sxSample') or {}).get('alarm'):
+        why.append('tirage Scrydex : trop d\'échecs (dos de carte ?)')
+    if rep.get('artUnsure'):
+        why.append(f'{len(rep["artUnsure"])} sources de logos/symboles en échec passager (choix précédent gardé)')
+    if failed:
+        why.append(f'{len(failed)} séries en échec (fichier précédent gardé)')
+    rep['exit'] = EXIT_UNSURE if why else 0
+    rep['exitWhy'] = why
     summary(rep, metas, hidden, set_files, blocs)
     if args.report:
         with open(args.report, 'w', encoding='utf-8') as f:
             json.dump(rep, f, ensure_ascii=False, indent=1, default=list)
-    return 0
+    return rep['exit']
 
 
 def summary(rep, metas, hidden, set_files, blocs):
@@ -425,8 +498,12 @@ def summary(rep, metas, hidden, set_files, blocs):
             log(f'  ! premières adresses non vérifiées : {im["failures"][:10]}')
         if im.get('verify'):
             v = im['verify']
-            log(f'  --verify : secours TCGdex {v["fallbackTcgdex"]} (échecs {len(v["fallbackTcgdexBad"])}), Scrydex {v["scrydexIds"]} '
-                f'(échecs {len(v["scrydexBad"])}), échantillon FR frais {v["frSample"]} (échecs {len(v["frSampleBad"])})')
+            sx = im.get('sxSample') or {}
+            log(f'  --verify : secours TCGdex {v["fallbackTcgdex"]} (échecs {len(v["fallbackTcgdexBad"])}), Scrydex servis '
+                f'{v["scrydexIds"]} (tirage frais {sx.get("n", 0)} : {len(sx.get("bad", []))} retirés, '
+                f'{len(sx.get("unsure", []))} sans réponse), échantillon FR frais {v["frSample"]} (échecs {len(v["frSampleBad"])})')
+        if im.get('unsure'):
+            log(f'  ! images non vérifiables (échec passager, laissées comme l\'annonce l\'API) : {im["unsure"][:10]}')
         log(f'  requêtes HEAD réseau : {im.get("net")} · adresses déjà servies par la sortie précédente : {im.get("assumed", 0)}')
     nl = [m['id'] for m in metas if not m['logo']]
     hl = [m['id'] for m in metas if m['logo'] and not m['logo'].startswith('img/')]
@@ -436,6 +513,13 @@ def summary(rep, metas, hidden, set_files, blocs):
     log(f'Symboles : {sum(1 for m in metas if m["sym"])} / {len(metas)} (liés chez Scrydex : {len(hs)} ; '
         f'sans : {", ".join(m["id"] for m in metas if not m["sym"]) or "aucun"}) · '
         f'plaque claire en thème sombre : {", ".join(m["id"] for m in metas if m["dark"]) or "aucune"}')
+    log(f'Blocs : {", ".join(b["id"] + ("*" if b["special"] else "") + ("(plaque)" if b["dark"] else "") for b in blocs)} '
+        f'(* = à part)')
+    if rep.get('artMatted') is not None:
+        log(f'Sources opaques détourées : {", ".join(rep["artMatted"]) or "aucune"} · encore opaques sur fond clair : '
+            f'{", ".join(rep["artOpaque"]) or "aucune"}')
+    if rep.get('artKept'):
+        log(f'  ! choix de logo/symbole précédent gardé (échec passager) : {", ".join(rep["artKept"])}')
     for p in rep['problems']:
         log(f'  ! {p[0]} : {p[1]}')
     files = ['data/sets.json', 'data/cards-index.json', 'data/cardimg.json']
@@ -465,6 +549,8 @@ def summary(rep, metas, hidden, set_files, blocs):
     log(f'img/ : {nimg} fichiers · {tot:,} o'.replace(',', ' '))
     log(f'Fichiers modifiés : {len(rep["changed"])} · {rep["seconds"]} s · HTTP {rep["http"]["net"]} requêtes réseau, '
         f'{rep["http"]["cache"]} depuis le cache, {rep["http"]["retry"]} reprises')
+    if rep.get('exitWhy'):
+        log(f'Code de sortie {rep["exit"]} (à relancer plus tard) : {" ; ".join(rep["exitWhy"])}')
 
 
 if __name__ == '__main__':

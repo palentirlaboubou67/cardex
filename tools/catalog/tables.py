@@ -57,15 +57,16 @@ PARENT = {
 
 # Logos partagés (un seul fichier pour plusieurs séries). Clé = nom du fichier (alias).
 # source : ('set', id) = logo FR/EN choisi pour cette série ; ('url', adresse) = source libre fixe.
-# tag : étiquette pour distinguer des lignes voisines au logo identique ('{year}' = année de la série).
+# tags : étiquette par série, seulement quand le nom ne suffit pas à distinguer des lignes voisines au logo
+# identique (pas d'année McDonald's ni de numéro POP : le nom les donne déjà et l'étiquette masquait le logo).
 SHARED = {
     # McDonald's : le même logo pour les 13 collections (les logos anglais « Match Battle » /
     # « Dragon Discovery » de 2022–2024 prêtent à confusion à côté de « Collection McDonald's 2024 »).
-    'mcd': {'source': ('url', 'https://images.pokemontcg.io/mcd11/logo.png'), 'bloc': 'mc', 'lang': 'en', 'tag': '{year}'},
+    'mcd': {'source': ('url', 'https://images.pokemontcg.io/mcd11/logo.png'), 'bloc': 'mc', 'lang': 'en'},
     # Étoile PROMO : identique sur toutes les séries promo (TCGdex FR de swshp).
     'promo': {'source': ('set', 'swshp'), 'sets': ['basep', 'np', 'dpp', 'hgssp', 'bwp', 'xyp', 'smp', 'swshp', 'svp', 'mep']},
     # Logo « Organized Play » des séries POP (identique sur les 6).
-    'pop': {'source': ('set', 'pop1'), 'sets': ['pop1', 'pop2', 'pop3', 'pop4', 'pop5', 'pop6', 'pop7', 'pop8', 'pop9'], 'tag': '{popnum}'},
+    'pop': {'source': ('set', 'pop1'), 'sets': ['pop1', 'pop2', 'pop3', 'pop4', 'pop5', 'pop6', 'pop7', 'pop8', 'pop9']},
     # « ex TRAINER KIT » (pokemontcg.io, téléchargé une fois et auto-hébergé) pour les 4 kits de l'ère EX,
     # avec le Pokémon du kit en étiquette (lignes voisines au logo identique).
     'tkex': {'source': ('url', 'https://images.pokemontcg.io/tk1a/logo.png'), 'sets': ['tk-ex-latia', 'tk-ex-latio', 'tk-ex-m', 'tk-ex-p'],
@@ -80,11 +81,26 @@ SHARED = {
 #   le constructeur le prendra (TCGdex FR passe toujours en premier).
 # Le choix est fait par logos.py (voir sa docstring) ; aucune table à tenir ici.
 
+# Logos FR pris ailleurs que chez TCGdex, avant TCGdex FR (téléchargés une fois et auto-hébergés).
+# - swsh4.5 (Destinées Radieuses) : TCGdex FR (.webp et .png) sert le logo anglais « Shining Fates ».
+#   Poképédia a le logo français (fichier « Logo Destinées Radieuses JCC.png », 3000 × 1247, transparent ;
+#   wiki sous CC BY-NC-SA 3.0, le logo lui-même reste une marque de The Pokémon Company comme les autres).
+LOGO_SOURCE = {
+    'swsh4.5': 'https://www.pokepedia.fr/images/3/38/Logo_Destin%C3%A9es_Radieuses_JCC.png',
+}
+# Logos « FR » de TCGdex qui sont en réalité les logos anglais : logoLang 'en' si l'on doit s'en servir
+# (source de LOGO_SOURCE en échec).
+FR_LOGO_IS_EN = {'swsh4.5'}
+
 # Symboles : collections McDonald's françaises 2018 / 2019 = mêmes cartes que les collections anglaises de
 # la même année (mcd18 : 6 cartes communes, mcd19 : les 12) -> même symbole (pokemontcg.io, auto-hébergé).
 SYMBOL_FROM = {'2018sm-fr': 'mcd18', '2019sm-fr': 'mcd19'}
 # Pas de symbole : les cartes du Set de Base n'en ont pas (les sources donnent le logo « Pokémon TCG »).
 NO_SYMBOL = {'base1'}
+# Sous-séries dont le « symbole » TCGdex est inutilisable : celui de la série mère (PARENT) à la place.
+# exu : TCGdex donne une vignette de texte « UNSEEN FORCES » illisible à 20 px ; les cartes Zarbi portent
+# le symbole d'EX Forces Cachées.
+PARENT_SYMBOL = {'exu'}
 
 # Logos de bloc (TCGdex : logo de la première série du bloc, ou rien).
 BLOC_LOGO = {
@@ -95,10 +111,15 @@ BLOC_LOGO = {
 }
 
 # Séries absentes de /v2/fr/sets mais dont des cartes existent en français (FINAL-images §3.2).
-# pl4 (Arceus) : TCGdex FR n'a que les 9 cartes AR1–AR9 ; métadonnées prises sur la série anglaise.
+# pl4 (Arceus) : TCGdex FR n'a que les 9 cartes AR1–AR9 ; métadonnées prises sur la série anglaise, sauf le
+# total (99 en anglais) : total = nombre de cartes du catalogue (ownTotal), sinon « 0 / 99 » inatteignable.
 EXTRA_SETS = {
-    'pl4': {'name': 'Arceus', 'serie': 'pl'},
+    'pl4': {'name': 'Arceus', 'serie': 'pl', 'ownTotal': True},
 }
+
+# Blocs « à part » (collections McDonald's, kits du dresseur, POP) : après les grandes périodes dans
+# sets.json (FINAL-images §5), marqués special=true.
+SPECIAL_BLOCS = ('mc', 'tk', 'pop')
 
 # ---------- Images de secours (FINAL-images §2.3) ----------
 

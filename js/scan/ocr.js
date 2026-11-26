@@ -104,9 +104,14 @@ export function setCards(cards) {
 
 // Ce qui est imprimé sur la carte, en deux parties : code de série (SV/ME, sans « FR ») et numéro
 // (« 079/165 », « 001/202 », « 4/102 », « RC1/RC32 », « TG05/TG30 », « SWSH001 », « 001 » pour les promos SV)
+// Séries qui reprennent le numéro d'origine de la carte reproduite (Collection Classique : « 4/102 ») : numéro
+// imprimé inconnu ici → la lecture ne peut ni les confirmer ni les écarter.
+const REPRINT_NUM = new Set(['cel25cc']);
+
 export function parts(id) {
   if (!idx) return { code: '', num: '' };
   const sid = setOf(id), lid = localOf(id).toUpperCase(), s = idx.sets[sid] || {};
+  if (REPRINT_NUM.has(sid)) return { code: '', num: '', unknown: true };
   const m = /^([A-Z]+)(\d+)$/.exec(lid);
   if (s.c) {
     const promo = !s.t || sid === 'svp' || sid === 'mep';
@@ -204,17 +209,28 @@ function numDist(text, num) {
   return a.d;
 }
 
-// Classement des candidats : distance au numéro imprimé (total compris), puis au code de série
+// Lectures : chaînes, ou { text, num (zone lue : bl | blsm | br | ec), box (cartouche SV/ME vu), variant }.
+const items = texts => (Array.isArray(texts) ? texts : [texts]).filter(Boolean)
+  .map(t => (typeof t === 'string' ? { text: t } : t)).filter(t => t.text);
+const zoneOf = id => { const s = idx.sets[setOf(id)] || {}; return s.num === 'bl' && s.era === 'sm' ? 'blsm' : s.num || 'br'; };
+// une lecture ne vaut que pour les cartes dont le numéro est dans la zone lue (et un cartouche → série SV/ME)
+const fits = (t, id) => (!t.num || t.num === zoneOf(id)) && (!t.box || !!(idx.sets[setOf(id)] || {}).c);
+
+// Classement des candidats : distance au numéro imprimé (total compris), puis au code de série ;
+// agree = nombre de lectures (variantes d'image) où le numéro est lu exactement
 export function verify(texts, ids) {
-  const list = (Array.isArray(texts) ? texts : [texts]).filter(Boolean);
+  const list = items(texts);
   return ids.map(id => {
     const p = parts(id);
-    let num = 99, code = p.code ? 99 : 0;
+    let num = 99, code = p.code ? 99 : 0, agree = 0;
     for (const t of list) {
-      num = Math.min(num, numDist(t, p.num));
-      if (p.code) code = Math.min(code, fitDist(t, p.code));
+      if (p.unknown || !fits(t, id)) continue;
+      const nd = numDist(t.text, p.num);
+      num = Math.min(num, nd);
+      if (nd < 0.5) agree++;
+      if (p.code) code = Math.min(code, fitDist(t.text, p.code));
     }
-    return { id, num, code, score: num + 0.5 * code, exp: p.code ? `${p.code}FR${p.num}` : p.num };
+    return { id, num, code, agree, unknown: !!p.unknown, score: num + 0.5 * code, exp: p.code ? `${p.code}FR${p.num}` : p.num };
   }).sort((a, b) => a.score - b.score || a.num - b.num);
 }
 
@@ -226,31 +242,48 @@ function pick(exact) {
   return null;
 }
 
-// Décision à partir des textes lus. candidates = cartes proposées par l'image (mode vérification).
+// Décision à partir des lectures. candidates = cartes proposées par l'image (mode vérification), dans l'ordre de
+// l'image ; dists = { id: distance d'image } (facultatif).
 // accept : numéro lu exactement (aux confusions près) et porté par une seule carte (ou désignée par son code) ;
+// en vérification, la carte lue ne doit pas être nettement plus loin à l'image que la première (chiffre mal lu
+// → choix entre les deux) ; sans candidats de l'image (grammaire seule) il faut en plus le code SV/ME lu
+// (séries SV/ME) ou deux lectures concordantes (autres séries).
 // choose : cartes dont le numéro est lu à une erreur près. Retourne { decision, ids, why } ou null.
-export function decideOcr(texts, candidates = []) {
+export const OCR = { imageSlack: 0.25 };
+export function decideOcr(texts, candidates = [], dists = null) {
   if (!idx) return null;
-  const list = texts.filter(Boolean);
+  const list = items(texts);
   if (!list.length) return null;
+  const first = list[0].text;
   const cands = [...new Set(candidates)].filter(id => idx.all.has(id));
   // 1. vérification parmi les cartes proposées par l'image
   if (cands.length) {
     const v = verify(list, cands), exact = v.filter(x => x.num < 0.5);
+    const unknown = v.filter(x => x.unknown).map(x => x.id);
+    if (exact.length && unknown.length) {
+      // une version au numéro imprimé inconnu (reproduction) reste possible : choix
+      return { decision: 'choose', ids: [...new Set([...exact.map(x => x.id), ...unknown])].slice(0, 8), why: 'reproduction au même numéro possible' };
+    }
     if (exact.length) {
       const a = pick(exact);
-      if (a) return { decision: 'accept', ids: [a.id, ...v.filter(x => x.id !== a.id).map(x => x.id)].slice(0, 8), why: `lu « ${list[0]} » ≈ ${a.exp}` };
+      const d0 = dists?.[cands[0]], da = dists?.[a?.id];
+      if (a && d0 != null && da != null && da > d0 + OCR.imageSlack) {
+        return { decision: 'choose', ids: [...new Set([cands[0], a.id, ...exact.map(x => x.id)])].slice(0, 8), why: 'lecture contredite par l’image' };
+      }
+      if (a) return { decision: 'accept', ids: [a.id, ...v.filter(x => x.id !== a.id).map(x => x.id)].slice(0, 8), why: `lu « ${first} » ≈ ${a.exp}` };
       return { decision: 'choose', ids: exact.map(x => x.id).slice(0, 8), why: 'numéro porté par plusieurs versions' };
     }
   }
-  // 2. grammaire seule : toutes les cartes dont le numéro apparaît dans la lecture
-  const pool = [...new Set([...list.flatMap(parse), ...cands])];
+  // 2. grammaire seule : toutes les cartes dont le numéro apparaît dans une lecture de leur zone
+  const pool = [...new Set([...list.flatMap(t => parse(t.text).filter(id => fits(t, id))), ...cands])];
   if (!pool.length) return null;
   const v = verify(list, pool), exact = v.filter(x => x.num < 0.5);
   if (exact.length) {
     const a = pick(exact);
-    // SV/ME : le code de série doit être lu aussi (un numéro mal lu peut tomber sur une autre carte réelle)
-    if (a && (!a.exp.includes('FR') || a.code <= 1)) return { decision: 'accept', ids: [a.id, ...exact.filter(x => x.id !== a.id).map(x => x.id)].slice(0, 8), why: `lu « ${list[0]} » ≈ ${a.exp}` };
+    // un numéro mal lu peut tomber sur une autre carte réelle : deux lectures concordantes, ou le code SV/ME
+    if (a && (a.exp.includes('FR') ? a.code <= 1 : a.agree >= 2)) {
+      return { decision: 'accept', ids: [a.id, ...exact.filter(x => x.id !== a.id).map(x => x.id)].slice(0, 8), why: `lu « ${first} » ≈ ${a.exp}` };
+    }
     return { decision: 'choose', ids: exact.map(x => x.id).slice(0, 8), why: 'numéro lu, plusieurs cartes possibles' };
   }
   const near = v.filter(x => x.num <= 1.0);
@@ -273,20 +306,22 @@ export function numsFor(ids) {
   return out.length ? out : ['bl', 'br', 'blsm', 'ec'];
 }
 
-export async function ocrFrame(token, { candidates = [], quad = null, onProgress } = {}) {
+export async function ocrFrame(token, { candidates = [], dists = null, quad = null, onProgress } = {}) {
   if (!idx && getCards()) setCards(getCards());
   if (!idx) return null;
   const t0 = performance.now();
-  await load(onProgress);
   const cands = [...new Set(candidates)].filter(id => idx.all.has(id));
+  // lignes préparées d'abord : l'image (token) peut être oubliée par le worker pendant le chargement de tesseract
   const lines = await call('ocrprep', { token, nums: numsFor(cands), quad });
-  const texts = [];
+  if (!lines.length) return null;
+  await load(onProgress);
+  const reads = [];
   let d = null;
   for (const l of lines) {
     const { text } = await readLine(l.img);
-    if (text) texts.push(text);
-    d = decideOcr(texts, cands);
+    if (text) reads.push({ text, num: l.num, box: !!l.box, variant: l.variant });
+    d = decideOcr(reads, cands, dists);
     if (d && d.decision === 'accept') break;
   }
-  return d ? { ...d, texts, ms: performance.now() - t0 } : null;
+  return d ? { ...d, texts: reads.map(r => r.text), ms: performance.now() - t0 } : null;
 }

@@ -33,7 +33,17 @@ export class ScanDB {
       (this.near.get(i) || this.near.set(i, []).get(i)).push(j);
       (this.near.get(j) || this.near.set(j, []).get(j)).push(i);
     }
+    // jumelles sans image (cards.json twins : carte avec image → cartes de même illustration sans image dans la base,
+    // kits du dresseur, McDonald's, promos…) : une telle ligne n'est jamais acceptée sur l'image seule
+    this.twins = cards.twins || {};
     this.mask = null;   // Uint8Array : lignes ignorées (banc d'essai « carte absente »)
+  }
+
+  // Jumelles sans image de la carte i et de ses réimpressions
+  twinsOf(i) {
+    const out = [];
+    for (const j of this.members(i)) for (const t of this.twins[this.ids[j]] || []) if (!out.includes(t)) out.push(t);
+    return out;
   }
 
   // Masque une carte et son groupe de réimpressions (banc d'essai).

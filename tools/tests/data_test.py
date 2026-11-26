@@ -4,8 +4,11 @@
     python -P tools/tests/data_test.py --fixtures (fixtures seulement)
     python -P tools/tests/data_test.py --offline  (sans aucune requête vers TCGdex, Scrydex, jsDelivr)
     python -P tools/tests/data_test.py --prices DIR   (fichiers de cotes pris dans DIR)
+    python -P tools/tests/data_test.py --port 8792    (port du serveur de test)
 
-Port 8772. Quelques requêtes réelles et légères (TCGdex ≤ 4/s) : une fiche, une recherche, une série en direct,
+Les tests qui demandent le réseau sont comptés à part (SKIP) avec --offline, jamais comme réussis.
+
+Port 8772 (ou --port N). Quelques requêtes réelles et légères (TCGdex ≤ 4/s) : une fiche, une recherche, une série en direct,
 quelques images des cas limites.
 """
 import json
@@ -14,7 +17,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'f2'))
-from kit import ROOT, FIX, PORT, HARNESS, serve, Runner, check, eq, console_watch, expected_404s  # noqa: E402
+from kit import ROOT, FIX, PORT, HARNESS, serve, Runner, Skip, check, eq, console_watch, expected_404s  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 ARGS = set(sys.argv[1:])
@@ -38,13 +41,20 @@ def jload(*p):
 SX_BACK = 'cfl2loWl84E8tUjrC-Q-I0D0J'
 
 
-def scrydex_etag(url):
+def scrydex_etag(url, tries=3):
+    import urllib.error
     import urllib.request
     req = urllib.request.Request(url, method='HEAD', headers={
         'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8', 'User-Agent': 'Mozilla/5.0 (cardex-test)'})
-    with urllib.request.urlopen(req, timeout=20) as res:
-        e = res.headers.get('ETag') or ''
-    return (e[2:] if e.startswith('W/') else e).strip('"')
+    for i in range(tries):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as res:
+                e = res.headers.get('ETag') or ''
+            return (e[2:] if e.startswith('W/') else e).strip('"')
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+            if i == tries - 1:
+                raise
+            time.sleep(1.5 * (i + 1))      # connexion coupée (WinError 10054…) : on réessaie doucement
 
 
 def main():
@@ -193,7 +203,7 @@ def main():
 
         def t_set_live():
             if not ONLINE:
-                return 'sauté (--offline)'
+                raise Skip('--offline : réseau non demandé')
             # fichier statique absent -> TCGdex en direct (REST + GraphQL @locale vérifié)
             sid = '2013bw'
             srv.fail[f'data/sets/{sid}.json'] = 404
@@ -214,7 +224,7 @@ def main():
 
         def t_live_card():
             if not ONLINE:
-                return 'sauté (--offline)'
+                raise Skip('--offline : réseau non demandé')
             r = pg.evaluate('''async () => { const t = performance.now();
               const c = await TCG.card('exu-%3F'); const c2 = await TCG.card('exu-%3F');
               const ctl = new AbortController(); const p = TCG.card('sv03.5-025', { signal: ctl.signal }); ctl.abort();
@@ -230,7 +240,8 @@ def main():
         # ---------- recherche ----------
         def t_search():
             r = pg.evaluate('''async () => { const out = {};
-              for (const q of ['pikachu', 'PIKACHU', 'évoli', 'evoli', 'dracaufeu ex', 'MEW 25', 'mew025', '025/165', '25', '#25', '#448', 'zarbi', 'a', 'mega lucario', 'TG05/TG30', 'xyzxyzxyz']) {
+              for (const q of ['pikachu', 'PIKACHU', 'évoli', 'evoli', 'dracaufeu ex', 'MEW 25', 'mew025', '025/165', '25', '#25', '#448', 'zarbi', 'a', 'mega lucario', 'TG05/TG30', 'xyzxyzxyz',
+                             'SWSH001', 'swsh001', 'TG05', 'GG01', 'H01', 'RC5', 'SV49', 'XY01', 'pikachu 25', 'pikachu 025', 'pikachu 025/165', 'dracaufeu ex 199', 'sma SV49', 'sv03.5-025', 'pikachu 9999']) {
                 const t = performance.now(); const s = await CAT.search(q, { limit: 50 });
                 out[q] = { ms: performance.now() - t, count: s.count, n: s.cards.length, sets: s.sets.map(x => x.id), ids: s.cards.map(c => c.id), names: s.cards.map(c => c.name),
                            shape: s.cards[0] ? Object.keys(s.cards[0]).sort() : [] };
@@ -250,6 +261,23 @@ def main():
                 check('exu' in r['zarbi']['sets'], 'séries trouvées par nom', r['zarbi']['sets'])
                 check(r['TG05/TG30']['n'] >= 1, 'numéros TG', r['TG05/TG30'])
                 check(r['mega lucario']['n'] >= 3, 'sans tiret ni accent', r['mega lucario'])
+                for q, sid in [('SWSH001', 'swshp-SWSH001'), ('swsh001', 'swshp-SWSH001'), ('XY01', 'xyp-XY01')]:
+                    check(r[q]['ids'][:1] == [sid], f'numéro imprimé {q} : {sid} d’abord', r[q]['ids'][:5])
+                # SV49 (Destinées Occultes) et SV049 (Destinées Radieuses) sont deux numéros imprimés « SV49 »
+                check(sorted(r['SV49']['ids'][:2]) == ['sma-SV49', 'swsh4.5sv-SV049'], 'numéro imprimé SV49 : les cartes SV d’abord', r['SV49']['ids'][:5])
+                check('pl3-49' in r['SV49']['ids'], 'SV49 : puis la 49 de la série de code SV', r['SV49']['ids'][:5])
+                for q in ['TG05', 'GG01', 'H01', 'RC5']:
+                    check(r[q]['n'] >= 1 and all(i.split('-')[-1].upper().replace('0', '') == q.upper().replace('0', '') for i in r[q]['ids']),
+                          f'numéro imprimé {q}', r[q]['ids'][:8])
+                for q in ['pikachu 25', 'pikachu 025']:
+                    check(r[q]['n'] >= 3 and all(n.lower().startswith('pikachu') for n in r[q]['names'])
+                          and all(i.split('-')[-1].lstrip('0') == '25' for i in r[q]['ids']), f'nom + numéro « {q} »', r[q]['ids'][:8])
+                check('sv03.5-025' in r['pikachu 025/165']['ids'][:3] and all(i.split('-')[-1].lstrip('0') == '25' for i in r['pikachu 025/165']['ids']),
+                      'nom + numéro/total', r['pikachu 025/165']['ids'])
+                check(r['dracaufeu ex 199']['ids'][:1] == ['sv03.5-199'], 'nom de plusieurs mots + numéro', r['dracaufeu ex 199']['ids'][:5])
+                eq(r['sma SV49']['ids'][:1], ['sma-SV49'], 'id de série TCGdex + numéro')
+                eq(r['sv03.5-025']['ids'], ['sv03.5-025'], 'id de carte complet')
+                eq(r['pikachu 9999']['count'], 0, 'nom + numéro inconnu : rien')
                 exact = [n for n in r['pikachu']['names'] if n == 'Pikachu']
                 check(r['pikachu']['names'][:len(exact)] == exact, 'exact avant préfixe', r['pikachu']['names'][:12])
             eq(r['a']['n'], 0, 'moins de 2 lettres : pas de cartes')
@@ -258,6 +286,35 @@ def main():
             check('partial' in r['pikachu']['shape'] or 'finishes' in r['pikachu']['shape'], 'forme brève', r['pikachu']['shape'])
             slow = max(v['ms'] for k, v in r.items() if k != 'pikachu')
             return f"première recherche {r['pikachu']['ms']:.0f} ms (index), ensuite ≤ {slow:.0f} ms ; pikachu {r['pikachu']['count']}, #25 {r['#25']['count']}"
+
+        def t_search_cpu4():
+            q = ctx.new_page()
+            console_watch(q, errs, expected_404s() + WANTED)
+            q.goto(srv.url + '__f2.html')
+            cdp = ctx.new_cdp_session(q)
+            cdp.send('Emulation.setCPUThrottlingRate', {'rate': 4})
+            r = q.evaluate('''async () => {
+              const [CAT, IMG] = await load('./js/data/catalog.js', './js/data/images.js'); await IMG.ready; await CAT.sets();
+              await (await fetch('data/cards-index.json')).text();          // fichier déjà là : on mesure le calcul
+              // longues tâches (> 50 ms) et images bloquées (long-animation-frame, > 50 ms) pendant la construction
+              const lt = [], lf = [];
+              const po = new PerformanceObserver(l => { for (const e of l.getEntries()) lt.push(Math.round(e.duration)); });
+              po.observe({ type: 'longtask' });
+              const po2 = new PerformanceObserver(l => { for (const e of l.getEntries()) lf.push(Math.round(e.duration)); });
+              try { po2.observe({ type: 'long-animation-frame' }); } catch { /* navigateur sans LoAF */ }
+              let t = performance.now(); const s1 = await CAT.search('pikachu'); const first = performance.now() - t;
+              t = performance.now(); await CAT.search('dracaufeu'); const second = performance.now() - t;
+              t = performance.now(); const d = await CAT.cardsOfDex(25); const dex = performance.now() - t;
+              t = performance.now(); await CAT.search('pikachu 25'); const named = performance.now() - t;
+              await new Promise(r => setTimeout(r, 100)); po.disconnect(); po2.disconnect();
+              return { first, second, dex, named, lt, lf, n: s1.count };
+            }''')
+            cdp.detach()
+            q.close()
+            check(not r['lt'] and not r['lf'], 'aucune longue tâche ni image bloquée > 50 ms pendant la construction de l’index (CPU ×4)', r)
+            check(r['second'] < 50 and r['dex'] < 50 and r['named'] < 50, 'recherches suivantes < 50 ms au processeur ×4', r)
+            return (f"CPU ×4 : première recherche {r['first']:.0f} ms (index par tranches), ensuite {r['second']:.0f} ms, "
+                    f"cardsOfDex {r['dex']:.0f} ms, nom + numéro {r['named']:.0f} ms, longues tâches {r['lt']}, LoAF {r['lf']}")
 
         def t_dex():
             r = pg.evaluate('''async () => { const list = await DEX.pokedex(); const g = s => DEX.guessDex(s);
@@ -296,6 +353,8 @@ def main():
               // jamais d'id Scrydex hors liste « ok » : carte imaginaire d'une série reliée à Scrydex
               out.unverified = IMG.cardImg({ id: 'exu-ZZ', image: '' });
               out.unverified2 = IMG.cardImg({ id: 'mep-999', localId: '999', image: '' });
+              out.tracker = String(IMG.imgHTML({ id: 'sv03.5-025', localId: '025', image: 'https://tracker.example/p?u=1' }));
+              out.quote = String(IMG.imgHTML({ id: 'sv03.5-025', localId: '025', image: 'https://assets.tcgdex.net/fr/sv/sv03.5/025" onerror="x' }));
               return out; }''', TRICKY)
             sx = 'https://images.scrydex.com/pokemon/'
             eq(r['exu-%3F']['low']['urls'], [sx + 'ex10-%3F/small'], 'Zarbi « ? » (id encodé)')
@@ -326,9 +385,12 @@ def main():
             check(h.startswith(expect) and h.endswith('">'), 'balisage exact', h)
             eq(r['unverified']['urls'], [], 'pas d’id Scrydex non vérifié (exu-ZZ)')
             eq(r['unverified2']['urls'], [], 'pas d’id Scrydex non vérifié (mep-999)')
+            check('tracker.example' not in r['tracker'], 'image d’un autre hôte ignorée', r['tracker'])
+            check('onerror="x' not in r['quote'], 'base d’image avec guillemet ignorée', r['quote'])
             check(all('card back' not in json.dumps(v) for v in r.values()), 'jamais de dos de carte')
 
         def t_fallback_dom():
+            pg.route('https://assets.tcgdex.net/fr/zz/**', lambda route: route.fulfill(status=404, body='introuvable'))
             r = pg.evaluate('''async (base) => {
               IMG.installFallback(document);
               const box = document.getElementById('out');
@@ -338,13 +400,14 @@ def main():
               while (!box.querySelector('.card-ph') && performance.now() - t0 < 5000) await new Promise(r => setTimeout(r, 50));
               const ph = box.querySelector('.card-ph');
               return { ph: ph && ph.outerHTML, imgs: box.querySelectorAll('img.card-img').length, eager: box.querySelector('img.card-img') && box.querySelector('img.card-img').outerHTML };
-            }''', srv.url)
+            }''', 'https://assets.tcgdex.net/fr/zz/')
+            pg.unroute('https://assets.tcgdex.net/fr/zz/**')
             check(r['ph'] and 'card-ph big' in r['ph'] and '1/99' in r['ph'], 'chaîne de secours puis vignette (classe gardée)', r)
             check(r['eager'] and 'loading="eager"' in r['eager'] and 'fetchpriority="high"' in r['eager'] and 'alt="Pikachu"' in r['eager'], 'eager', r['eager'])
 
         def t_images_load():
             if not ONLINE:
-                return 'sauté (--offline)'
+                raise Skip('--offline : réseau non demandé')
             # les cas limites s'affichent vraiment (une requête par image, pas plus)
             r = pg.evaluate('''async (ids) => {
               IMG.installFallback(document);
@@ -518,6 +581,8 @@ def main():
               const h4 = await W.check();                        // y revient : nouvelle alerte
               // ancienne envie v1 « holo » (= Reverse / Holo) sur une carte qui a une reverse
               await W.put({ key: 'sv03.5-025|holo', id: 'sv03.5-025', variant: 'holo', min: 0, max: 100, name: 'Pikachu', setName: '151', localId: '025', image: '', createdAt: 1 });
+              // ancienne « normale » d'une carte holo seulement (champs de base = la holo) : finition « holo »
+              await W.put({ key: 'sv03.5-006|normal', id: 'sv03.5-006', variant: 'normal', min: 0, max: 100, name: 'Dracaufeu-ex', setName: '151', localId: '006', image: '', createdAt: 1 });
               await W.check({ minAge: 0 });
               const keys = (await W.all()).map(x => x.key).sort();
               off();
@@ -529,6 +594,7 @@ def main():
             eq([r['h1'], r['h2'], r['h3'], r['h4']], [1, 0, 0, 1], 'alerte à l’entrée dans la fourchette seulement')
             check(not r['inRange3'], 'hors fourchette')
             check('sv03.5-025|reverse' in r['keys'] and 'sv03.5-025|holo' not in r['keys'], 'migration « holo » v1 -> « reverse »', r['keys'])
+            check('sv03.5-006|holo' in r['keys'] and 'sv03.5-006|normal' not in r['keys'], 'migration « normal » v1 d’une carte holo seulement -> « holo »', r['keys'])
             check(r['changes'] >= 5, 'abonnement on()', r['changes'])
             for k in ['key', 'id', 'name', 'setName', 'setId', 'localId', 'image', 'variant', 'min', 'max', 'low', 'trend', 'checkedAt', 'inRange']:
                 check(k in r['entry'], f'champ {k}', r['entry'])
@@ -537,7 +603,7 @@ def main():
 
         def t_wishes_fallback():
             if not ONLINE:
-                return 'sauté (--offline)'
+                raise Skip('--offline : réseau non demandé')
             # pas de fichier de cotes pour cette série : TCGdex en direct avec cmFor
             r = pg.evaluate('''async () => { const W = window.WishDB;
               const w = W.make({ id: 'swsh12-139', name: 'Lugia VSTAR', setName: 'Tempête Argentée', localId: '139' }, 'normal', { max: 1000 });
@@ -547,6 +613,41 @@ def main():
             check(r['source'] in ('tcgdex', 'cardmarket') and (r['low'] or r['trend']), 'secours TCGdex', r)
             return f"{r}"
 
+        def t_wishes_rate():
+            hits = []
+            first = {}
+
+            def api(route):
+                url = route.request.url
+                hits.append((time.time(), url))
+                wid = url.rsplit('/', 1)[-1]
+                if wid in ('zz-rl-1', 'zz-rl-2') and not first.get(wid):
+                    first[wid] = True
+                    return route.fulfill(status=503 if wid == 'zz-rl-1' else 429, body='{"error":"busy"}',
+                                         headers={'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'})
+                body = {'id': wid, 'variants': {'normal': True},
+                        'pricing': {'cardmarket': {'idProduct': 1, 'trend': 2, 'avg7': 2, 'avg30': 2, 'low': 1.5}}}
+                return route.fulfill(status=200, body=json.dumps(body), headers={'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'})
+            pg.route('https://api.tcgdex.net/v2/fr/cards/zz-rl-*', api)
+            try:
+                r = pg.evaluate('''async () => { const W = window.WishDB;
+                  for (const w of await W.all()) await W.del(w.key);
+                  for (let i = 1; i <= 8; i++) await W.put(W.make({ id: 'zz-rl-' + i, name: 'Test ' + i, localId: String(i) }, 'normal', { max: 10 }));
+                  const t = performance.now(); const hits = await W.check(); const ms = performance.now() - t;
+                  const all = await W.all();
+                  for (const w of all) await W.del(w.key);
+                  return { ms, hits: hits.length, low: all.map(w => w.low) }; }''')
+            finally:
+                pg.unroute('https://api.tcgdex.net/v2/fr/cards/zz-rl-*')
+            times = sorted(t for t, _ in hits)
+            gaps = [b - a for a, b in zip(times, times[1:])]
+            eq(len(hits), 10, '8 envies + 2 nouveaux essais')
+            check(min(gaps) >= 0.2, f'au plus 4 requêtes par seconde (écart minimal {min(gaps) * 1000:.0f} ms)', [round(g, 3) for g in gaps])
+            retry = {u.rsplit('/', 1)[-1]: [t for t, x in hits if x == u] for _, u in hits if u.endswith(('zz-rl-1', 'zz-rl-2'))}
+            check(all(len(v) == 2 and v[1] - v[0] >= 1.4 for v in retry.values()), 'nouvel essai après 1,5 s sur 503 et 429', retry)
+            eq(r['low'], [1.5] * 8, 'toutes les envies cotées (nouvel essai réussi)')
+            return f"10 requêtes en {r['ms'] / 1000:.1f} s, écart minimal {min(gaps) * 1000:.0f} ms"
+
         for name, fn in [('net : délais, erreurs typées, annulation, cached(), data()', t_net),
                          ('net : manifest et ?h=', t_net_manifest),
                          ('catalogue : sets()', t_sets),
@@ -555,6 +656,7 @@ def main():
                          ('catalogue : série en direct (fichier absent)', t_set_live),
                          ('tcgdex : fiche, annulation, recherche en direct', t_live_card),
                          ('recherche', t_search),
+                         ('recherche : index par tranches (CPU ×4)', t_search_cpu4),
                          ('Pokédex et cardsOfDex', t_dex),
                          ('images : résolveur (cas limites)', t_images),
                          ('images : chaîne de secours dans le DOM', t_fallback_dom),
@@ -564,7 +666,8 @@ def main():
                          ('cotes : 6 fichiers en parallèle au plus', t_prices_parallel),
                          ('cotes en direct : cmFor (holo, reverse, Poké Ball, Master Ball, Cosmos)', t_cmfor),
                          ('envies : prix, alertes, migration v1', t_wishes),
-                         ('envies : secours TCGdex', t_wishes_fallback)]:
+                         ('envies : secours TCGdex', t_wishes_fallback),
+                         ('envies : TCGdex au plus 4/s, nouvel essai sur 429 / 503', t_wishes_rate)]:
             R.run(name, fn)
         R.run('aucune erreur de console', lambda: check(not errs, 'erreurs', errs))
         b.close()

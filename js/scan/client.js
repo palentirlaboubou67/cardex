@@ -1,4 +1,6 @@
 // Liaison avec le worker du scanner (un seul worker par page) : appels { type, … } → promesse du résultat.
+// Un appel peut être annulé (signal) : la promesse est rejetée tout de suite (AbortError) et le worker abandonne
+// les téléchargements en cours de cette demande (message « cancel »).
 let worker = null, seq = 0, cards = null;
 const pending = new Map();
 
@@ -14,28 +16,43 @@ export function getWorker() {
     const p = pending.get(id);
     if (!p) return;
     pending.delete(id);
+    p.done?.();
     if (ok) p.res(r); else p.rej(new Error(error));
   };
   worker.onerror = e => {
     // erreur de chargement du module : toutes les demandes en cours échouent
     const err = new Error(e.message || 'worker du scanner indisponible');
-    for (const p of pending.values()) p.rej(err);
+    for (const p of pending.values()) { p.done?.(); p.rej(err); }
     pending.clear();
   };
   return worker;
 }
 
-export function call(type, msg = {}, transfer = []) {
+const aborted = () => new DOMException('Annulé', 'AbortError');
+
+export function call(type, msg = {}, transfer = [], { signal } = {}) {
+  if (signal?.aborted) return Promise.reject(aborted());
   const w = getWorker(), id = ++seq;
   return new Promise((res, rej) => {
-    pending.set(id, { res, rej });
+    const p = { res, rej };
+    if (signal) {
+      const stop = () => {
+        if (!pending.has(id)) return;
+        pending.delete(id);
+        w.postMessage({ id: ++seq, type: 'cancel', target: id });
+        rej(aborted());
+      };
+      signal.addEventListener('abort', stop, { once: true });
+      p.done = () => signal.removeEventListener('abort', stop);
+    }
+    pending.set(id, p);
     w.postMessage({ id, type, ...msg }, transfer);
   });
 }
 
 // Image à envoyer au worker (zone sx, sy, sw, sh de src, réduite à dw × dh) : ImageBitmap transférée ;
 // sans OffscreenCanvas 2D (Safari < 16.4), ImageData préparée ici sur le fil principal.
-const OFFSCREEN = (() => {
+export const OFFSCREEN = (() => {
   try { return typeof OffscreenCanvas === 'function' && !!new OffscreenCanvas(1, 1).getContext('2d'); } catch { return false; }
 })();
 let cv = null;
@@ -58,6 +75,6 @@ export function terminate() {
   if (!worker) return;
   worker.terminate();
   worker = null;
-  for (const p of pending.values()) p.rej(new Error('worker arrêté'));
+  for (const p of pending.values()) { p.done?.(); p.rej(new Error('worker arrêté')); }
   pending.clear();
 }

@@ -60,7 +60,8 @@ function resolve(c, q, depth) {
   if (!id) return none;
   const fx = CI.fix[id];
   if (fx) return { urls: [sxUrl(fx, q)], en: true, same: false, ref: null };
-  if (c.image) {
+  // base d'image FR de TCGdex seulement (une autre URL, venue d'une sauvegarde ou d'une fiche, est ignorée)
+  if (typeof c.image === 'string' && c.image.startsWith(FR) && !/[\s"'<>`]/.test(c.image)) {
     const w = `${c.image}/${q}.webp`, p = `${c.image}/${q}.png`;   // seul low.webp manque parfois (liste png)
     return { urls: q === 'low' && CI.png.has(id) ? [p] : [w, p], en: false, same: false, ref: null };
   }

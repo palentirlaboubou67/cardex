@@ -2,10 +2,14 @@
 
 FR -> même carte en anglais (TCGdex EN, puis Scrydex, identifiants vérifiés seulement : liste `ok`)
 -> même illustration d'une réimpression (`alt`) -> vignette. Chaque adresse produite est vérifiée (HEAD) ;
-Scrydex : seulement les identifiants nouveaux, doucement, avec contrôle du nom (sinon revue manuelle).
+Scrydex : seulement les identifiants nouveaux, doucement, avec contrôle du nom (sinon revue manuelle), plus un
+tirage frais de SX_SAMPLE identifiants connus avec --verify (dos de carte détecté par le préfixe d'ETag).
+Une image n'est « absente » que sur un 404/410 ; une erreur passagère (réseau, 5xx, 403) laisse la carte comme
+l'annonce l'API (i=1) et la signale dans rep['unsure'] (build_catalog.py sort alors avec le code 3).
 """
 import collections
 import concurrent.futures
+import datetime as dt
 import random
 import re
 import unicodedata
@@ -16,6 +20,12 @@ from .tables import REPRINT, SCRYDEX_ID, SCRYDEX_NONE, SCRYDEX_PLACEHOLDER_ETAG,
 
 SX = 'https://images.scrydex.com/pokemon/'
 TC = 'https://assets.tcgdex.net/'
+# Seules réponses qui prouvent qu'une image n'existe pas ; le reste (erreur réseau, 5xx, 403…) = « on ne sait pas ».
+ABSENT = (404, 410)
+# --verify : identifiants Scrydex déjà vérifiés redemandés à chaque fois (tirage au sort, ≤ 1 req/s), pour
+# voir si Scrydex sert son dos de carte à la place ; au-delà de SX_ALARM d'échecs, alerte (code de sortie 3).
+SX_SAMPLE = 40
+SX_ALARM = 0.25
 PTCG_CARDS = 'https://raw.githubusercontent.com/PokemonTCG/pokemon-tcg-data/master/cards/en/{}.json'
 
 
@@ -83,16 +93,32 @@ class Verifier:
             return False
         return True
 
+    @staticmethod
+    def verdict(m, scrydex=False):
+        """Réponse HEAD -> True (image vérifiée) / False (absente pour de bon : 404, 410, image de remplacement
+        Scrydex) / None (on ne sait pas : jamais vérifiée, erreur réseau, 5xx, 403, 200 qui n'est pas une image)."""
+        st = (m or {}).get('status')
+        if st in ABSENT:
+            return False
+        if st != 200:
+            return None
+        if scrydex and (m.get('etag') or '').startswith(SCRYDEX_PLACEHOLDER_ETAG):
+            return False
+        return True if Verifier.ok(m, scrydex) else None
+
     def status(self, url):
-        """Statut connu sans requête : True / False / None (jamais vérifié). Le cache HEAD d'abord, puis les
+        """Statut connu sans requête : True / False / None (voir verdict). Le cache HEAD d'abord, puis les
         adresses que la sortie précédente servait déjà (vérifiées à leur ajout ; --verify en revoit un échantillon)."""
-        m = self.c.cached_meta('HEAD', url)
-        if not m or m.get('status') in (None, 0):
-            return True if url in self.assume else None
-        return self.ok(m, 'scrydex' in url)
+        v = self.verdict(self.c.cached_meta('HEAD', url), 'scrydex' in url)
+        if v is None and url in self.assume:
+            return True
+        return v
 
     def sx_ok(self, sxid):
-        return bool(self.status(sx_url(sxid))) or sxid in self.known_sx
+        """Identifiant Scrydex utilisable : vérifié (cache HEAD ou sortie précédente), sauf s'il est désormais
+        absent ou remplacé par le dos de carte (contrôle frais de --verify)."""
+        v = self.status(sx_url(sxid))
+        return v if v is not None else sxid in self.known_sx
 
 
 def scrydex_id(sid, raw):
@@ -170,8 +196,10 @@ def build(catalog, en_cards, client, prev=None, verify=False, log=print, sample=
     Renvoie (cardimg, cartes dont l'image FR annoncée n'existe pas, rapport)."""
     V = Verifier(client, known_from(prev or {}), log)
     V.assume = assumed_from(prev, prev_catalog)
-    rep = {'review': [], 'failures': [], 'noLowPng': [], 'assumed': len(V.assume)}
+    rep = {'review': [], 'failures': [], 'noLowPng': [], 'assumed': len(V.assume), 'unsure': []}
     en_by_id = {c['id']: c for c in en_cards}
+    if verify:  # avant tout choix : un identifiant devenu absent ou dos de carte sort de la liste `ok`
+        rep['sxSample'] = sample_scrydex(V, log)
 
     # dictionnaire FR -> EN (cartes présentes dans les deux langues, traduction dominante)
     pairs = collections.defaultdict(collections.Counter)
@@ -192,17 +220,21 @@ def build(catalog, en_cards, client, prev=None, verify=False, log=print, sample=
         V.head_many(unknown)
     second = {c['id']: (c['img'] + '/low.png', c['img'] + '/high.webp') for c in fr_cards if not V.status(low[c['id']])}
     V.head_many([u for us in second.values() for u in us if V.status(u) is None])
-    png, missing = [], set()
+    png, missing, unsure = [], set(), []
     for cid, (p, h) in second.items():
         if V.status(p):
             png.append(cid)          # seul low.webp manque : low.png
         elif V.status(h):
             rep['noLowPng'].append(cid)  # ni low.webp ni low.png, mais high.webp : rare, signalé
+        elif V.status(low[cid]) is False and V.status(p) is False and V.status(h) is False:
+            missing.add(cid)         # annoncée mais absente partout (404/410 sur les trois)
         else:
-            missing.add(cid)         # annoncée mais absente partout
+            unsure.append(cid)       # échec passager : on garde l'image annoncée par l'API (i=1), signalé
     rep['frListed'] = len(fr_cards)
     rep['png'] = sorted(png)
     rep['frMissing'] = sorted(missing)
+    rep['frUnsure'] = sorted(unsure)
+    rep['unsure'] += [('fr', cid) for cid in sorted(unsure)]
 
     # ---- 2. cartes sans image FR (ou image FR absente partout)
     need = [(sid, c) for sid, s in catalog.items() for c in s['cards'] if not c['img'] or c['id'] in missing]
@@ -219,14 +251,17 @@ def build(catalog, en_cards, client, prev=None, verify=False, log=print, sample=
             sx_cand[c['id']] = (sxid, over)
     V.head_many([u for _, u in en_url.values() if V.status(u) is None])
     en_ok = {cid for cid, (_, u) in en_url.items() if V.status(u)}
+    rep['unsure'] += [('en', cid) for cid, (_, u) in sorted(en_url.items()) if V.status(u) is None]
 
     # Scrydex : identifiants déjà vérifiés ; les nouveaux : HEAD (≤ 1 req/s) puis contrôle du nom
     sx_ok, new_sx = set(), []
     for cid, (sxid, _) in sx_cand.items():
         st = V.status(sx_url(sxid))
+        if st is False:
+            continue                 # absent, ou dos de carte (contrôle frais de --verify)
         if st or sxid in V.known_sx:
             sx_ok.add(cid)
-        elif st is None:
+        else:
             new_sx.append(cid)
     twins = [t for t, _ in REPRINT.values() if t and not V.sx_ok(t) and V.status(sx_url(t)) is None]
     if (new_sx or twins) and not client.offline:
@@ -235,6 +270,8 @@ def build(catalog, en_cards, client, prev=None, verify=False, log=print, sample=
         for cid in new_sx:
             sxid = sx_cand[cid][0]
             if not V.ok(res.get(sx_url(sxid)), True):
+                if V.verdict(res.get(sx_url(sxid)), True) is None:
+                    rep['unsure'].append(('scrydex', cid))
                 continue
             ok, ref, cand = names.check(cid, by_id[cid]['n'], sxid)
             if ok:
@@ -334,6 +371,29 @@ def _sx_known(u, V):
     return u.startswith(SX) and V.sx_ok(u[len(SX):].rsplit('/', 1)[0])
 
 
+def sample_scrydex(V, log, n=SX_SAMPLE):
+    """--verify : contrôle frais (cache ignoré, ≤ 1 req/s, dans l'esprit des conditions Scrydex) d'un tirage
+    d'identifiants déjà vérifiés. Un identifiant absent (404) ou servi avec le dos de carte (préfixe d'ETag) est
+    retiré de la sortie ; beaucoup d'échecs d'un coup = Scrydex a changé : alerte."""
+    ids = sorted(V.known_sx)
+    if not ids or V.c.offline:
+        return {'n': 0, 'bad': [], 'unsure': [], 'alarm': False}
+    rnd = random.Random(dt.date.today().toordinal())  # un autre tirage chaque jour, reproductible dans la journée
+    smp = rnd.sample(ids, min(n, len(ids)))
+    keep = V.c.refresh
+    V.c.refresh = True
+    try:
+        res = V.head_many([sx_url(i) for i in smp], workers=1)
+    finally:
+        V.c.refresh = keep
+    bad = [i for i in smp if V.verdict(res.get(sx_url(i)), True) is False]
+    unsure = [i for i in smp if V.verdict(res.get(sx_url(i)), True) is None]
+    alarm = len(bad) >= SX_ALARM * len(smp)
+    log(f'  --verify : tirage Scrydex frais {len(smp)} identifiants, {len(bad)} absents ou dos de carte '
+        f'{bad[:5]}, {len(unsure)} sans réponse' + (' — ALERTE : Scrydex a changé ?' if alarm else ''))
+    return {'n': len(smp), 'bad': bad, 'unsure': unsure, 'alarm': alarm}
+
+
 def card_img(M, OK, cid, image, raw, q='low'):
     """Portage Python de cardImg() (FINAL-images §3.2, version corrigée). Renvoie (urls, en, same)."""
     if cid in M['fix']:
@@ -428,7 +488,7 @@ def reverify(V, catalog, M, missing, sample, log):
                         tc_urls.add(u)
     need = [u for u in tc_urls if V.status(u) is None]
     log(f'  --verify : {len(tc_urls)} adresses TCGdex de secours (dont {len(need)} à vérifier), '
-        f'{len(sx_ids)} identifiants Scrydex (déjà vérifiés : aucune requête)')
+        f'{len(sx_ids)} identifiants Scrydex servis (vérifiés à leur ajout ; tirage frais : voir sxSample)')
     V.head_many(need)
     bad_tc = sorted(u for u in tc_urls if not V.status(u))
     bad_sx = sorted(i for i in sx_ids if not V.sx_ok(i))

@@ -32,15 +32,29 @@ def card_values(g, side):
     return v if any(x is not None for x in v) else None
 
 
-def build(cmmap, guide_rows, price_day):
-    """-> ({setId: fichier}, statistiques)."""
-    out, st = {}, {"cards": 0, "priced": 0, "entries": 0}
+# finitions de l'ancienne appli : gardées même si la fiche de la série ne les liste pas (collections importées)
+LEGACY = frozenset(("normal", "reverse", "holo", "cosmos", "pokeball", "masterball"))
+
+
+def build(cmmap, guide_rows, price_day, app=None):
+    """app = {cardId: [finitions]} des fichiers de séries de l'appli : quand il est donné, seules ses cartes sont
+    cotées, et « 1re édition » / « tampon » seulement là où la fiche les liste. -> ({setId: fichier}, statistiques).
+    Une 1re édition ou un tampon sans produit à part a exactement les valeurs de la carte de base (prix toutes
+    éditions) : l'appli le reconnaît à ce tableau identique."""
+    out, st = {}, {"cards": 0, "priced": 0, "entries": 0, "skipped cards": 0, "skipped finishes": 0}
     for sid, cards in cmmap["cards"].items():
         c = {}
         for local, fins in cards.items():
+            listed = app.get(f"{sid}-{local}") if app else None
+            if app and listed is None:
+                st["skipped cards"] += 1  # carte absente des fichiers de l'appli
+                continue
             st["cards"] += 1
             e = {}
             for f, (prod, side) in fins.items():
+                if listed is not None and f not in listed and f not in LEGACY:
+                    st["skipped finishes"] += 1
+                    continue
                 v = card_values(guide_rows.get(prod), side)
                 if v is not None:
                     e[f] = v

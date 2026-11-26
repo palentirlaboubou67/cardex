@@ -4,7 +4,7 @@ import { setBar } from '../core/appbar.js';
 import { html, setHTML, delegate } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { norm, plural } from '../core/format.js';
-import { setParams } from '../core/router.js';
+import { setParams, setHref } from '../core/router.js';
 import { renderChunked } from '../core/list.js';
 import { setLogoHTML } from '../components/setlogo.js';
 import * as catalog from '../data/catalog.js';
@@ -17,10 +17,10 @@ let el = null, q = '', filtre = '', timer = 0;
 const pctOf = (n, t) => (t ? Math.floor((n / t) * 100) : 0);
 
 function rowHTML(s, owned) {
-  const total = s.total || s.count || 0;
+  const total = catalog.goalOf(s);
   const pc = pctOf(owned, total);
   const done = total && owned >= total;
-  return html`<a class="row" href="#/serie/${s.id}">${setLogoHTML(s)}<span class="body"><span class="t">${s.name}</span><span class="s"><span class="num">${owned} / ${total}</span><span class="progress${done ? ' done' : ''}"><i style="width:${pc}%"></i></span><span class="num">${done ? 'Complète' : `${pc} %`}</span></span></span>${icon('chevron-right', { cls: 'chev' })}</a>`;
+  return html`<a class="row" href="${setHref(s.id)}">${setLogoHTML(s)}<span class="body"><span class="t">${s.name}</span><span class="s"><span class="num">${owned} / ${total}</span><span class="progress${done ? ' done' : ''}"><i style="width:${pc}%"></i></span><span class="num">${done ? 'Complète' : `${pc} %`}</span></span></span>${icon('chevron-right', { cls: 'chev' })}</a>`;
 }
 
 async function render() {
@@ -33,10 +33,10 @@ async function render() {
   const owned = col.ownedBySet();
   const nq = norm(q);
   const keep = s => (!nq || norm(s.name).includes(nq) || (s.code || '').toLowerCase() === nq)
-    && (!filtre || (filtre === 'miennes' ? owned.get(s.id) : owned.get(s.id) && owned.get(s.id) < (s.total || s.count)));
+    && (!filtre || (filtre === 'miennes' ? owned.get(s.id) : owned.get(s.id) && owned.get(s.id) < catalog.goalOf(s)));
   const blocs = all.blocs.map(b => ({ b, sets: b.sets.filter(keep) })).filter(x => x.sets.length);
   const blocHTML = ({ b, sets }) => html`
-    <div class="blochead">${b.logo ? setLogoHTML({ id: b.id, logo: b.logo, code: b.id }, { size: 'bloc' }) : ''}<span class="grow">${b.name}${b.first ? ` · ${b.first.slice(0, 4)}` : ''}</span><span class="num">${plural(sets.length, 'série', 'séries')}</span></div>
+    <div class="blochead">${b.logo ? setLogoHTML({ id: b.id, logo: b.logo, code: b.id, dark: b.dark }, { size: 'bloc' }) : ''}<span class="grow">${b.name}${b.first ? ` · ${b.first.slice(0, 4)}` : ''}</span><span class="num">${plural(sets.length, 'série', 'séries')}</span></div>
     <div class="group">${sets.map(s => rowHTML(s, owned.get(s.id) || 0))}</div>`;
   // le premier écran tout de suite (premiers blocs), le reste par lots qui rendent la main (FINAL-perf §4.5)
   await renderChunked(body, blocs, blocHTML, {
@@ -60,7 +60,7 @@ export default {
     delegate(el, 'click', '[data-retry]', () => render());
   },
   async show(r) {
-    setBar({ title: 'Séries' });
+    setBar({ title: 'Séries', signal: r.signal });
     q = r.q.get('q') || '';
     filtre = r.q.get('filtre') || '';
     el.querySelector('input[name="q"]').value = q;

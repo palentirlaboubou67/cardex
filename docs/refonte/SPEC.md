@@ -52,11 +52,11 @@ Prototypes and data from the research are next to them (`$SP\scripts-*`, `$SP\dl
 
 ```
 index.html                     F1   app shell (app bar, <main id="outlet">, tab bar, <dialog id="sheet">, toast)
-manifest.webmanifest, icon.svg F1
+manifest.webmanifest, icon.svg, icon-180.png, icon-512.png   F1
 fonts/instrument-sans-latin.woff2 + fonts/OFL.txt          F1 (self-hosted, latin subset, wdth 75–100, wght 400–700)
 css/tokens.css                 F1   design tokens (FINAL-design §5) light + dark
 css/base.css                   F1   reset, layout, every shared component (§6 of FINAL-design), holo fx for tiles
-css/views/<view>.css           view owners (see W2), linked from index.html by F1 (files may not exist yet)
+css/views/<view>.css           view owners (see W2), linked from index.html by F1 (empty placeholders since wave 1)
 js/main.js                     F1   boot: theme, router start, view registry, tab bar, link interception, SW registration + update toast
 js/core/router.js              F1   corrected router (FINAL-design §4.3 bis) — see §3
 js/core/dom.js                 F1   html`` auto-escaping template, raw(), esc(), $, $$, delegate()
@@ -99,13 +99,14 @@ tools/scan_bench.py, tools/scanbench/*   SC
 tools/shots.py                 F1   rewritten: route-based steps loaded from tools/shotsteps/*.json, measurements
 tools/shotsteps/<owner>.json   each owner its own steps file
 tools/tests/router_test.py     F1   (port of $SP\scripts-designcheck\router_fixed_test.py, against the real app)
-tools/tests/store_test.py, tools/tests/data_test.py   F2
+tools/tests/store_test.py, tools/tests/data_test.py, tools/tests/sw_test.py, tools/tests/f2/*   F2
 tools/kitchen.html             F1   component gallery (every component, light/dark) for visual checks
 data/decks.json, tools/build_decks.py   existing (W2 decks owner may adapt reading code, not the builder unless needed)
 data/pokedex.json              existing (read by js/data/dex.js)
 data/logos.json                legacy, replaced by sets.json logo fields (CA may delete it at the end)
 legacy/                        the old app, read-only reference; deleted at the end of the overhaul
-.github/workflows/*            orchestrator
+.github/workflows/*            orchestrator (site.yml: data + Pages deploy; decks.yml)
+docs/refonte/WAVE1.md          integrator (state after wave 1, how-to for view owners)
 ```
 Agent codes: **F1** shell & design system · **F2** state, data layer, SW · **CA** catalogue, images, logos ·
 **MK** Cardmarket market data · **SC** scanner core · **W2** view owners (second wave) · **QA** (third wave).
@@ -438,7 +439,7 @@ All JSON minified (`separators=(',', ':')`), UTF-8, `ensure_ascii=False`, stable
 ```json
 {"v":1,"sets":{"sv03.5":[["025","Pikachu",[25],1],["026","Raichu",[26],1]]}}
 ```
-Rows `[localId, name, dexIds, i]` (same `i` convention). Target ≈ 125 KB gzip.
+Rows `[localId, name, dexIds, i]` (same `i` convention). Target ≈ 145 KB gzip (wave 1: 142.8 KB).
 
 ### 6.4 `data/cardimg.json` (CA) — exactly the format read by FINAL-images §3.2 corrected runtime
 Keys `v, built, en, sx, id, ok, alt, png, fix` (§3.1 + [FC] `ok` allowlist + `alt` reprint map). McDonald's order:
@@ -560,3 +561,93 @@ page, sort a set by price, scan session list, « prix inchangé depuis », backu
 - Prices: only euros/Cardmarket anywhere; holo / reverse / Poké Ball / Master Ball prices follow §6.5.
 - Scanner benchmark (tools/scan_bench.py): synthetic dup-tolerant top-1 ≥ 97 %, accepted precision ≥ 99.5 %, false
   accept with the card absent ≤ 2 %, identify p50 ≤ 300 ms at CPU ×4; bit-exactness ≤ 4/512 bits.
+
+## Changelog (wave 1)
+
+Changes made while integrating wave 1 (26/11/2026). The sections above stay the contract; this list says what moved.
+Details and examples for view owners: `docs/refonte/WAVE1.md`.
+
+**§2 Layout and ownership**
+- `icon-180.png`, `icon-512.png` (manifest and apple-touch icons) belong to F1; `tools/release.py` precaches them.
+- `css/views/<view>.css` exist as empty commented placeholders (no 404); view owners fill them.
+- `tools/tests/sw_test.py` and `tools/tests/f2/*` belong to F2; `tools/catalog/*` to CA; `tools/market/*` to MK.
+- `.github/workflows/site.yml` replaces `sealed.yml` (its builder `tools/build_sealed.py` is gone): daily Cardmarket
+  data, weekly catalogue + scanner, `tools/release.py`, GitHub Pages deploy. The repository's Pages source must be
+  switched to « GitHub Actions » when `refonte` is merged (price files are not committed: a branch deploy would
+  serve a site without prices).
+- Test servers use a listen backlog of 128 (`request_queue_size`): the default 5 made Windows refuse bursts.
+- `tools/tests/wave1_test.py` (integrator): storage-failure toast, service-worker `navigate` message, v1 finish
+  repair, bloc order and flags, progress goal, in the real app.
+
+**§3.1 View contract** (added by F1, binding for W2)
+- `r.signal` (AbortSignal) is aborted as soon as the route changes. Pass it to `setBar({ …, signal: r.signal })`,
+  `revealTitle(on, { signal })`, `setProgress`, `updateAction`, and to fetches; stop after every `await` if
+  `r.signal.aborted`. A bar set by a view that was left is ignored.
+- `resume(r, el)` (optional) is called instead of `show()` when the view cache is hit (same hash, `show()` had
+  completed). A view without `onChange` is marked stale on collection changes and fully re-shown next time: a view
+  that displays collection data must implement `onChange`.
+- Links and ids: `router.cardHref(id, finish?)`, `router.setHref(id)` (encode once); read ids with
+  `router.cardId(r)` / `router.param(r, i)` (decoded, never throws; old unencoded links still work); display numbers
+  with `format.localNo(localId)` / `format.cardNo(localId, total)` (`exu-%3F` shows « ? »).
+- `primaryTabs(items, current)` goes directly in the view's `<section>` or in a `.ptabs-slot` (display: contents),
+  otherwise the tabs cannot stick under the app bar.
+
+**§5 Module APIs** (additions only; every signature above still holds)
+- appbar: `setBar(cfg, { signal })` (or `cfg.signal`), `updateAction(i, patch, { signal })` patches in place,
+  `primaryTabs(items, current, label)`, `getBar()`, `focusTitle()`. dom: `selectChip({ label, options, value, name })`,
+  `enhance(root)`, `isSafe`. format: `localNo`, `dateDay`, `timeFr`, `toDate`. toast: returns `{ el, close }`;
+  `ms: 0` = persistent (comes back after passing toasts). idle: `yieldToMain()`. net: `manifest()`, `hashOf(path)`.
+- collection: `storageState()` `{ readOnly, error, notice, message, corrupt, backups[{key, at, size}], bytes }`,
+  `corruptText(key?)`, `deleteBackup(key)`, `discardCorrupt()`, `STORAGE_MESSAGES`, window event `cardex:storage`
+  (`detail { error, message, repeat, recovered, readOnly, corrupt }`, shown by main.js as a persistent toast with
+  « Exporter »); `importText()` also returns `saved`; `clearAll()` returns whether it was saved; `has`, `total(rec)`,
+  `inSet(setId)`, `updateMeta(card)`, `ensurePrices()`, `exportText()`, `lastExport()`, `legacySealed()`,
+  `linkLegacySealed(map?)`; `stats()` also returns `pending`. New (INT): `needsFinishCheck()`,
+  `repairFinishes(cards)`, `finishCheckDone()`: v1 data recorded « normale » on holo-only cards (old scanner
+  preset); main.js loads the owned sets at idle and turns those into « holo » (the only finish Cardmarket prices).
+- catalog: `metaSync(id)`, `setSync(id)`, `loadSets(ids)`, `warmIndex()`, `onUpdate(fn)`, `localIdOf(id)`,
+  `goalOf(meta)` (INT: progress goal = `count` when the French catalogue has fewer cards than the printed `total`,
+  else `total`); briefs carry `setName`, `setTotal`; `search()` also returns `count`; `cardsOfDex(n, { full })`.
+  Blocs keep the order of `sets.json` (main eras newest first, then `special` blocs) and carry `dark`, `special`.
+- images: `imgCaption(card)`, `cardNo(card)`, `registerSets(metas)`; `cardImg()` also returns `ref` (source card of
+  a borrowed illustration). Only `https://assets.tcgdex.net/fr/` image bases are trusted.
+- prices: `on(fn)`, `version()`, `has(setId)`, `sum(entries)`, `cmFor(full, finish)`, `liveSync(full, finish)`,
+  `creditText()` (INT: full §8 line with the guide date). `get()` adds `allEditions: true` (INT) when a
+  `firstEdition` / `stamp` entry is the base card's price (MK copies it when Cardmarket has no separate product):
+  show « prix toutes éditions », never as a real 1st-edition price.
+- dex: `nameOf(n)`, `loaded()`, `count()`, `artwork(n)`, `words(s)`, `dexNums(card)`. finishes: `FOIL`, `isFinish`,
+  `order`, `sortFinishes`, `finishesOf(full)`. tcgdex: `toBrief`, `toMeta`, `setList`, `setInfo`, `isPocket`.
+- tile: `tileHTML(card, { …, label })`, `refreshImages(root)`. chart: `deltaHTML(v, { kind, per })`,
+  `lineChart(el, points, { ranges, format, range, onRange, label })`.
+- scan (§5.7): `createLoop({ video, guide, onState, onResult, auto = true })` →
+  `{ start, stop, shutter, resume, hold, setAuto, setGuide, state, destroy }`; states add `error`
+  (`s.error` = NetError kind, automatic retry); several `choose` results may arrive for one card (each replaces the
+  previous); results add `why`, `token`, `level`, `region`; image-less twins appear with `d: null`. After the user
+  picks from a chooser, call `loop.hold()`. Also `ScanError` (kind `decode`, « Image illisible »), `imageSize(blob)`,
+  `scanData()`, `warmOcr()`, `ocrFallback(null, { token })`; `preload()` returns `canvas`.
+
+**§6 Data**
+- §6.1 `sets.json`: bloc entries gain `dark` and `special`; image names are a hash of the *source* bytes + settings
+  (stable across Pillow/libwebp versions, existing files never rewritten), not of the output; logos are WebP q70.
+  `pl4` has `total = count = 9`. `count` can be lower than `total` (svp, swshp, dpp, np, basep, tk-sm-l, tk-sm-r):
+  use `catalog.goalOf()` for progress.
+- §6.3 target ≈ 145 KB gzip (measured 142.8 KB).
+- §6.4 `cardimg.json` also has `from` (source card of an `alt` illustration).
+- §6.5 measured sizes replace the targets: price files 306 KB gzip (186 files), `sealed.json` 143 KB gzip.
+  `cm-map.json` has an additive `unlinked` key (app cards the weekly build could not link; the daily build rebuilds
+  the table when the app has cards it never saw). Price keys are always kept for normal, reverse, holo, cosmos,
+  Poké Ball and Master Ball (collections from the old app), 1st edition / stamp only where CA's `f` lists them.
+  Sealed: `eur: null` = « Pas de vente récente » (history may still exist); `sid` can name a set that is not in the
+  French catalogue (bw11, gym1, base4…): show `set`, no link.
+- §6.6 `cards.json` also has `algo`, `img` and `twins` (image-less or same-art twins; a card with a twin always
+  gives `choose`). Same-name twins (trainer kits, McDonald's, Classic Collection) are dropped when both TCGdex
+  illustrators are known and clearly different (INT; GraphQL `illustrator`, cached in `.cache/sc/tcgdex/illus/`,
+  typos such as « Rya Ueda » / « Ryo Ueda » tolerated); unknown illustrators keep the twin (safe side).
+- §6.7 / §7: the committed `sw.js` stays in development mode (empty `SHELL`); it keeps what the first visit loaded
+  (offline reload works). Only the deploy (`site.yml`) stamps it. Never commit a stamped `sw.js` or
+  `data/manifest.json` (gitignored; a stale manifest makes newer data files look absent).
+
+**Open (decision for the orchestrator)**
+- §12 scanner « card absent ≤ 2 % »: 4.7 % overall (SC, standard preset, 300 cases), 3.5 % after the illustrator
+  check of the twins (INT, 200 cases); 0.6–1.2 % on unique-art cards, 18–20 % when a same-art reprint of the masked
+  card is in the database (in real use both are). Target kept, not met.

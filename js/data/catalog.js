@@ -44,18 +44,27 @@ function build(blocsIn, setsIn, hidden) {
     .sort((a, b) => (b[0].date || '').localeCompare(a[0].date || '') || a[1] - b[1]).map(x => x[0]);
   visible.forEach((m, i) => { m.order = i; });
   const blocMap = new Map();
-  for (const b of blocsIn || []) if (b?.id) blocMap.set(b.id, { id: b.id, name: b.name || b.id, logo: b.logo || '', first: b.first || '', sets: [] });
+  for (const b of blocsIn || []) {
+    if (b?.id) blocMap.set(b.id, { id: b.id, name: b.name || b.id, logo: b.logo || '', first: b.first || '', dark: !!b.dark, special: !!b.special, sets: [] });
+  }
   for (const m of visible) {
-    if (!blocMap.has(m.bloc)) blocMap.set(m.bloc, { id: m.bloc, name: m.blocName || m.bloc || 'Autres', logo: '', first: '', sets: [], synth: true });
+    if (!blocMap.has(m.bloc)) blocMap.set(m.bloc, { id: m.bloc, name: m.blocName || m.bloc || 'Autres', logo: '', first: '', dark: false, special: false, sets: [], synth: true });
     blocMap.get(m.bloc).sets.push(m);
   }
   for (const b of blocMap.values()) {
     // bloc absent de sets.json : sa date = celle de sa première série
     if (!b.first) b.first = b.sets.reduce((d, m) => (m.date && (!d || m.date < d) ? m.date : d), '');
-    delete b.synth;
   }
-  const blocs = [...blocMap.values()].filter(b => b.sets.length)
-    .sort((a, b) => (b.sets[0]?.date || '').localeCompare(a.sets[0]?.date || ''));
+  // Ordre de sets.json (grandes périodes, la plus récente d'abord, puis les blocs « special » : McDonald's, kits, POP).
+  // Un bloc absent du fichier (série découverte en direct) se place parmi les grandes périodes selon sa série la plus récente.
+  const newest = b => b.sets[0]?.date || '';
+  const known = [...blocMap.values()].filter(b => !b.synth && b.sets.length);
+  const blocs = [...known.filter(b => !b.special), ...known.filter(b => b.special)];
+  for (const b of [...blocMap.values()].filter(x => x.synth && x.sets.length).sort((x, y) => newest(y).localeCompare(newest(x)))) {
+    const at = blocs.findIndex(x => x.special || newest(x) < newest(b));
+    blocs.splice(at < 0 ? blocs.length : at, 0, b);
+  }
+  for (const b of blocs) delete b.synth;
   registerSets(metas);
   return { blocs, sets: visible, byId, hidden: hid };
 }
@@ -113,7 +122,7 @@ async function mergeLive() {
       } catch { /* série ignorée */ }
     }
     if (!metas.length) return;
-    const blocs = SETS.blocs.map(b => ({ id: b.id, name: b.name, logo: b.logo, first: b.first }));
+    const blocs = SETS.blocs.map(b => ({ id: b.id, name: b.name, logo: b.logo, first: b.first, dark: b.dark, special: b.special }));
     SETS = build(blocs, [...SETS.byId.values(), ...metas], [...SETS.hidden]);
     subs.forEach(fn => { try { fn(SETS); } catch (e) { console.error(e); } });
   } catch { /* hors ligne : on garde le fichier statique */ }
@@ -122,6 +131,10 @@ async function mergeLive() {
 // métadonnées d'une série si elles sont chargées (synchrone, pour les autres modules)
 export const metaSync = id => SETS?.byId.get(id) || LIVE_META.get(id) || null;
 const LIVE_META = new Map();
+
+// Objectif d'une barre de progression : le total imprimé (« 165 » pour 151), sauf quand le catalogue français a
+// moins de cartes que lui (promos, kits : svp, swshp, dpp… n'atteindraient jamais leur total officiel) : alors count.
+export const goalOf = m => { const t = m?.total || 0, c = m?.count || 0; return c && (!t || c < t) ? c : t; };
 
 // ---------- cartes d'une série ----------
 const SETC = new Map();      // id -> { meta, cards, byId }
@@ -202,25 +215,41 @@ let IDX = null, idxP = null;
 const NORM = new Map();      // nom -> clé normalisée (les noms se répètent beaucoup)
 const normName = s => { let v = NORM.get(s); if (v === undefined) { v = words(s); NORM.set(s, v); } return v; };
 
+// rend la main au navigateur (saisie, rendu) pendant la construction de l'index
+const yieldNow = () => (globalThis.scheduler?.yield ? globalThis.scheduler.yield() : new Promise(r => setTimeout(r, 0)));
+const now = () => (globalThis.performance ? performance.now() : Date.now());
+
+// ~20 000 lignes avec leur nom normalisé : construites par tranches de ~6 ms (jamais une longue tâche)
 function index() {
   if (IDX) return Promise.resolve(IDX);
   idxP ??= (async () => {
     const [d, all] = await Promise.all([data('data/cards-index.json'), sets()]);
     const rows = [];
+    let t0 = now();
     for (const [setId, list] of Object.entries(d?.sets || {})) {
       const m = all.byId.get(setId) || metaSync(setId);
       if (all.hidden.has(setId)) continue;
       const order = m?.order ?? 9999;
       for (const r of list || []) {
         if (!Array.isArray(r)) continue;
-        const l = String(r[0]);
-        rows.push({ id: `${setId}-${l}`, setId, l, n: String(r[1] || ''), d: Array.isArray(r[2]) ? r[2] : [], i: r[3] ?? 0, order });
+        const l = String(r[0]), n = String(r[1] || '');
+        rows.push({ id: `${setId}-${l}`, setId, l, n, k: normName(n), nk: numKey(l), d: Array.isArray(r[2]) ? r[2] : [], i: r[3] ?? 0, order });
       }
+      if (now() - t0 > 6) { await yieldNow(); t0 = now(); }
     }
     IDX = { rows, dex: null };
     return IDX;
   })().catch(e => { idxP = null; throw e; });
   return idxP;
+}
+
+// Prépare l'index quand la page est au repos (champ de recherche affiché, page Pokémon proche) : la première
+// frappe ne paie plus le téléchargement ni la construction.
+export function warmIndex() {
+  if (IDX || idxP) return;
+  const go = () => { index().catch(() => {}); };
+  if (globalThis.requestIdleCallback) requestIdleCallback(go, { timeout: 4000 });
+  else setTimeout(go, 200);
 }
 
 // ligne de l'index → carte brève partielle (rareté, catégorie exacte et finitions : dans le fichier de la série)
@@ -260,42 +289,63 @@ export async function search(query, { limit = 120 } = {}) {
   const nq = words(q);
   const setHits = matchSets(all.sets, q, nq);
 
+  const totalSets = tot => new Set(all.sets.filter(s => s.total === tot || s.count === tot).map(s => s.id));
+
   // « 025/165 » ou « TG05/TG30 »
   m = /^([a-z]*\d+[a-z]?)\s*\/\s*([a-z]*\d+)$/i.exec(q);
   if (m) {
-    const want = numKey(m[1]), tot = parseInt(m[2].replace(/^\D+/, ''), 10);
-    const okSets = new Set(all.sets.filter(s => s.total === tot || s.count === tot).map(s => s.id));
-    hits = idx.rows.filter(r => okSets.has(r.setId) && numKey(r.l) === want).sort(byNewest);
+    const want = numKey(m[1]), okSets = totalSets(parseInt(m[2].replace(/^\D+/, ''), 10));
+    hits = idx.rows.filter(r => okSets.has(r.setId) && r.nk === want).sort(byNewest);
     return done(hits, [], limit);
   }
 
-  // code de série + numéro : « MEW 25 », « MEW025 », « mew 025 »
+  // numéro imprimé avec lettres : « SWSH001 », « TG05 », « GG01 », « SV49 », « RC5 », « H01 », « XY01 »
+  // (avant le découpage code + numéro : « SV49 » est d'abord la carte SV49, puis la 49 de la série de code SV)
+  const printed = /^[a-z]{1,5}\d{1,4}[a-z]?$/i.test(q) ? idx.rows.filter(r => r.nk === numKey(q)).sort(byNewest) : [];
+
+  // code de série + numéro : « MEW 25 », « MEW025 », « mew 025 » ; aussi l'id TCGdex (« sma SV49 », « sv03.5-025 »)
   const byCode = codesOf(all);
   const splits = [];
-  m = /^([a-z0-9]{2,6})[\s-]+([a-z]*\d+[a-z]?)$/i.exec(q);
+  m = /^([a-z0-9.]{2,12})[\s-]+([a-z]*\d+[a-z]?)$/i.exec(q);
   if (m) splits.push([m[1], m[2]]);
   else if (/^[a-z]/i.test(q)) for (let k = 2; k <= Math.min(6, q.length - 1); k++) splits.push([q.slice(0, k), q.slice(k)]);
   for (const [c, num] of splits) {
-    const ids = byCode.get(c.toUpperCase());
+    const ids = byCode.get(c.toUpperCase()) || (all.byId.has(c.toLowerCase()) && !all.hidden.has(c.toLowerCase()) ? new Set([c.toLowerCase()]) : null);
     if (!ids || !/^[a-z]*\d+[a-z]?$/i.test(num)) continue;
     const want = numKey(num);
-    hits = idx.rows.filter(r => ids.has(r.setId) && numKey(r.l) === want).sort(byNewest);
-    if (hits.length) return done(hits, [], limit);
+    hits = idx.rows.filter(r => ids.has(r.setId) && r.nk === want).sort(byNewest);
+    if (hits.length) break;
+  }
+  if (printed.length || hits.length) {
+    const seen = new Set(printed.map(r => r.id));
+    return done([...printed, ...hits.filter(r => !seen.has(r.id))], [], limit);
   }
 
   // numéro seul : « 25 » (toutes les séries, les plus récentes d'abord)
   if (/^\d{1,4}$/.test(q)) {
     const want = numKey(q);
-    hits = idx.rows.filter(r => numKey(r.l) === want).sort(byNewest);
+    hits = idx.rows.filter(r => r.nk === want).sort(byNewest);
     return done(hits, setHits, limit);
   }
 
+  // nom + numéro : « pikachu 25 », « pikachu 025 », « pikachu 025/165 », « dracaufeu ex SV107 »
+  m = /^(.*\S)\s+([a-z]{0,5}\d{1,4}[a-z]?)(?:\s*\/\s*([a-z]*\d+))?$/i.exec(q);
+  if (m && words(m[1]).length >= 2) {
+    const want = numKey(m[2]), okSets = m[3] ? totalSets(parseInt(m[3].replace(/^\D+/, ''), 10)) : null;
+    hits = byName(idx.rows.filter(r => r.nk === want && (!okSets || okSets.has(r.setId))), words(m[1]), hasImg);
+    if (hits.length) return done(hits, [], limit);
+  }
+
   if (nq.length < 2) return { sets: setHits, cards: [], count: 0 };
-  // nom : exact > début > début de mot > milieu > tous les mots ; puis les cartes avec image, les plus récentes
+  return done(byName(idx.rows, nq, hasImg), setHits, limit);
+}
+
+// nom : exact > début > début de mot > milieu > tous les mots ; puis les cartes avec image, les plus récentes
+function byName(rows, nq, hasImg) {
   const tokens = nq.split(' ');
   const scored = [];
-  for (const r of idx.rows) {
-    const n = normName(r.n);
+  for (const r of rows) {
+    const n = r.k;
     let t;
     if (n === nq) t = 0;
     else if (n.startsWith(nq)) t = 1;
@@ -306,7 +356,7 @@ export async function search(query, { limit = 120 } = {}) {
     scored.push([t, r]);
   }
   scored.sort((a, b) => a[0] - b[0] || hasImg(b[1]) - hasImg(a[1]) || byNewest(a[1], b[1]));
-  return done(scored.map(x => x[1]), setHits, limit);
+  return scored.map(x => x[1]);
 }
 
 let CODES = null, codesFor = null;

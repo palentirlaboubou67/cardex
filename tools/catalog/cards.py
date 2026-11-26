@@ -76,12 +76,15 @@ def fr_image_base(serie, sid, lid):
 
 
 def dex_ids(card, cat, dex, stats=None):
-    """Numéros TCGdex, sinon devinés d'après le nom (Pokémon uniquement)."""
+    """Numéros TCGdex, sinon devinés d'après le nom. Pokémon uniquement : un Dresseur ou une Énergie n'a jamais
+    de numéro, même si TCGdex en donne (hgssp-HGSS18 « Raz-de-marée tropical » : [25, 183, 54, 187])."""
+    if cat != 'P':
+        if stats is not None and card.get('dexId'):
+            stats['dexDroppedNotPokemon'] = stats.get('dexDroppedNotPokemon', 0) + 1
+        return []
     d = [int(x) for x in (card.get('dexId') or []) if isinstance(x, (int, float)) or str(x).isdigit()]
     if d:
         return d
-    if cat != 'P':
-        return []
     g = dex.guess(card.get('name'))
     if stats is not None:
         stats['guessed' if g else 'noDex'] = stats.get('guessed' if g else 'noDex', 0) + 1
