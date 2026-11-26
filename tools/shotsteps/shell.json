@@ -1,0 +1,27 @@
+{
+  "about": "F1 : une étape par route de SPEC §3 (vues provisoires de la vague 1), plus une feuille ouverte. Chaque propriétaire de vue ajoute son propre fichier (collection.json, series.json…).",
+  "steps": [
+    {"name": "collection-cartes", "hash": "#/collection/cartes", "wait": 800},
+    {"name": "collection-pokedex", "hash": "#/collection/pokedex"},
+    {"name": "collection-doubles", "hash": "#/collection/doubles"},
+    {"name": "collection-succes", "hash": "#/collection/succes"},
+    {"name": "pokemon", "hash": "#/pokemon/25", "wait": 1200},
+    {"name": "reglages", "hash": "#/reglages"},
+    {"name": "series", "hash": "#/series", "wait": 1000},
+    {"name": "series-recherche", "hash": "#/series?q=flammes"},
+    {"name": "serie", "hash": "#/serie/sv03.5", "wait": 1200},
+    {"name": "carte", "hash": "#/carte/sv03.5-025", "wait": 1200},
+    {"name": "scanner", "hash": "#/scanner"},
+    {"name": "marche-cotes", "hash": "#/marche/cotes"},
+    {"name": "marche-scelle", "hash": "#/marche/scelle"},
+    {"name": "marche-mon-scelle", "hash": "#/marche/mon-scelle"},
+    {"name": "marche-envies", "hash": "#/marche/envies"},
+    {"name": "produit", "hash": "#/produit/719691"},
+    {"name": "decks-actuelle", "hash": "#/decks/actuelle"},
+    {"name": "decks-passees", "hash": "#/decks/passees"},
+    {"name": "deck", "hash": "#/deck/1"},
+    {"name": "ancien-lien-envies", "hash": "#wishlist"},
+    {"name": "feuille-menu", "hash": "#/series", "actions": [["click", ".appbar .more"], ["waitfor", "dialog.sheet[open]"], ["wait", 400]]},
+    {"name": "feuille-fermee", "actions": [["key", "Escape"], ["wait", 400]]}
+  ]
+}

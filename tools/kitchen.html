@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- toutes les adresses partent de la racine du dépôt (css/, js/, data/) -->
+  <base href="../">
+  <title>Cuisine des composants · Cardex</title>
+  <script>
+    // ?theme=light|dark force le thème ; ?side=1 montre clair et sombre côte à côte ; ?embed=1 sans barre d'outils
+    (function () {
+      var q = new URLSearchParams(location.search), t = q.get('theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      if (q.get('embed')) document.documentElement.classList.add('k-embed');
+      if (q.get('side')) document.documentElement.classList.add('k-side');
+    })();
+  </script>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/base.css">
+  <style>
+    /* habillage de la cuisine seulement (les composants viennent de css/base.css) */
+    body.kitchen { padding: 0 0 48px; }
+    .k-top {
+      position: sticky; top: 0; z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+      padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line);
+    }
+    .k-top b { font-size: 15px; margin-right: auto; }
+    .k-embed .k-top { display: none; }
+    .k-main { max-width: 430px; margin: 0 auto; }
+    .k-sec { padding: 8px 0 16px; border-bottom: 1px dashed var(--line); }
+    .k-h { padding: 20px 16px 4px; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--text-2); font-stretch: 90%; }
+    .k-frame { position: relative; margin: 8px 16px; border-radius: 12px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
+    .k-frame .appbar, .k-frame .ptabs, .k-frame .blochead { position: relative; top: auto; }
+    .k-frame .appbar .bar-progress { bottom: 0; }
+    .k-frame .appbar.scrolled { box-shadow: inset 0 -1px 0 var(--line); }
+    .k-frame .tabbar { position: relative; inset: auto; width: auto; height: calc(var(--tabbar)); flex-direction: row; padding: 0; gap: 0; border-right: 0; border-top: 1px solid var(--line); }
+    .k-frame .tabbar .tab { flex: 1; height: auto; }
+    .k-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; }
+    .k-swatches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 8px 16px; }
+    .k-sw { border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); font-size: 12px; line-height: 16px; }
+    .k-sw i { display: block; height: 36px; }
+    .k-sw span { display: block; padding: 4px 6px; background: var(--surface); color: var(--text-2); }
+    .k-type > * { padding: 2px 16px; }
+    .k-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 8px 16px; font-size: 13px; }
+    .k-legend span { display: flex; align-items: center; gap: 8px; }
+    .k-side body > :not(.k-pair) { display: none !important; }
+    .k-pair { display: none; }
+    .k-side .k-pair { display: flex; gap: 0; height: 100vh; }
+    .k-pair iframe { flex: 1; border: 0; height: 100%; min-width: 0; }
+  </style>
+</head>
+<body class="kitchen">
+  <script>
+    // côte à côte : deux cadres (clair, sombre) créés seulement dans ce mode (sinon chaque page en chargerait deux autres)
+    if (document.documentElement.classList.contains('k-side')) {
+      document.write('<div class="k-pair"><iframe src="tools/kitchen.html?theme=light&amp;embed=1" title="Thème clair"></iframe><iframe src="tools/kitchen.html?theme=dark&amp;embed=1" title="Thème sombre"></iframe></div>');
+    }
+  </script>
+  <div class="k-top">
+    <b>Cuisine des composants</b>
+    <span class="seg" role="group" aria-label="Thème">
+      <button type="button" data-k-theme="auto">Auto</button><button type="button" data-k-theme="light">Clair</button><button type="button" data-k-theme="dark">Sombre</button>
+    </span>
+    <a class="btn sm" href="tools/kitchen.html?side=1">Côte à côte</a>
+  </div>
+
+  <!-- barre d'app réelle (cachée) : setBar() la remplit, la cuisine en montre des copies -->
+  <header class="appbar" id="appbar" hidden>
+    <button type="button" class="ibtn back" aria-label="Retour" hidden><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 5l-7 7 7 7"/></svg></button>
+    <div class="title"><h1 id="bar-title" tabindex="-1">Cardex</h1><small id="bar-sub" hidden></small></div>
+    <div class="acts" id="bar-acts"></div>
+    <button type="button" class="ibtn more" aria-label="Plus d’options" aria-haspopup="dialog" hidden><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g fill="currentColor"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></g></svg></button>
+    <div class="bar-progress" role="progressbar" aria-label="Mise à jour en cours" hidden></div>
+  </header>
+
+  <main class="k-main" id="k"></main>
+  <dialog id="sheet" class="sheet"></dialog>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <script type="module">
+    import { html, raw, setHTML, selectChip, enhance, delegate } from './js/core/dom.js';
+    import { icon, injectSprite, NAMES } from './js/core/icons.js';
+    import { setBar, primaryTabs } from './js/core/appbar.js';
+    import { openSheet, menuSheet, infoSheet } from './js/core/sheet.js';
+    import { toast } from './js/core/toast.js';
+    import { eur, pct, num, dateFr, relDay, plural } from './js/core/format.js';
+    import { tileHTML } from './js/components/tile.js';
+    import { lineChart, sparkline, deltaHTML } from './js/components/chart.js';
+    import { setLogoHTML, setSymHTML } from './js/components/setlogo.js';
+    import * as images from './js/data/images.js';
+    import * as catalog from './js/data/catalog.js';
+    import { FINISHES, SHORT, LABEL, DOT } from './js/data/finishes.js';
+
+    const $k = document.getElementById('k');
+    if (document.documentElement.classList.contains('k-side')) await new Promise(() => {});   // côte à côte : les cadres dessinent
+    injectSprite();
+    enhance(document);
+    images.installFallback(document);
+    // la cuisine reste sur place : les liens internes ne naviguent pas
+    document.addEventListener('click', e => { const a = e.target.closest('a[href^="#"]'); if (a) e.preventDefault(); });
+
+    // thème
+    const setTheme = t => {
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+      document.querySelectorAll('[data-k-theme]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.kTheme === (t || 'auto'))));
+    };
+    setTheme(document.documentElement.dataset.theme || 'auto');
+    delegate(document, 'click', '[data-k-theme]', (e, b) => setTheme(b.dataset.kTheme));
+
+    const sec = (title, body) => html`<section class="k-sec"><h2 class="k-h">${title}</h2>${body}</section>`;
+
+    // copies de la vraie barre d'app après setBar()
+    function barCopy(cfg, { scrolled = false } = {}) {
+      setBar(cfg);
+      const c = document.getElementById('appbar').cloneNode(true);
+      c.removeAttribute('id'); c.hidden = false;
+      c.querySelectorAll('[id]').forEach(x => x.removeAttribute('id'));
+      c.classList.toggle('scrolled', scrolled);
+      return c.outerHTML;
+    }
+
+    await Promise.race([images.ready, new Promise(r => setTimeout(r, 3000))]);
+    const all = await catalog.sets();
+    const s151 = await catalog.set('sv03.5');
+    const pick = id => s151.byId.get(id);
+    const extra = async id => { try { return await catalog.card(id); } catch { return null; } };
+    const [enCard, altCard, phCard] = await Promise.all([extra('dp1-1'), extra('2013bw-10'), extra('2013bw-1')]);
+    const meta = id => all.byId.get(id) || catalog.metaSync(id);
+
+    // ---------- barre d'app ----------
+    const bars = [
+      barCopy({ title: 'Collection', actions: [{ icon: 'filter', label: 'Filtrer' }] }),
+      barCopy({ title: '151', subtitle: 'Écarlate et Violet · 22 sept. 2023', back: true }, { scrolled: true }),
+      barCopy({ title: 'Dracaufeu-ex', back: true, titleHidden: true, actions: [{ icon: 'bell', label: 'Alerte prix' }] }),
+      barCopy({ title: 'Display Flammes Fantasmagoriques', back: true, actions: [{ icon: 'star-fill', label: 'Suivi', pressed: true }], progress: true }),
+      barCopy({ title: 'Marché', actions: [{ icon: 'refresh', label: 'Vérifier les prix', badge: true }, { icon: 'info', label: 'À propos' }] }),
+    ];
+    document.title = 'Cuisine des composants · Cardex';
+
+    const tabbar = `<nav class="tabbar" aria-label="Navigation principale (copie)">
+      <a class="tab" href="#/collection/cartes"><span class="ic">${icon('collection')}</span><span class="lb">Collection</span></a>
+      <a class="tab" href="#/series" aria-current="page"><span class="ic">${icon('series')}</span><span class="lb">Séries</span></a>
+      <a class="tab" href="#/scanner"><span class="ic">${icon('scan')}</span><span class="lb">Scanner</span></a>
+      <a class="tab" href="#/marche/cotes"><span class="ic">${icon('market')}</span><span class="lb">Marché</span><i class="bdg" aria-hidden="true"></i></a>
+      <a class="tab" href="#/decks/actuelle"><span class="ic">${icon('decks')}</span><span class="lb">Decks</span></a></nav>`;
+
+    const COL = [['#/collection/cartes', 'Cartes'], ['#/collection/pokedex', 'Pokédex'], ['#/collection/doubles', 'Doubles'], ['#/collection/succes', 'Succès']].map(([href, label]) => ({ href, label }));
+    const MK = [['#/marche/cotes', 'Cotes'], ['#/marche/scelle', 'Scellé'], ['#/marche/mon-scelle', 'Mon scellé'], ['#/marche/envies', 'Envies']].map(([href, label]) => ({ href, label, dot: label === 'Envies', dotLabel: 'une envie est dans ta fourchette' }));
+
+    // ---------- tuiles ----------
+    const t = (c, o) => (c ? tileHTML(c, o) : '');
+    const tiles = html`<div class="grid">
+      ${t(pick('sv03.5-025'), { qty: 1, price: 0.23, meta: '151 · 025' })}
+      ${t(pick('sv03.5-001'), { qty: 3, price: 0.15, meta: '151 · 001' })}
+      ${t(pick('sv03.5-002'), { missing: true, meta: '002 · Normale' })}
+      ${t(pick('sv03.5-006'), { qty: 2, badge: 'extra', meta: '2 ex.', price: 7.91 })}
+      ${t(pick('sv03.5-004'), { qty: 1, finish: 'reverse', meta: '004 · Reverse' })}
+      ${t(pick('sv03.5-003'), { qty: 1, finish: 'holo', meta: '003 · Holo' })}
+      ${t(pick('sv03.5-007'), { qty: 1, finish: 'cosmos', meta: '007 · Cosmo' })}
+      ${t(pick('sv03.5-133'), { qty: 2, finish: 'pokeball', meta: '133 · Poké Ball' })}
+      ${t(pick('sv03.5-150'), { qty: 1, finish: 'masterball', meta: '150 · Master Ball' })}
+      ${t(pick('sv03.5-009'), { missing: true, finish: 'holo', meta: '009 · Holo' })}
+      ${t(pick('sv03.5-010'), { qty: 1, finish: 'firstEdition', meta: '010 · 1re éd.' })}
+      ${t(pick('sv03.5-011'), { qty: 1, finish: 'stamp', meta: '011 · Tampon' })}
+      ${t(enCard, { qty: 1 })}
+      ${t(altCard, { qty: 1 })}
+      ${t(phCard, { missing: true })}
+    </div>`;
+    const compact = html`<div class="grid compact">${s151.cards.slice(0, 8).map((c, i) => tileHTML(c, { qty: i % 3 ? 1 : 0, missing: !(i % 3) }))}</div>`;
+    const skTiles = html`<div class="grid" aria-hidden="true">${[1, 2, 3].map(() => raw('<span class="sk-tile"><span class="sk-img"></span><span class="sk-l1"></span><span class="sk-l2"></span></span>'))}</div>`;
+
+    // ---------- séries ----------
+    const prog = (n, tot) => { const pc = tot ? Math.floor((n / tot) * 100) : 0, done = tot && n >= tot; return html`<span class="num">${n} / ${tot}</span><span class="progress${done ? ' done' : ''}"><i style="width:${pc}%"></i></span><span class="num">${done ? 'Complète' : `${pc} %`}</span>`; };
+    const setRow = (m, n) => (m ? html`<a class="row" href="#/serie/${m.id}">${setLogoHTML(m)}<span class="body"><span class="t">${m.name}</span><span class="s">${prog(n, m.total || m.count)}</span></span>${icon('chevron-right', { cls: 'chev' })}</a>` : '');
+    const bloc = all.blocs[0];
+    const sets = html`
+      <div class="blochead" aria-expanded="true">${setLogoHTML({ id: bloc.id, logo: bloc.logo, code: bloc.id }, { size: 'bloc' })}<span class="grow">${bloc.name} · ${(bloc.first || '').slice(0, 4)}</span><span class="num">${plural(bloc.sets.length, 'série', 'séries')}</span>${icon('chevron-up')}</div>
+      <div class="group">
+        ${setRow(meta('sv03.5'), 8)}
+        ${setRow(meta('me05'), 0)}
+        ${setRow(meta('30th-c'), 30)}
+        ${setRow(meta('tk-xy-p'), 3)}
+        ${setRow(meta('me06'), 1)}
+        ${setRow({ id: 'kitchen-broken', name: 'Logo introuvable (couverture générée)', logo: 'img/sets/absent.webp', code: 'ABS', total: 100 }, 37)}
+        ${setRow({ id: 'kitchen-plain', name: 'Sans logo ni symbole', code: 'MEP', total: 108 }, 0)}
+      </div>
+      <div class="k-row">${setLogoHTML(meta('sv03.5'), { size: 'hero' })}${setLogoHTML(meta('me05'), { size: 'hero' })}${setLogoHTML(meta('tk-xy-p'), { size: 'hero' })}${setSymHTML(meta('sv03.5'), { size: 24 })}</div>`;
+
+    // ---------- puces, segmentés, recherche ----------
+    const chips = html`<div class="chips" role="group" aria-label="Tri et filtres">
+      ${selectChip({ label: 'Trier', options: [['recentes', 'Récentes'], ['nom', 'Nom'], ['valeur', 'Valeur']], value: 'recentes' })}
+      <button type="button" class="chip" aria-pressed="true">Toutes <span class="n">34</span></button>
+      ${['normal', 'reverse', 'holo', 'cosmos', 'pokeball'].map((f, i) => html`<button type="button" class="chip" aria-pressed="false"><i class="${DOT[f]}"></i>${SHORT[f]} <span class="n">${[27, 5, 1, 1, 2][i]}</span></button>`)}
+    </div>
+    <div class="chips"><button type="button" class="chip" aria-pressed="true">${icon('check')}Master set</button><button type="button" class="chip" aria-pressed="false">Les miennes</button><button type="button" class="chip" disabled>Désactivée</button></div>`;
+    const segs = html`<div class="toolbar"><span class="seg" role="group" aria-label="Filtre"><button type="button" aria-pressed="true">Toutes</button><button type="button" aria-pressed="false">Possédées</button><button type="button" aria-pressed="false">Manquantes</button></span>
+      <span class="seg" role="group" aria-label="Affichage"><button type="button" aria-pressed="true" aria-label="Grille">${icon('grid')}</button><button type="button" aria-pressed="false" aria-label="Liste à cocher">${icon('list')}</button><button type="button" aria-pressed="false" aria-label="Classeur">${icon('binder')}</button></span></div>
+      <div class="k-row"><span class="seg block" role="group" aria-label="Vue" style="width:100%"><button type="button" aria-pressed="true">Pistes</button><button type="button" aria-pressed="false">Catalogue</button></span></div>`;
+    const search = html`<div class="searchbar"><label class="search">${icon('search')}<input type="search" placeholder="Rechercher une carte ou une série" aria-label="Rechercher"><button type="button" class="search-clear" aria-label="Effacer">${icon('close')}</button></label></div>
+      <div class="searchbar" style="padding-top:8px"><label class="search">${icon('search')}<input type="search" value="dracaufeu" aria-label="Rechercher"><button type="button" class="search-clear" aria-label="Effacer">${icon('close')}</button></label></div>`;
+
+    // ---------- listes ----------
+    const c6 = pick('sv03.5-006');
+    const lists = html`
+      <div class="sect"><span class="grow">Hausse régulière sur un an</span><a href="#/marche/scelle">Tout voir${icon('chevron-right')}</a></div>
+      <div class="group">
+        <a class="row" href="#/carte/${c6.id}"><span class="thumb">${images.imgHTML(c6)}</span><span class="body"><span class="t">${c6.name}</span><span class="s"><span>151 · 006/165</span></span></span><span class="end"><span class="price">${eur(1430)}</span>${deltaHTML(47.9)}</span></a>
+        <a class="row" href="#/produit/1"><span class="sq">${icon('box', { cls: 'muted' })}</span><span class="body"><span class="t">Display · Flammes Fantasmagoriques</span><span class="s"><span>Méga-Évolution · 2025</span></span></span><span class="end"><span class="price">${eur(191.03)}</span>${deltaHTML(-12.4, { per: '1 an' })}</span></a>
+        <a class="row" href="#/reglages"><span class="lead">${icon('settings')}</span><span class="body"><span class="t">Réglages et sauvegarde</span></span>${icon('chevron-right', { cls: 'chev' })}</a>
+      </div>
+      <div class="sect"><span class="grow">Détails</span><button type="button" class="ibtn" aria-label="À propos">${icon('info')}</button></div>
+      <div class="group">
+        <a class="row dl" href="#/serie/sv03.5"><span class="k">Série</span><span class="v">151</span>${icon('chevron-right', { cls: 'chev' })}</a>
+        <div class="row dl"><span class="k">Numéro</span><span class="v num">006/165</span></div>
+        <div class="row dl"><span class="k">Illustrateur</span><span class="v">PLANETA Mochizuki</span></div>
+      </div>
+      <div class="sect">Ma collection</div>
+      <div class="group">
+        <div class="row"><i class="dot-normal"></i><span class="body"><span class="t">Normale</span></span><span class="price">${eur(7.91)}</span><span class="stepper"><button type="button" aria-label="Retirer">${icon('minus')}</button><span class="v">1</span><button type="button" aria-label="Ajouter">${icon('plus')}</button></span></div>
+        <div class="row sel"><i class="dot-reverse"></i><span class="body"><span class="t">Reverse <span class="muted">· aperçu</span></span></span><span class="price">${eur(9.2)}</span><span class="stepper"><button type="button" aria-label="Retirer" disabled>${icon('minus')}</button><span class="v">0</span><button type="button" aria-label="Ajouter">${icon('plus')}</button></span></div>
+        <label class="row"><span class="body"><span class="t">Grille compacte</span><span class="s"><span>4 colonnes sans légende</span></span></span><input type="checkbox" class="switch" checked></label>
+        <button type="button" class="row" style="color:var(--down)"><span class="body"><span class="t">Tout effacer</span></span></button>
+      </div>`;
+
+    // ---------- synthèse, prix ----------
+    const pts = Array.from({ length: 120 }, (_, i) => { const d = new Date(2026, 7, 1 + i); return { d: d.toISOString().slice(0, 10), v: 4200 + Math.round(600 * Math.sin(i / 14) + i * 6 + (i % 7) * 12) }; });
+    const summary = html`<button type="button" class="summary"><span class="hero">${eur(5004.46)}</span>${sparkline(pts.slice(-30).map(p => p.v))}<span class="meta">${deltaHTML(2.9)} sur 30 jours</span><span class="meta full">34 cartes · 24 différentes · 16 séries</span></button>
+      <div class="summary"><span class="hero">${eur(225.42)}</span><span class="meta full">8 cartes à échanger · 5 différentes</span></div>`;
+    const prices = html`<div class="k-row"><span class="price">${eur(9.2)}</span><span class="price big">${eur(1430)}</span><span class="price">${eur(null)}</span></div>
+      <div class="k-row">${deltaHTML(4.1, { per: '30 j' })}${deltaHTML(-12.3, { per: '7 j' })}${deltaHTML(0.2)}${deltaHTML(12.3, { kind: 'eur' })}${deltaHTML(-45, { kind: 'eur' })}${deltaHTML(null)}</div>
+      <div class="group"><div class="kv"><span><small>Moy. 7 j</small><b>${eur(9.05)}</b></span><span><small>Moy. 30 j</small><b>${eur(8.69)}</b></span><span><small>Hier</small><b>${eur(9.31)}</b></span><span><small>Prix bas</small><b>${eur(7.5)}</b></span></div></div>
+      <div class="k-row muted" style="font-size:13px">${num(1234567)} · ${pct(41.2)} · ${pct(-15.3)} · ${dateFr('2026-11-25')} · ${relDay(new Date(Date.now() - 86400000))} · ${relDay(new Date(Date.now() - 3 * 86400000))}</div>`;
+
+    // ---------- boutons, compteur ----------
+    const buttons = html`<div class="btns"><button type="button" class="btn primary">${icon('plus')}Ajouter à mon scellé</button><button type="button" class="btn">${icon('copy')}Copier ma liste</button><a class="btn" href="https://www.cardmarket.com/fr/Pokemon">Voir sur Cardmarket${icon('external')}</a></div>
+      <div class="btns"><button type="button" class="btn text">Annuler</button><button type="button" class="btn danger">Tout effacer</button><button type="button" class="btn sm">Petit</button><button type="button" class="btn" disabled>Désactivé</button></div>
+      <div class="btns"><button type="button" class="btn block">Bouton pleine largeur</button></div>
+      <div class="k-row"><span class="stepper"><button type="button" aria-label="Retirer">${icon('minus')}</button><span class="v">3</span><button type="button" aria-label="Ajouter">${icon('plus')}</button></span>
+        <button type="button" class="ibtn" aria-label="Info">${icon('info')}</button><button type="button" class="ibtn" aria-label="Suivre" aria-pressed="true">${icon('star-fill')}</button><button type="button" class="ibtn" aria-label="Alerte">${icon('bell')}<i class="bdg"></i></button></div>
+      <div class="k-row"><button type="button" class="btn" data-k="toast">Toast</button><button type="button" class="btn" data-k="toast-undo">Toast « Annuler »</button><button type="button" class="btn" data-k="sheet">Feuille</button><button type="button" class="btn" data-k="menu">Menu</button><button type="button" class="btn" data-k="info">Info</button></div>`;
+
+    // ---------- liste à cocher, classeur, produits, énergies ----------
+    const tick = (f, n) => html`<button type="button" class="tick" aria-pressed="${n ? 'true' : 'false'}">${n ? icon('check') : ''}${SHORT[f]}${n > 1 ? ` ×${n}` : ''}</button>`;
+    const checklist = html`<div class="group">${['sv03.5-001', 'sv03.5-002', 'sv03.5-004'].map((id, i) => { const c = pick(id); return html`<div class="row" style="align-items:flex-start"><span class="no" style="padding-top:12px">${c.localId}</span><span class="thumb" style="width:32px">${images.imgHTML(c)}</span><span class="body"><span class="t">${c.name}</span><span class="ticks">${tick('normal', [3, 0, 1][i])}${tick('reverse', [0, 0, 1][i])}${i === 0 ? tick('cosmos', 0) : ''}</span></span></div>`; })}</div>`;
+    const binder = html`<div class="binder-head pad"><button type="button" class="ibtn" aria-label="Page précédente" disabled>${icon('chevron-left')}</button><span class="lbl">Page 1/23 · 001–009 · 4/9</span><button type="button" class="ibtn" aria-label="Page suivante">${icon('chevron-right')}</button></div>
+      <div class="binder-page">${s151.cards.slice(0, 9).map((c, i) => ([0, 3, 5, 7].includes(i) ? tileHTML(c, { qty: 1 }) : tileHTML(c, { missing: true })))}</div>
+      <div class="dots" aria-hidden="true">${Array.from({ length: 8 }, (_, i) => raw(`<i${i ? '' : ' class="on"'}></i>`))}</div>`;
+    const ptile = (img, type, title, price, d) => html`<a class="ptile" href="#/produit/1"><span class="ptile-img">${img ? raw(`<img src="${img}" crossorigin="anonymous" alt="" loading="lazy" decoding="async">`) : icon('box')}</span><span class="cap"><span><i>${type}</i></span><b>${title}</b><span><em>${eur(price)}</em>${deltaHTML(d, { per: '1 an' })}</span></span></a>`;
+    const products = html`<div class="grid">${ptile('https://tcgplayer-cdn.tcgplayer.com/product/503313_200w.jpg', 'Coffret Dresseur d’Élite', 'Coffret Dresseur d’Élite – 151', 443.13, 15.8)}${ptile('', 'Display', 'Display Flammes Fantasmagoriques', 191.03, -12.4)}${ptile('', 'Mini Tin', 'Mini Tin Évolutions Prismatiques', 14.9, 0.1)}</div>`;
+    const energies = html`<div class="k-row">${['G', 'R', 'W', 'L', 'P', 'F', 'D', 'M', 'Y', 'N', 'C'].map(k => raw(`<i class="nrg nrg-${k}" title="${k}"></i>`))}</div>
+      <div class="group"><div class="row"><span class="body"><span class="t"><i class="nrg nrg-R"></i><i class="nrg nrg-R"></i> Aile de Bravoure</span><span class="s"><span>Si au moins un marqueur de dégâts est placé sur ce Pokémon…</span></span></span><span class="end"><b class="num">60+</b></span></div></div>`;
+    const cols = html`<div class="cols2"><div class="group"><div class="row"><span class="body"><span class="t">Colonne 1 (une seule sous 700 px)</span></span></div></div><div class="group"><div class="row"><span class="body"><span class="t">Colonne 2</span></span></div></div></div>`;
+
+    // ---------- états ----------
+    const states = html`<div class="errrow">${icon('wifi-off')}<span class="grow">Hors ligne · données du 22/11</span><button type="button" class="btn text">Réessayer</button></div>
+      <div class="empty"><span class="ic">${icon('collection')}</span><b>Ta collection est vide</b><p>Scanne une carte ou ouvre une série pour l’ajouter.</p><a class="btn primary" href="#/scanner">Scanner une carte</a></div>
+      <div class="group" aria-hidden="true">${[1, 2, 3].map(() => raw('<div class="row sk-row"><span class="sk-a"></span><span class="body"><span class="sk-t"></span><span class="sk-s"></span></span></div>'))}</div>`;
+    const progress = html`<div class="pad" style="display:grid;gap:10px;padding-top:8px">
+      <div class="prog"><span class="lbl">Cartes</span><b>0 / 165</b><span class="progress"><i style="width:0%"></i></span><span class="pc">0 %</span></div>
+      <div class="prog"><span class="lbl">Master set</span><b>61 / 165</b><span class="progress"><i style="width:37%"></i></span><span class="pc">37 %</span></div>
+      <div class="prog done"><span class="lbl">Cartes</span><b>165 / 165</b><span class="progress done"><i style="width:100%"></i></span><span class="pc">Complète</span></div></div>`;
+
+    // ---------- jetons, typographie, finitions, icônes ----------
+    const TOK = ['bg', 'surface', 'surface-2', 'fill', 'line', 'pocket', 'text', 'text-2', 'text-3', 'accent', 'accent-weak', 'up', 'down', 'warn', 'up-weak', 'down-weak', 'warn-weak', 'scrim'];
+    const tokens = html`<div class="k-swatches">${TOK.map(k => html`<div class="k-sw"><i style="background:var(--${k})"></i><span>--${k}</span></div>`)}</div>`;
+    const type = html`<div class="k-type">
+      <div style="font-size:28px;line-height:32px;font-weight:650" class="num">${eur(5004.46)}</div>
+      <div style="font-size:20px;line-height:26px;font-weight:650">Dracaufeu-ex · titre 20</div>
+      <div style="font-size:17px;line-height:22px;font-weight:600">Titre de barre 17</div>
+      <div style="font-size:15px;line-height:20px;font-weight:500">Texte 15 · Méga-Dracaufeu Y-ex</div>
+      <div style="font-size:13px;line-height:18px;color:var(--text-2)">Secondaire 13 · 151 · 006/165 · Double rare</div>
+      <div style="font-size:12px;line-height:16px;color:var(--text-2)">Légende 12 · Écarlate et Violet · 22 sept. 2023</div>
+      <div style="font-size:11px;line-height:14px;font-weight:600;font-stretch:90%">Micro 11 condensé · Poké Ball ×2</div></div>`;
+    const legend = html`<div class="k-legend">${FINISHES.map(f => html`<span><i class="${DOT[f]}"></i>${LABEL[f]}</span>`)}</div>`;
+    const iconsGrid = html`<div class="k-row" style="gap:4px">${NAMES.map(n => html`<span class="ibtn" title="${n}" style="cursor:default">${icon(n)}</span>`)}</div>`;
+
+    setHTML($k, html`
+      ${sec('Barre d’app (racine, sous-page avec filet, titre masqué, chargement, action avec pastille)', html`${bars.map(b => html`<div class="k-frame">${raw(b)}</div>`)}`)}
+      ${sec('Onglets principaux', html`<div class="k-frame">${primaryTabs(COL, '#/collection/cartes')}</div><div class="k-frame">${primaryTabs(MK, '#/marche/envies')}</div>`)}
+      ${sec('Barre d’onglets (rail à partir de 900 px)', html`<div class="k-frame">${raw(tabbar)}</div>`)}
+      ${sec('En-tête de synthèse', summary)}
+      ${sec('Puces (tri = select natif), segmentés, recherche', html`${chips}${segs}${search}`)}
+      ${sec('Tuiles : ×1, ×3, manquante, +2, finitions, EN, ≈, sans illustration', tiles)}
+      ${sec('Grille compacte et squelettes', html`${compact}${skTiles}`)}
+      ${sec('Séries : logos, plaque sombre, étiquette, couverture générée, progression', sets)}
+      ${sec('Listes groupées', lists)}
+      ${sec('Prix, variations, formats', prices)}
+      ${sec('Courbe', html`<div class="group" style="padding:12px"><div id="k-chart"></div></div>`)}
+      ${sec('Progression 0 / 37 / 100 %', progress)}
+      ${sec('Liste à cocher', checklist)}
+      ${sec('Classeur', binder)}
+      ${sec('Produits scellés (photo, pictogramme)', products)}
+      ${sec('Énergies des attaques', energies)}
+      ${sec('Deux colonnes (≥ 700 px)', cols)}
+      ${sec('Boutons, compteur, toast, feuilles', buttons)}
+      ${sec('Erreur, vide, chargement', states)}
+      ${sec('Jetons de couleur', tokens)}
+      ${sec('Typographie', type)}
+      ${sec('Légende des finitions', legend)}
+      ${sec('Icônes', iconsGrid)}`);
+
+    lineChart(document.getElementById('k-chart'), pts, { ranges: ['7j', '30j', '3m', 'tout'], range: '3m', label: 'Valeur de la collection' });
+
+    delegate(document, 'click', '[data-k]', (e, b) => {
+      const k = b.dataset.k;
+      if (k === 'toast') toast('Liste copiée : colle-la dans ta discussion');
+      if (k === 'toast-undo') toast('Ajoutée en Normale · 3 au total', { action: 'Annuler', onAction: () => toast('Ajout annulé') });
+      if (k === 'sheet') openSheet({ title: 'Alerte prix', body: html`<form class="form" onsubmit="return false"><div class="seg block"><button type="button" aria-pressed="true">Normale</button><button type="button" aria-pressed="false">Reverse</button></div><div class="two"><label class="field">Prix min<input inputmode="decimal" value="0,00"></label><label class="field">Prix max<input inputmode="decimal" placeholder="8,28 €"></label></div><p class="caption" style="padding:0">À partir de 7,50 € en vente</p><button type="button" class="btn primary block">Me prévenir</button></form>` });
+      if (k === 'menu') menuSheet([{ icon: 'theme', label: 'Thème' }, { icon: 'info', label: 'À propos de Cardex' }, { icon: 'trash', label: 'Tout effacer', danger: true }, { icon: 'settings', label: 'Réglages et sauvegarde' }]);
+      if (k === 'info') infoSheet('Collection', ['La valeur estimée additionne la cote Cardmarket (tendance) de chaque version que tu possèdes.', 'Cotes Cardmarket (tendance, toutes langues), mises à jour chaque nuit. Cardex n’est pas affilié à Cardmarket.']);
+    });
+    document.documentElement.classList.add('ready');
+  </script>
+</body>
+</html>

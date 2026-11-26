@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scanner · page de test</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #111; --muted: #555; --ok: #1a7f37; --line: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --muted: #aaa; --ok: #4ac26b; --line: #333; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  .vf { position: relative; width: 100%; height: min(62vh, 620px); background: #000; overflow: hidden; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  canvas.ov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .guide { position: absolute; left: 50%; top: 50%; height: 78%; aspect-ratio: 63 / 88; transform: translate(-50%, -50%);
+           border: 2px solid rgba(255, 255, 255, .7); border-radius: 12px; pointer-events: none; }
+  .pill { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 8px 12px; border-radius: 999px;
+          background: rgba(0, 0, 0, .6); color: #fff; text-align: center; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
+  button, label.btn { font: inherit; min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line);
+                      background: transparent; color: inherit; cursor: pointer; display: inline-flex; align-items: center; }
+  pre { margin: 0 16px 16px; white-space: pre-wrap; font: 12px/1.45 ui-monospace, monospace; color: var(--muted); }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div class="vf" id="vf">
+  <video id="v" playsinline muted></video>
+  <canvas class="ov" id="ov"></canvas>
+  <div class="guide" id="guide"></div>
+  <div class="pill" id="pill" aria-live="polite">Chargement…</div>
+</div>
+<div class="bar">
+  <button id="b-start">Démarrer</button>
+  <button id="b-shut">Déclencher</button>
+  <button id="b-torch">Lampe</button>
+  <button id="b-zoom">Zoom</button>
+  <button id="b-resume">Scanner une autre carte</button>
+  <label class="btn">Importer une photo<input type="file" id="file" accept="image/*"></label>
+</div>
+<pre id="log"></pre>
+<script type="module">
+// Page de test de la boucle de scan (vraie caméra ou fausse caméra Chromium) : pilotée aussi par tools/scan_bench.py live.
+import * as scan from '../../js/scan/index.js';
+
+const $ = id => document.getElementById(id);
+const v = $('v'), ov = $('ov'), pill = $('pill'), logEl = $('log');
+const events = [];
+const t0 = performance.now();
+const log = s => { logEl.textContent = s + '\n' + logEl.textContent.slice(0, 6000); };
+const now = () => +(performance.now() - t0).toFixed(1);
+
+// index de l'image du clip de test : 16 cases noir / blanc en haut à gauche du flux (voir tools/scanbench/clip.py)
+const probe = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(256, 16) : Object.assign(document.createElement('canvas'), { width: 256, height: 16 });
+const pctx = probe.getContext('2d', { willReadFrequently: true });
+function clipFrame() {
+  if (!v.videoWidth) return -1;
+  pctx.drawImage(v, 0, 0, 256, 16, 0, 0, 256, 16);
+  const d = pctx.getImageData(0, 0, 256, 16).data;
+  let n = 0;
+  for (let b = 0; b < 16; b++) {
+    const x = b * 16 + 8, i = (8 * 256 + x) * 4;
+    n = (n << 1) | (d[i] > 127 ? 1 : 0);
+  }
+  return n ^ 0xA5A5;
+}
+const frames = [];
+function watch() {
+  const f = clipFrame();
+  if (f >= 0) frames.push([now(), f]);
+  if (frames.length > 20000) frames.splice(0, 10000);
+  if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(watch); else requestAnimationFrame(watch);
+}
+
+function draw(quad, good) {
+  const r = v.getBoundingClientRect(), k = devicePixelRatio || 1;
+  ov.width = r.width * k; ov.height = r.height * k;
+  const c = ov.getContext('2d');
+  c.setTransform(k, 0, 0, k, 0, 0);
+  c.clearRect(0, 0, r.width, r.height);
+  if (!quad) return;
+  c.strokeStyle = good ? '#3ddc84' : 'rgba(255,255,255,.8)';
+  c.lineWidth = 3;
+  c.beginPath();
+  quad.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+  c.closePath();
+  c.stroke();
+}
+
+let loop = null, cam = null, zoomed = true;
+async function start() {
+  try {
+    // ?portrait : fausse caméra de Chromium (clip 1080×1920), sinon les contraintes par défaut le recadreraient
+    const portrait = new URLSearchParams(location.search).has('portrait');
+    cam = await scan.openCamera(v, portrait ? { video: { width: { ideal: 1080 }, height: { ideal: 1920 } } } : {});
+    log(`caméra ${v.videoWidth}×${v.videoHeight} lampe=${cam.caps.torch} zoom=${JSON.stringify(cam.caps.zoom)} mise au point=${cam.caps.focus}`);
+  } catch (e) {
+    pill.textContent = e.message;
+    events.push({ t: now(), type: 'camera-error', kind: e.kind, message: e.message });
+    return;
+  }
+  v.requestVideoFrameCallback ? v.requestVideoFrameCallback(watch) : requestAnimationFrame(watch);
+  loop = scan.createLoop({
+    video: v, guide: $('guide'),
+    onState: s => {
+      pill.textContent = s.hint || s.state;
+      draw(s.quad, s.state === 'identifying' || s.state === 'paused' || (s.found ?? 0) >= 4);
+      const last = events.findLast?.(e => e.type === 'state');
+      if (!last || last.state !== s.state || last.hint !== s.hint) events.push({ t: now(), type: 'state', state: s.state, hint: s.hint, f: clipFrame() });
+    },
+    onResult: r => {
+      const f = clipFrame();
+      events.push({ t: now(), type: 'result', f, ...r });
+      log(`${r.decision} ${r.best.id} d=${r.best.d?.toFixed?.(3)} [${r.candidates.map(c => c.id).join(', ')}] alt=[${r.alternatives.join(', ')}] ${r.source} ${r.ms} ms (image ${f})`);
+      if (r.decision === 'accept' && navigator.vibrate) navigator.vibrate(30);
+    },
+  });
+  loop.start();
+}
+
+$('b-start').onclick = () => (loop ? (loop.stop(), loop.destroy(), scan.closeCamera(), loop = null, pill.textContent = 'Arrêté') : start());
+$('b-shut').onclick = () => loop?.shutter();
+$('b-resume').onclick = () => loop?.resume();
+$('b-torch').onclick = async () => log('lampe : ' + await scan.setTorch(!scan.torchState()));
+$('b-zoom').onclick = async () => { zoomed = !zoomed; const z = cam?.caps.zoom; if (z) log('zoom : ' + await scan.setZoom(zoomed ? Math.min(2, z.max) : z.min)); };
+$('file').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = await scan.identifyImage(f);
+  log('import : ' + (r ? `${r.decision} ${r.best.id} d=${r.best.d?.toFixed?.(3)} [${r.candidates.map(c => c.id).join(', ')}] ${r.ms} ms` : 'aucune carte'));
+};
+
+const p = scan.preload(x => { pill.textContent = `Chargement de la base ${Math.round(x * 100)} %`; });
+p.then(info => { log(`base : ${info.cards} cartes, ${info.groups} groupes, ${info.noimg} sans image (${info.built})`); pill.textContent = 'Prêt'; },
+       e => { pill.textContent = 'Base indisponible : ' + e.message; });
+
+window.live = { events, frames, start, scan, get loop() { return loop; }, clipFrame, ready: p };
+window.__ready = true;
+if (new URLSearchParams(location.search).has('auto')) p.then(start);
+</script>
+</body>
+</html>

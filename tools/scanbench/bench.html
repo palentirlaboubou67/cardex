@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banc d'essai du scanner</title>
+<style>
+  body { font: 13px/1.4 system-ui, sans-serif; margin: 16px; background: #fff; color: #111; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<pre id="log">Chargement…</pre>
+<script type="module">
+// Banc d'essai : exécute les vrais modules js/scan/* (piloté par tools/scan_bench.py via window.bench).
+import { ScanDB } from '../../js/scan/match.js';
+import { identifyGuided, identifyUnguided, decide, T } from '../../js/scan/identify.js';
+import { canonFromRGBA, describe, POP16 } from '../../js/scan/describe.js';
+import { compareRegions } from '../../js/scan/region.js';
+
+const logEl = document.getElementById('log');
+const log = s => { logEl.textContent += '\n' + s; };
+let db = null, cards = null, local = new Set();
+
+async function init() {
+  const [buf, c] = await Promise.all([
+    fetch('../../data/scan/hashes.bin', { cache: 'no-cache' }).then(r => r.arrayBuffer()),
+    fetch('../../data/scan/cards.json', { cache: 'no-cache' }).then(r => r.json()),
+  ]);
+  cards = c;
+  db = new ScanDB(buf, c);
+  log(`base : ${db.n} cartes, ${db.groups.length} groupes, ${db.near.size} cartes avec sosies`);
+  return { n: db.n, groups: db.groups.length };
+}
+
+async function decode(url) {
+  const blob = await (await fetch(url)).blob();
+  const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  const cv = new OffscreenCanvas(bmp.width, bmp.height), x = cv.getContext('2d', { willReadFrequently: true });
+  x.drawImage(bmp, 0, 0);
+  const d = x.getImageData(0, 0, bmp.width, bmp.height);
+  bmp.close();
+  return d;
+}
+
+// Bits différents entre describe() (JS) et hashes.bin (Python) sur des images de référence
+async function bitexact(list) {
+  const out = [];
+  for (const { id, url } of list) {
+    const im = await decode(url);
+    const q = describe(canonFromRGBA(im.data, im.width, im.height));
+    const i = db.row.get(id), row = new Uint8Array(db.h.buffer, i * 64, 64);
+    let dh = 0, ph = 0;
+    for (let k = 0; k < 32; k++) { dh += POP16[q[k] ^ row[k]]; ph += POP16[q[32 + k] ^ row[32 + k]]; }
+    out.push({ id, dh, ph });
+  }
+  return out;
+}
+
+// Les images haute définition locales remplacent TCGdex quand elles existent (banc hors ligne et rapide)
+function setLocal(list) { local = new Set(list); }
+function resolveUrl(url) {
+  const m = url.match(/^https:\/\/assets\.tcgdex\.net\/(fr|en)\/[^/]+\/([^/]+)\/([^/]+)\/high\.webp$/);
+  if (m) {
+    const rel = `img_${m[1]}_high/${m[2]}/${m[3]}.webp`;
+    if (local.has(rel)) return '/__img/' + rel;
+  }
+  return url;
+}
+
+// Identifie une liste de photos. c = { url, id, guide: [x, y, w, h] | null }
+async function runCases(cases, { exclude = false, unguided = false, region = true, self = false } = {}) {
+  const out = [];
+  for (const c of cases) {
+    const t0 = performance.now();
+    const im = await decode(c.url);
+    const tdec = performance.now() - t0;
+    db.exclude(exclude ? [c.id] : null);
+    let r;
+    try {
+      r = unguided || !c.guide ? identifyUnguided(db, im)
+        : identifyGuided(db, im, { x: c.guide[0], y: c.guide[1], w: c.guide[2], h: c.guide[3] });
+    } catch (e) {
+      out.push({ id: c.id, error: String(e && e.stack || e) });
+      continue;
+    }
+    const rec = { id: c.id, ms: r.ms, dec: tdec, nev: r.nev, stage: r.stage, quad: r.quad };
+    if (r.rank) {
+      const k = r.rank, dcs = decide(k);
+      rec.top = k.top.map(x => [x.id, +x.d.toFixed(4)]);
+      rec.d1 = k.d1; rec.d2 = k.d2; rec.level = dcs.level; rec.reprint = dcs.reprint;
+      rec.group = k.group.map(x => db.ids[x.i]);
+      rec.rivals = dcs.rivals.map(i => db.ids[i]);
+      if (region && (dcs.reprint || dcs.rivals.length) && dcs.level !== 'none') {
+        const rows = [...new Set([...k.group.map(x => x.i), ...dcs.rivals, k.i1])];
+        const t1 = performance.now();
+        const sc = await compareRegions(db, im, r.quad, rows, { urlOf: i => resolveUrl(db.imageBase(i) + '/high.webp') });
+        rec.regionMs = performance.now() - t1;
+        rec.regions = sc ? sc.map(x => [db.ids[x.i], +x.score.toFixed(4)]) : null;
+      }
+      // corrélation de la zone du numéro avec la seule carte n° 1 (mesure pour un contrôle d'acceptation)
+      if (self && (dcs.level === 'strong' || dcs.level === 'normal')) {
+        const sc = await compareRegions(db, im, r.quad, [k.i1], { urlOf: i => resolveUrl(db.imageBase(i) + '/high.webp') });
+        rec.self = sc ? +sc[0].score.toFixed(4) : null;
+      }
+    }
+    out.push(rec);
+  }
+  db.exclude(null);
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// OCR : lignes préparées comme dans le worker, lues par tesseract (vendor/tesseract), grammaire et vérification
+let O = null, P = null;
+async function ocrInit() {
+  O = await import('../../js/scan/ocr.js');
+  P = await import('../../js/scan/ocrprep.js');
+  O.setCards(cards);
+  const t0 = performance.now();
+  await O.load();
+  return { loadMs: performance.now() - t0 };
+}
+
+// c = { url, id, guide, corners? } ; quad : détecté (identifyGuided) ou vrais coins (c.corners) si demandé
+async function ocrCases(cases, { trueQuad = false } = {}) {
+  const out = [];
+  for (const c of cases) {
+    const im = await decode(c.url);
+    let quad = c.corners || null, top = [];
+    if (!trueQuad && c.guide) {
+      const r = identifyGuided(db, im, { x: c.guide[0], y: c.guide[1], w: c.guide[2], h: c.guide[3] });
+      if (r.quad) quad = r.quad;
+      if (r.rank) top = [...r.rank.top.map(x => x.id), ...r.rank.group.map(x => db.ids[x.i])];
+    }
+    if (!quad) { out.push({ id: c.id, error: 'pas de quad' }); continue; }
+    const nums = O.numsFor([c.id]);
+    const lines = P.ocrLines(im, quad, nums);
+    const texts = [], ms = [];
+    for (const l of lines) {
+      const t0 = performance.now();
+      const { text, conf } = await O.readLine(l.img);
+      ms.push(performance.now() - t0);
+      texts.push({ v: l.variant, num: l.num, text, conf });
+    }
+    const tx = texts.map(t => t.text);
+    const free = O.decideOcr(tx, []);
+    const cands = [...new Set([c.id, ...top])];
+    const ver = O.decideOcr(tx, cands);
+    out.push({ id: c.id, exp: O.expected(c.id), texts, ms, free, ver, cands: cands.length });
+  }
+  return out;
+}
+
+// lignes déjà rendues (texte synthétique) : c = { url, id }
+async function ocrRaw(cases) {
+  const out = [];
+  for (const c of cases) {
+    const im = await decode(c.url);
+    const g = new Float32Array(im.width * im.height);
+    for (let i = 0, p = 0; i < g.length; i++, p += 4) g[i] = 0.299 * im.data[p] + 0.587 * im.data[p + 1] + 0.114 * im.data[p + 2];
+    const vars = P.prepLine(g, im.width, im.height, { invertBox: false });
+    const texts = [];
+    for (const v of vars) texts.push((await O.readLine(v.img)).text);
+    out.push({ id: c.id, exp: O.expected(c.id), texts, free: O.decideOcr(texts, []) });
+  }
+  return out;
+}
+
+// images des lignes préparées (PNG en data URL), pour les regarder
+async function ocrDebug(c, { trueQuad = false } = {}) {
+  const im = await decode(c.url);
+  let quad = c.corners;
+  if (!trueQuad && c.guide) {
+    const r = identifyGuided(db, im, { x: c.guide[0], y: c.guide[1], w: c.guide[2], h: c.guide[3] });
+    if (r.quad) quad = r.quad;
+  }
+  const lines = P.ocrLines(im, quad, O.numsFor([c.id]));
+  const out = [];
+  for (const l of lines) {
+    const cv = new OffscreenCanvas(l.img.width, l.img.height);
+    cv.getContext('2d').putImageData(l.img, 0, 0);
+    const b = await cv.convertToBlob({ type: 'image/png' });
+    out.push({ num: l.num, v: l.variant, png: await new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); }) });
+  }
+  return out;
+}
+
+// zone du numéro : scores avec le quad détecté et avec les vrais coins (c.corners), pour une liste d'ids
+async function regionDebug(c, ids) {
+  const im = await decode(c.url);
+  const r = identifyGuided(db, im, { x: c.guide[0], y: c.guide[1], w: c.guide[2], h: c.guide[3] });
+  const rows = ids.map(id => db.row.get(id));
+  const urlOf = i => resolveUrl(db.imageBase(i) + '/high.webp');
+  const det = await compareRegions(db, im, r.quad, rows, { urlOf });
+  const tru = c.corners ? await compareRegions(db, im, c.corners, rows, { urlOf }) : null;
+  const fmt = s => s && s.map(x => [db.ids[x.i], +x.score.toFixed(3)]);
+  return { quad: r.quad, corners: c.corners, det: fmt(det), tru: fmt(tru), urls: rows.map(urlOf) };
+}
+
+window.bench = { init, bitexact, runCases, setLocal, T, ocrInit, ocrCases, ocrRaw, ocrDebug, regionDebug };
+window.__ready = true;
+log('prêt');
+</script>
+</body>
+</html>

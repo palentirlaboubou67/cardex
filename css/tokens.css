@@ -1,0 +1,111 @@
+/* Cardex : jetons de design (FINAL-design §5, corrections [FC] comprises).
+   Gris neutres, un seul accent (bleu indigo), vert/rouge réservés au sens du prix, à la complétion et à la suppression.
+   Thème : automatique (système), ou forcé par <html data-theme="light|dark"> (script en tête de index.html). */
+
+/* Police unique, auto-hébergée (sous-ensemble latin, axes wdth 75–100 et wght 400–700, licence OFL : fonts/OFL.txt) */
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 75% 100%;
+  font-display: swap;
+  src: url(../fonts/instrument-sans-latin.woff2) format('woff2');
+}
+
+:root {
+  /* neutres */
+  --bg: #f6f6f7;                        /* page */
+  --surface: #ffffff;                   /* listes groupées, feuilles, tuiles produit */
+  --surface-2: #f0f0f3;                 /* surface dans une surface (classeur) */
+  --fill: rgb(118 118 128 / .12);       /* puces, champ de recherche, rail du segmenté, boutons du compteur */
+  --fill-2: rgb(118 118 128 / .20);     /* appuyé */
+  --line: #e3e3e8;                      /* filets seulement */
+  --text: #17171c;                      /* 17,9:1 sur surface */
+  --text-2: #5c5c66;                    /* 6,6:1 sur surface, 6,1:1 sur bg : tout texte secondaire et les placeholders */
+  --text-3: #7c7c86;                    /* 4,1:1 : désactivé, chevrons, décor. Jamais pour une information */
+  /* l'accent unique : ce qui se touche, ce qui est choisi, la progression */
+  --accent: #3451c6;                    /* 6,7:1 sur surface ; blanc sur accent 6,7:1 */
+  --accent-weak: rgb(52 81 198 / .10);  /* puce choisie, indicateur d'onglet, ligne choisie */
+  --on-accent: #ffffff;
+  /* sémantique, jamais décoratif */
+  --up: #0b7a43;                        /* 5,4:1 */
+  --down: #c22f3b;                      /* 5,6:1, aussi destructif */
+  --warn: #935600;                      /* 5,9:1 */
+  --up-weak: rgb(11 122 67 / .10);
+  --down-weak: rgb(194 47 59 / .10);
+  --warn-weak: rgb(147 86 0 / .12);
+  /* cartes */
+  --pocket: #ebebef;                    /* emplacement vide, fond d'image en chargement */
+  --card-edge: inset 0 0 0 1px rgb(0 0 0 / .07);   /* bord dessiné DANS la boîte image (content-visibility ne le coupe pas) */
+  --hero-shadow: 0 12px 32px rgb(0 0 0 / .22);
+  /* pastilles posées sur les images : mêmes valeurs dans les deux thèmes */
+  --badge-bg: rgb(18 18 22 / .82);
+  --pill-bg: rgb(18 18 22 / .72);
+  /* calques */
+  --scrim: rgb(10 10 14 / .45);
+  --shadow-sheet: 0 -8px 32px rgb(0 0 0 / .14);
+  --shadow-pop: 0 8px 28px rgb(0 0 0 / .16);
+  --toast-bg: #17171c;
+  --toast-text: #f6f6f7;
+  --toast-action: #a9b8ff;              /* 8,6:1 sur le fond du toast */
+  --logo-plate: rgb(208 208 216);       /* plaque claire (sans éblouir) derrière les logos sombres, en thème sombre */
+  --seg-on: #ffffff;                    /* segment choisi du contrôle segmenté (plus clair que son rail) */
+  color-scheme: light;
+
+  /* typographie (FINAL-design §5.2) */
+  --font: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --fs-hero: 28px;  --lh-hero: 32px;    /* 650, chiffres tabulaires */
+  --fs-title: 20px; --lh-title: 26px;   /* 650 */
+  --fs-bar: 17px;   --lh-bar: 22px;     /* 600 */
+  --fs-body: 15px;  --lh-body: 20px;    /* 400–500 */
+  --fs-sec: 13px;   --lh-sec: 18px;     /* 400–600 */
+  --fs-cap: 12px;   --lh-cap: 16px;     /* 400–600 */
+  --fs-micro: 11px; --lh-micro: 14px;   /* 600, font-stretch 90 % : pastilles, libellés d'onglets */
+  --cond: 90%;
+
+  /* espace, forme, taille, mouvement (FINAL-design §5.3) */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+  --gutter: 16px;
+  --r-1: 6px; --r-2: 8px; --r-3: 12px; --r-4: 20px; --r-pill: 999px;
+  --card-radius: 4.8% / 3.4%;           /* coin réel d'une carte (≈ 3 mm sur 63 × 88 mm), à toute taille */
+  --appbar: 56px; --tabbar: 56px; --rail: 80px; --tap: 44px;
+  --content-max: 1120px;
+  --dur-1: 120ms; --dur-2: 200ms; --dur-3: 280ms; --ease: cubic-bezier(.2, .8, .2, 1);
+  --z-sticky: 18; --z-appbar: 20; --z-tabbar: 30; --z-scrim: 40; --z-sheet: 50; --z-toast: 60;
+
+  /* zones sûres (encoche, barre d'accueil) */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --top: calc(var(--appbar) + var(--sat));   /* haut des éléments collants sous la barre d'app */
+}
+
+/* Thème sombre : suit le système, sauf si le thème clair est forcé */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e0e11; --surface: #17171b; --surface-2: #222227;
+    --fill: rgb(118 118 128 / .24); --fill-2: rgb(118 118 128 / .34);
+    --line: #2d2d33; --text: #f2f2f4; --text-2: #a5a5af; --text-3: #80808a;
+    --accent: #91a5ff; --accent-weak: rgb(145 165 255 / .14); --on-accent: #0e0e11;
+    --up: #4cc98d; --down: #ff7b86; --warn: #efb24a;
+    --up-weak: rgb(76 201 141 / .14); --down-weak: rgb(255 123 134 / .14); --warn-weak: rgb(239 178 74 / .14);
+    --pocket: #1d1d22; --card-edge: inset 0 0 0 1px rgb(255 255 255 / .06); --hero-shadow: 0 12px 32px rgb(0 0 0 / .5);
+    --scrim: rgb(0 0 0 / .6); --shadow-sheet: 0 -8px 32px rgb(0 0 0 / .5); --shadow-pop: 0 8px 28px rgb(0 0 0 / .5);
+    --toast-bg: #f2f2f4; --toast-text: #0e0e11; --toast-action: #3451c6; --seg-on: #3b3b42;
+    color-scheme: dark;
+  }
+}
+/* Thème sombre forcé (même bloc) */
+:root[data-theme="dark"] {
+  --bg: #0e0e11; --surface: #17171b; --surface-2: #222227;
+  --fill: rgb(118 118 128 / .24); --fill-2: rgb(118 118 128 / .34);
+  --line: #2d2d33; --text: #f2f2f4; --text-2: #a5a5af; --text-3: #80808a;
+  --accent: #91a5ff; --accent-weak: rgb(145 165 255 / .14); --on-accent: #0e0e11;
+  --up: #4cc98d; --down: #ff7b86; --warn: #efb24a;
+  --up-weak: rgb(76 201 141 / .14); --down-weak: rgb(255 123 134 / .14); --warn-weak: rgb(239 178 74 / .14);
+  --pocket: #1d1d22; --card-edge: inset 0 0 0 1px rgb(255 255 255 / .06); --hero-shadow: 0 12px 32px rgb(0 0 0 / .5);
+  --scrim: rgb(0 0 0 / .6); --shadow-sheet: 0 -8px 32px rgb(0 0 0 / .5); --shadow-pop: 0 8px 28px rgb(0 0 0 / .5);
+  --toast-bg: #f2f2f4; --toast-text: #0e0e11; --toast-action: #3451c6; --seg-on: #3b3b42;
+  color-scheme: dark;
+}

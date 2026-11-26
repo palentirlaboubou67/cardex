@@ -1,12 +1,19 @@
 {
-  "name": "Cardex — ma collection de cartes",
+  "name": "Cardex",
   "short_name": "Cardex",
+  "description": "Ta collection de cartes Pokémon : scan, séries, cotes Cardmarket en euros, decks.",
+  "lang": "fr",
+  "dir": "ltr",
+  "id": "./",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0b1020",
-  "theme_color": "#0b1020",
+  "background_color": "#0e0e11",
+  "theme_color": "#0e0e11",
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
   ]
 }

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cardex</title>
+  <meta name="description" content="Ta collection de cartes Pokémon : scan, séries, cotes Cardmarket en euros, decks.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f6f6f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0e0e11" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cardex">
+  <meta name="format-detection" content="telephone=no">
+  <script>
+    // Thème choisi dans Réglages, posé avant le premier affichage (pas d'éclair blanc en thème sombre forcé).
+    (function () {
+      try {
+        var p = JSON.parse(localStorage.getItem('cardex.prefs.v1') || 'null');
+        var t = p && p.theme;
+        if (t === 'light' || t === 'dark') {
+          document.documentElement.setAttribute('data-theme', t);
+          var m = document.querySelectorAll('meta[name="theme-color"]');
+          for (var i = 0; i < m.length; i++) m[i].setAttribute('content', t === 'dark' ? '#0e0e11' : '#f6f6f7');
+        }
+      } catch (e) {}
+    })();
+    // Filet de sécurité : si l'appli ne démarre pas (fichier manquant, navigateur trop ancien), on le dit.
+    window.__bootFail = function () {
+      if (window.__cardex || document.getElementById('boot-fail')) return;
+      var o = document.getElementById('outlet');
+      if (o) o.innerHTML = '<div class="empty" id="boot-fail"><b>Cardex n’a pas pu démarrer</b><p>Vérifie ta connexion, puis recharge la page.</p><button type="button" class="btn" onclick="location.reload()">Recharger</button></div>';
+    };
+    addEventListener('load', function () { setTimeout(window.__bootFail, 10000); });
+  </script>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="preload" href="fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/base.css">
+  <!-- styles des vues (vague 2 ; un fichier absent ne bloque rien) -->
+  <link rel="stylesheet" href="css/views/collection.css">
+  <link rel="stylesheet" href="css/views/series.css">
+  <link rel="stylesheet" href="css/views/carte.css">
+  <link rel="stylesheet" href="css/views/scanner.css">
+  <link rel="stylesheet" href="css/views/marche.css">
+  <link rel="stylesheet" href="css/views/decks.css">
+  <!-- modules du démarrage chargés en parallèle (pas de cascade d'imports) -->
+  <link rel="modulepreload" href="js/main.js">
+  <link rel="modulepreload" href="js/core/router.js">
+  <link rel="modulepreload" href="js/core/appbar.js">
+  <link rel="modulepreload" href="js/core/dom.js">
+  <link rel="modulepreload" href="js/core/icons.js">
+  <link rel="modulepreload" href="js/core/sheet.js">
+  <link rel="modulepreload" href="js/core/toast.js">
+  <link rel="modulepreload" href="js/core/idle.js">
+  <link rel="modulepreload" href="js/core/format.js">
+  <link rel="modulepreload" href="js/core/net.js">
+  <link rel="modulepreload" href="js/state/collection.js">
+  <link rel="modulepreload" href="js/state/prefs.js">
+  <link rel="modulepreload" href="js/data/catalog.js">
+  <link rel="modulepreload" href="js/data/images.js">
+  <link rel="modulepreload" href="js/data/prices.js">
+  <link rel="modulepreload" href="js/data/finishes.js">
+  <link rel="modulepreload" href="js/data/tcgdex.js">
+  <link rel="modulepreload" href="js/data/dex.js">
+  <script src="js/state/wishes.js" defer></script>
+  <script type="module" src="js/main.js" onerror="__bootFail()"></script>
+</head>
+<body>
+  <header class="appbar" id="appbar">
+    <button type="button" class="ibtn back" aria-label="Retour" hidden><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 5l-7 7 7 7"/></svg></button>
+    <div class="title"><h1 id="bar-title" tabindex="-1">Cardex</h1><small id="bar-sub" hidden></small></div>
+    <div class="acts" id="bar-acts"></div>
+    <button type="button" class="ibtn more" aria-label="Plus d’options" aria-haspopup="dialog" hidden><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g fill="currentColor"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></g></svg></button>
+    <div class="bar-progress" role="progressbar" aria-label="Mise à jour en cours" hidden></div>
+  </header>
+
+  <main id="outlet"></main>
+
+  <!-- icônes recopiées de js/core/icons.js (affichées avant le chargement des modules) -->
+  <nav class="tabbar" aria-label="Navigation principale">
+    <a class="tab" href="#/collection/cartes" data-tab="collection"><span class="ic"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="3.5" width="7" height="9" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="15.5" width="7" height="5" rx="1.5"/></svg></span><span class="lb">Collection</span></a>
+    <a class="tab" href="#/series" data-tab="series"><span class="ic"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></span><span class="lb">Séries</span></a>
+    <a class="tab" href="#/scanner" data-tab="scan"><span class="ic"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M7 12h10"/></svg></span><span class="lb">Scanner</span></a>
+    <a class="tab" href="#/marche/cotes" data-tab="market"><span class="ic"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg></span><span class="lb">Marché</span><i class="bdg" aria-hidden="true" hidden></i><span class="sr bdg-sr" hidden>, une envie est dans ta fourchette</span></a>
+    <a class="tab" href="#/decks/actuelle" data-tab="decks"><span class="ic"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="3.5" width="11" height="15" rx="2"/><path d="M5 7.5v11a2 2 0 0 0 2 2h8"/></svg></span><span class="lb">Decks</span></a>
+  </nav>
+
+  <dialog id="sheet" class="sheet"></dialog>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <noscript><div class="empty"><b>Cardex a besoin de JavaScript</b><p>Active JavaScript dans ton navigateur pour utiliser l’appli.</p></div></noscript>
+</body>
+</html>
