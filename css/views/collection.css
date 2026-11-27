@@ -1,1 +1,173 @@
-/* Styles de la vue Collection (vague 2, propriétaire de la vue). Vide pour l’instant : index.html le lie déjà. */
+/* Vue Collection (Cartes, Pokédex, Doubles, Succès), page Pokémon, Réglages, et leurs feuilles
+   (« Évolution de la valeur », liste d'échange, confirmations). Composants partagés : css/base.css. */
+
+/* silhouette d'un Pokémon pas encore dans la collection (lisible sur les deux fonds) */
+:root { --col-sil: brightness(0) opacity(.16); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --col-sil: brightness(0) invert(1) opacity(.15); }
+}
+:root[data-theme="dark"] { --col-sil: brightness(0) invert(1) opacity(.15); }
+
+.col-sec { display: block; }
+
+/* ---------- Cartes ---------- */
+/* rappel de sauvegarde : une ligne compacte, en haut, seulement quand l'export a plus d'un mois ; l'en-tête qui suit
+   perd son retrait du haut (le rappel coûte 40 px au premier écran, pas 60) */
+.col-remind {
+  display: flex; align-items: center; gap: 8px; margin: 8px var(--gutter) 0; min-height: 40px;
+  padding: 0 0 0 12px; border-radius: var(--r-3); background: var(--warn-weak); color: var(--text);
+  font-size: var(--fs-sec); line-height: var(--lh-sec);
+}
+.col-remind > svg { flex: none; width: 18px; height: 18px; color: var(--warn); }
+.col-remind .grow { min-width: 0; padding: 2px 0; }
+.col-remind .btn.text { flex: none; }
+.col-remind .ibtn { flex: none; height: 40px; color: var(--text-2); }
+.col-remind .ibtn::after { content: ''; position: absolute; inset: -2px 0; }   /* cible 44 px */
+.col-remind .ibtn svg { width: 18px; height: 18px; }
+.col-remind:not([hidden]) + .col-sum { padding-top: 8px; }
+
+/* en-tête de synthèse : un bouton (feuille « Évolution de la valeur ») */
+.col-sum { border-radius: 0; }
+.col-sum .meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.col-sum .meta.full { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (hover: hover) { .col-sum:hover { background: color-mix(in srgb, var(--fill) 40%, transparent); } }
+.col-sk-hero { display: inline-block; width: 150px; max-width: 100%; height: 26px; margin: 3px 0; vertical-align: top; border-radius: var(--r-1); }
+.col-sk-line { display: inline-block; width: 140px; height: 12px; margin: 3px 0; border-radius: 6px; }
+.col-filter { padding-top: 8px; }
+.col-filter .search > svg { width: 16px; height: 16px; }
+
+/* ---------- Doubles ---------- */
+.col-trade { display: flex; align-items: center; gap: 4px; padding: 8px calc(var(--gutter) - 4px) 4px var(--gutter); }
+.col-trade .btn { flex: 1; width: auto; min-width: 0; }
+.col-trade .ibtn { color: var(--text-2); }
+.col-dsum .meta.full { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Pokédex ---------- */
+.col-dexhead, .col-achhead { padding: 14px var(--gutter) 2px; }
+.col-dexhead .prog, .col-achhead .prog { gap: 8px; }
+.col-dexhead .prog b, .col-achhead .prog b { font-size: var(--fs-body); }
+.col-dexhead .progress, .col-achhead .progress { max-width: none; }
+.col-dexchips { padding-bottom: 8px; }
+.dexgrid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 6px;
+  padding: 4px var(--gutter) 16px;
+}
+@media (min-width: 600px) { .dexgrid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px 8px; } }
+@media (min-width: 900px) { .dexgrid { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); } }
+.dexgrid > .empty, .dexgrid > .errrow { grid-column: 1 / -1; }
+.dexcell {
+  position: relative; display: flex; flex-direction: column; align-items: center; min-width: 0;
+  padding: 4px 4px 8px; border-radius: var(--r-3); color: inherit; text-decoration: none; text-align: center;
+  content-visibility: auto; contain-intrinsic-size: auto 84px auto 118px;
+}
+.dexcell:hover { text-decoration: none; }
+.dexcell.own { background: var(--surface); }
+.dexcell:active { background: var(--fill); }
+@media (hover: hover) { .dexcell:hover { background: color-mix(in srgb, var(--fill) 50%, transparent); } .dexcell.own:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); } }
+.dexcell .spr { display: block; width: 100%; max-width: 76px; aspect-ratio: 1; }
+.dexcell .spr img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.dexcell .spr img.gone { visibility: hidden; }
+.dexcell:not(.own) .spr img { filter: var(--col-sil); }
+.dexcell .qty { top: 4px; right: 4px; }
+.dexcell .no { font: 500 var(--fs-micro)/var(--lh-micro) var(--font); font-stretch: var(--cond); color: var(--text-2); }
+.dexcell .nm {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 100%;
+  font: 500 var(--fs-cap)/15px var(--font); font-stretch: var(--cond); overflow-wrap: anywhere;
+}
+.dexcell:not(.own) .nm { color: var(--text-2); }
+.dexsk { display: contents; }
+.dexsk > span { display: block; aspect-ratio: 84 / 118; border-radius: var(--r-3); background: var(--fill); }
+
+/* ---------- Succès ---------- */
+.ach-groups { padding-bottom: 8px; }
+@media (min-width: 760px) {
+  .ach-groups { columns: 2; column-gap: 0; }
+  .ach-group { break-inside: avoid; }
+}
+.row.ach { --inset: 60px; }
+.ach .medal {
+  flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--fill); color: var(--text-2);
+}
+.ach .medal svg { width: 20px; height: 20px; }
+.ach.done .medal { background: var(--accent-weak); color: var(--accent); }
+.ach .s > span { white-space: normal; }
+.ach .s + .s { margin-top: 4px; }
+.ach-prog .progress { max-width: 120px; }
+.ach-prog .num { flex: none; white-space: nowrap; }
+.ach .ok { color: var(--text-2); }
+.ach-ok { color: var(--up); padding-right: 12px; }
+.ach-ok svg { width: 20px; height: 20px; }
+
+/* ---------- Feuilles ---------- */
+.col-value-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 12px; padding: 0 0 8px; }
+.col-value-head b { font-size: var(--fs-hero); line-height: var(--lh-hero); font-weight: 650; letter-spacing: -.3px; }
+.col-value-head > span { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--text-2); }
+.col-value-head .delta { font-size: var(--fs-sec); }
+.col-chart { margin: 4px 0 16px; }
+.col-value-empty { padding: 12px 0 16px; font-size: 14px; line-height: 20px; color: var(--text-2); }
+.col-value .group { margin: 0 0 16px; background: var(--surface-2); }
+.col-value .row.dl .v .muted { font-size: var(--fs-sec); }
+.col-sheet-lede { margin-bottom: 12px; font-size: 14px; line-height: 20px; color: var(--text-2); }
+.col-tradetext { display: block; width: 100%; height: auto; min-height: 220px; max-height: 50vh; padding: 12px; font: 400 14px/20px var(--font); white-space: pre-wrap; resize: vertical; }
+.col-sheet-btns { display: grid; gap: 8px; margin-top: 12px; }
+
+/* ---------- Page Pokémon ---------- */
+#v-poke .poke-head { display: flex; align-items: center; gap: 16px; padding: 12px var(--gutter) 0; min-height: 100px; }
+#v-poke .poke-art {
+  flex: none; width: 88px; height: 88px; border-radius: 50%; background: var(--surface);
+  display: grid; place-items: center; overflow: hidden;
+}
+#v-poke .poke-art img { width: 80px; height: 80px; object-fit: contain; }
+/* deux progressions alignées en colonnes (libellé, nombre, barre souple, %), même à 320 px */
+#v-poke .poke-progs {
+  flex: 1; min-width: 0; display: grid; grid-template-columns: auto auto minmax(24px, 1fr) auto;
+  align-items: center; gap: 10px 8px;
+}
+#v-poke .poke-progs .prog { display: contents; }
+#v-poke .prog .lbl { min-width: 0; }
+#v-poke .prog .progress { min-width: 0; max-width: none; }
+#v-poke .prog .pc { min-width: 0; }
+#v-poke .poke-sk { grid-column: 2 / -1; height: 12px; border-radius: 6px; }
+@media (max-width: 380px) {
+  #v-poke .poke-head { gap: 12px; }
+  #v-poke .poke-art { width: 72px; height: 72px; }
+  #v-poke .poke-art img { width: 66px; height: 66px; }
+}
+#v-poke .poke-grid > .sk-tile { display: block; min-width: 0; }
+@media (min-width: 900px) {
+  #v-poke .poke-art { width: 112px; height: 112px; }
+  #v-poke .poke-art img { width: 104px; height: 104px; }
+  #v-poke .poke-progs { max-width: 520px; }
+}
+
+/* ---------- Réglages ---------- */
+#v-settings { padding-bottom: 8px; }
+#v-settings .set-wrap > span { white-space: normal; }
+/* copies de secours : date et taille passent à la ligne (deux boutons de 44 px à côté) */
+#v-settings .set-backup .t, #v-settings .set-backup .s > span { white-space: normal; }
+#v-settings .set-alert .btn.text { white-space: nowrap; }
+#v-settings .row .s.set-wrap { align-items: flex-start; }
+#v-settings .set-late { color: var(--warn); font-weight: 600; }
+#v-settings .row .seg { margin-right: 8px; }
+#v-settings .row .switch { margin-right: 8px; }
+#v-settings .row > .btn.text { flex: none; margin-right: 4px; }
+#v-settings .row > .ibtn { flex: none; color: var(--text-2); }
+#v-settings .row > .ibtn + .ibtn { margin-left: -8px; }
+#v-settings .row.danger, #v-settings .row.danger .lead { color: var(--down); }
+#v-settings button.row:disabled { opacity: .45; pointer-events: none; }
+#v-settings .set-inline { margin: 4px 0 0 -8px; }
+#v-settings .set-btnrow { gap: 8px; min-height: 52px; padding-left: 52px; }
+#v-settings .set-alert {
+  display: flex; align-items: center; gap: 10px; margin: 0 var(--gutter) 12px; min-height: 44px;
+  padding: 8px 4px 8px 12px; border-radius: var(--r-3); background: var(--warn-weak);
+  font-size: var(--fs-sec); line-height: var(--lh-sec);
+}
+#v-settings .set-alert > svg { width: 18px; height: 18px; color: var(--warn); }
+#v-settings .set-alert .btn { flex: none; }
+#v-settings .set-credits { display: grid; gap: 6px; padding: 0 var(--gutter); font-size: var(--fs-cap); line-height: var(--lh-cap); color: var(--text-2); }
+#v-settings .set-credits p { overflow-wrap: anywhere; }
+@media (min-width: 900px) {
+  /* ordinateur : lignes de réglages lisibles (pas de 1 100 px de large), alignées sur le titre */
+  #v-settings > * { max-width: 760px; }
+}

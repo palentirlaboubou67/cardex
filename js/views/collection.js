@@ -1,118 +1,107 @@
-// (Ébauche F1, remplacée par la vague 2.) Collection : Cartes · Pokédex · Doubles · Succès.
-// Montre le modèle à suivre : onglets principaux (liens data-replace), en-tête de synthèse, une rangée de puces
-// (tri = <select> en puce), grille rendue par lots, filtres dans l'URL (setParams), mise à jour des tuiles en place.
-import { setBar, primaryTabs } from '../core/appbar.js';
-import { html, setHTML, selectChip, delegate } from '../core/dom.js';
-import { icon } from '../core/icons.js';
-import { eur, plural, norm } from '../core/format.js';
-import { renderChunked, patchByKey } from '../core/list.js';
+// Collection (racine de l'onglet) : onglets principaux Cartes · Pokédex · Doubles · Succès (W-I…W-L).
+// Chaque section a son conteneur, gardé : passer d'une section à l'autre ne refait rien si rien n'a changé.
+// Sections dans js/views/collection/ (Cartes chargée avec la vue ; les autres à la demande, préchargées au repos).
+// Collection modifiée : la section affichée corrige son DOM en place ; les autres sont refaites à leur prochain affichage.
+import { setBar, primaryTabs, updateAction, setProgress } from '../core/appbar.js';
+import { setHTML } from '../core/dom.js';
 import { infoSheet } from '../core/sheet.js';
-import { setParams } from '../core/router.js';
-import { tileHTML, patchTile } from '../components/tile.js';
-import { sparkline } from '../components/chart.js';
-import * as col from '../state/collection.js';
-import * as prices from '../data/prices.js';
-import { FINISHES, SHORT, DOT } from '../data/finishes.js';
-import { points } from '../features/valuehistory.js';
 import { whenIdle } from '../core/idle.js';
+import * as prices from '../data/prices.js';
+import * as col from '../state/collection.js';
+import { create as createCartes } from './collection/cartes.js';
 
 const SECTIONS = [
-  { href: '#/collection/cartes', label: 'Cartes' },
-  { href: '#/collection/pokedex', label: 'Pokédex' },
-  { href: '#/collection/doubles', label: 'Doubles' },
-  { href: '#/collection/succes', label: 'Succès' },
+  { key: 'cartes', label: 'Cartes' },
+  { key: 'pokedex', label: 'Pokédex' },
+  { key: 'doubles', label: 'Doubles' },
+  { key: 'succes', label: 'Succès' },
 ];
-const SORTS = [['recentes', 'Récentes'], ['nom', 'Nom'], ['serie', 'Série']];
-let el = null, sec = 'cartes', q = new URLSearchParams(), dirty = false;
-const query = () => new URLSearchParams(location.hash.split('?')[1] || '');
+const LOAD = {
+  cartes: () => Promise.resolve({ create: createCartes }),
+  pokedex: () => import('./collection/pokedex.js'),
+  doubles: () => import('./collection/doubles.js'),
+  succes: () => import('./collection/succes.js'),
+};
+const href = k => `#/collection/${k}`;
 
-// une tuile par carte et par finition possédée (comme l'ancienne grille)
-function entries(q) {
-  const tri = q.get('tri') || 'recentes', fin = q.get('finition') || '';
-  const out = [];
-  for (const r of col.all()) for (const f of FINISHES) if (r.qty[f] && (!fin || f === fin)) out.push({ r, f, n: r.qty[f] });
-  const by = {
-    recentes: (a, b) => b.r.addedAt - a.r.addedAt,
-    nom: (a, b) => norm(a.r.name).localeCompare(norm(b.r.name)),
-    serie: (a, b) => (a.r.setName || '').localeCompare(b.r.setName || '') || a.r.localId.localeCompare(b.r.localId, 'fr', { numeric: true }),
-  }[tri];
-  return by ? out.sort(by) : out;
+let el = null, cur = null, signal = null, prefetched = false;
+const secs = {};          // clé -> section créée
+const loading = {};
+
+function section(key) {
+  if (secs[key]) return Promise.resolve(secs[key]);
+  loading[key] ??= LOAD[key]().then(m => {
+    const box = el.querySelector(`.col-sec[data-sec="${key}"]`);
+    // api donnée à la section : est-elle à l'écran, barre d'app (avec le signal du rendu en cours)
+    const api = {
+      shown: () => cur === key && !el.hidden,
+      // entonnoir de la barre : pressé quand le filtre est ouvert, inactif quand la collection est vide
+      pressFilter: (on, enabled = true) => { if (cur === key) updateAction(0, { pressed: !!on, disabled: !enabled }, { signal }); },
+      progress: on => setProgress(on, { signal }),
+    };
+    secs[key] = m.create(box, api);
+    return secs[key];
+  }).catch(e => { delete loading[key]; throw e; });
+  return loading[key];
 }
 
-// en-tête : valeur (somme des cotes connues) dès que les fichiers de cotes des séries possédées sont là
-function summaryHTML(st) {
-  const hist = points().map(p => p.v);
-  return html`<div class="hero">${st.priced ? eur(st.value) : plural(st.total, 'carte', 'cartes')}</div>${sparkline(hist)}
-      <div class="meta">${hist.length < 2 ? 'La courbe démarre demain' : ''}</div>
-      <div class="meta full">${st.priced ? `${plural(st.total, 'carte', 'cartes')} · ` : ''}${plural(st.unique, 'différente', 'différentes')} · ${plural(st.sets, 'série', 'séries')}</div>`;
+function bar(key, r) {
+  // textes ⓘ : chargés au premier appui (hors du premier écran)
+  const info = { icon: 'info', label: 'À propos de cet écran', onClick: () => import('./collection/shared.js').then(m => {
+    const [title, paras] = m.INFO[key];
+    infoSheet(title, key === 'cartes' ? [...paras, prices.creditText()] : paras);
+  }) };
+  const cfg = { title: 'Collection', signal: r.signal, menu: [info] };
+  if (key === 'cartes') {
+    cfg.actions = [{ icon: 'filter', label: 'Filtrer mes cartes', pressed: !!secs.cartes?.filterOpen || !!r.q.get('q'), disabled: !col.all().length, onClick: () => secs.cartes?.toggleFilter() }];
+  }
+  setBar(cfg);
 }
 
-// cotes arrivées après le rendu : l'en-tête et les prix des tuiles sont corrigés en place
-function patchPrices() {
-  if (sec !== 'cartes' || !el) return;
-  const box = el.querySelector('.summary');
-  if (box) setHTML(box, summaryHTML(col.stats()));
-  for (const t of el.querySelectorAll('#col-grid .tile[data-card]')) patchTile(t, { price: prices.eur(t.dataset.card, t.dataset.finish || 'normal') });
-}
-
-function cartes() {
-  dirty = false;
-  const st = col.stats();
-  const fin = q.get('finition') || '';
-  const counts = new Map();
-  for (const rec of col.all()) for (const [f, n] of Object.entries(rec.qty)) counts.set(f, (counts.get(f) || 0) + n);
-  setHTML(el.querySelector('.stub-body'), html`
-    <div class="summary">${summaryHTML(st)}</div>
-    <div class="chips" role="group" aria-label="Tri et filtres">
-      ${selectChip({ label: 'Trier', options: SORTS, value: q.get('tri') || 'recentes', name: 'tri' })}
-      <button type="button" class="chip" data-fin="" aria-pressed="${fin ? 'false' : 'true'}">Toutes <span class="n">${st.total}</span></button>
-      ${FINISHES.filter(f => counts.get(f)).map(f => html`<button type="button" class="chip" data-fin="${f}" aria-pressed="${f === fin ? 'true' : 'false'}"><i class="${DOT[f]}"></i>${SHORT[f]} <span class="n">${counts.get(f)}</span></button>`)}
-    </div>
-    <div class="grid" id="col-grid"></div>`);
-  return renderChunked(el.querySelector('#col-grid'), entries(q), e => tileHTML(e.r, { qty: e.n, finish: e.f, price: prices.eur(e.r.id, e.f) }), {
-    empty: html`<div class="empty" data-content><span class="ic">${icon('collection')}</span><b>Ta collection est vide</b><p>Scanne une carte ou ouvre une série pour l’ajouter.</p><a class="btn primary" href="#/scanner">Scanner une carte</a></div>`,
-  });
-}
-
-function placeholder(title) {
-  setHTML(el.querySelector('.stub-body'), html`<div class="empty" data-content><span class="ic">${icon('sparkle')}</span><b>${title} · écran en construction</b><p>Cette partie arrive à l’étape suivante.</p></div>`);
+function tabs(key) {
+  const slot = el.querySelector('.ptabs-slot');
+  const nav = slot.querySelector('.ptabs');
+  if (!nav) { setHTML(slot, primaryTabs(SECTIONS.map(s => ({ href: href(s.key), label: s.label })), href(key), 'Sections de la collection')); return; }
+  // déjà là : seul l'onglet courant change (le focus clavier reste sur le lien touché)
+  for (const a of nav.querySelectorAll('a')) {
+    if (a.getAttribute('href') === href(key)) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
 }
 
 export default {
-  mount(section) {
-    el = section;
-    el.innerHTML = '<div class="ptabs-slot"></div><div class="stub-body"></div>';
-    // filtres et tri : dans l'URL sans nouvelle entrée, puis la grille est refaite
-    delegate(el, 'change', 'select[name="tri"]', (e, s) => { setParams({ tri: s.value === 'recentes' ? null : s.value }); q = query(); cartes(); });
-    delegate(el, 'click', '[data-fin]', (e, b) => { setParams({ finition: b.dataset.fin || null }); q = query(); cartes(); });
-    prices.on(() => patchPrices());
+  mount(section_) {
+    el = section_;
+    el.innerHTML = `<div class="ptabs-slot"></div>${SECTIONS.map(s => `<div class="col-sec" data-sec="${s.key}" hidden></div>`).join('')}`;
+    // cotes arrivées (séries possédées, chargées au repos) : chaque section créée corrige ce qu'elle montre
+    prices.on(ids => { for (const s of Object.values(secs)) { try { s.onPrices?.(ids); } catch (e) { console.error(e); } } });
   },
+
   async show(r) {
-    sec = r.m[1];
-    q = r.q;
-    setBar({
-      title: 'Collection', signal: r.signal,
-      actions: [{ icon: 'filter', label: 'Filtrer mes cartes', onClick: () => infoSheet('Filtrer', 'Le filtre par nom ou série arrive avec la version complète de cet écran.') }],
-      menu: [{ icon: 'info', label: 'À propos de cet écran', onClick: () => infoSheet('Collection', 'La valeur estimée additionne la cote Cardmarket (tendance) de chaque version que tu possèdes.') }],
-    });
-    setHTML(el.querySelector('.ptabs-slot'), primaryTabs(SECTIONS, `#/collection/${sec}`));
-    // cotes chargées après le premier écran (elles ne doivent pas concurrencer les vignettes) : patchPrices()
-    if (sec === 'cartes') { const first = cartes(); whenIdle(() => col.ensurePrices(), { timeout: 1500 }); await first; }
-    else placeholder(SECTIONS.find(s => s.href.endsWith(sec))?.label || 'Collection');
-  },
-  hide() {},
-  // revenue depuis le cache (même adresse) : refaite seulement si la collection a changé entre-temps
-  resume() { if (dirty && sec === 'cartes') cartes(); },
-  // quantité changée : la tuile est corrigée en place ; carte ajoutée ou retirée : la grille est refaite
-  onChange(events) {
-    if (sec !== 'cartes' || !el) return;
-    if (events.some(e => e.type !== 'qty' || e.added || e.removed || e.after === 0 || e.before === 0)) {
-      col.ensurePrices();                       // carte d'une nouvelle série : ses cotes arrivent ensuite (patchPrices)
-      if (el.hidden) dirty = true; else cartes();
-      return;
+    const key = SECTIONS.some(s => s.key === r.m[1]) ? r.m[1] : 'cartes';
+    signal = r.signal;
+    cur = key;
+    bar(key, r);
+    tabs(key);
+    for (const b of el.querySelectorAll('.col-sec')) b.hidden = b.dataset.sec !== key;
+    const s = await section(key);
+    if (r.signal.aborted) return;
+    await s.show(r.q, r.signal);
+    if (!prefetched) {
+      prefetched = true;
+      whenIdle(() => { for (const k of ['pokedex', 'doubles', 'succes']) LOAD[k]().catch(() => {}); }, { timeout: 6000 });
     }
-    for (const e of events) patchByKey(el, e.id, t => { if (t.dataset.finish === e.finish) patchTile(t, { qty: e.after }); });
-    const box = el.querySelector('.summary');
-    if (box) setHTML(box, summaryHTML(col.stats()));
+  },
+
+  resume(r) {
+    signal = r.signal;
+    try { secs[cur]?.resume?.(); } catch (e) { console.error(e); }
+  },
+
+  hide() {},
+
+  onChange(events) {
+    for (const [k, s] of Object.entries(secs)) {
+      try { s.onChange(events, k === cur); } catch (e) { console.error(e); }
+    }
   },
 };

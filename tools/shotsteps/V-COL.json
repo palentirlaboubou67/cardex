@@ -1,0 +1,25 @@
+{
+  "about": "V-COL : Collection (Cartes, filtre, tri, feuille de la valeur, Pokédex, Doubles, liste d'échange, Succès), page Pokémon (Méga-Évolution comprise, filtre), Réglages (feuille Tout effacer).",
+  "steps": [
+    {"name": "col-cartes", "hash": "#/collection/cartes", "wait": 1200},
+    {"name": "col-cartes-filtre", "hash": "#/collection/cartes", "content": "#v-collection .col-filter .search",
+     "actions": [["click", ".appbar .acts [data-act='0']"], ["fill", "#v-collection input[name='cq']", "dracaufeu"], ["wait", 500]]},
+    {"name": "col-cartes-tri-finition", "hash": "#/collection/cartes?tri=valeur&finition=reverse", "wait": 1200},
+    {"name": "col-valeur", "hash": "#/collection/cartes", "actions": [["click", "#v-collection .col-sum"], ["waitfor", "dialog.sheet[open] .col-value"], ["wait", 500]]},
+    {"name": "col-valeur-fermee", "actions": [["key", "Escape"], ["wait", 400]]},
+    {"name": "col-pokedex", "hash": "#/collection/pokedex", "wait": 1200},
+    {"name": "col-pokedex-possedes", "hash": "#/collection/pokedex?filtre=possedes", "wait": 800},
+    {"name": "col-pokedex-recherche", "hash": "#/collection/pokedex?q=pika", "wait": 800},
+    {"name": "col-doubles", "hash": "#/collection/doubles", "wait": 1000},
+    {"name": "col-echange-feuille", "hash": "#/collection/doubles",
+     "actions": [["eval", "(() => { if (navigator.clipboard) navigator.clipboard.writeText = () => Promise.reject(new Error('refusé')); })()"], ["click", "#v-collection [data-act='trade']"], ["waitfor", "dialog.sheet[open] textarea"], ["wait", 400]]},
+    {"name": "col-echange-fermee", "actions": [["key", "Escape"], ["wait", 400]]},
+    {"name": "col-succes", "hash": "#/collection/succes", "wait": 1500},
+    {"name": "col-pokemon-pikachu", "hash": "#/pokemon/25", "wait": 1500},
+    {"name": "col-pokemon-dracaufeu-possedees", "hash": "#/pokemon/6?filtre=possedees", "wait": 1500},
+    {"name": "col-pokemon-mega-lucario", "hash": "#/pokemon/448", "wait": 1500},
+    {"name": "col-reglages", "hash": "#/reglages", "wait": 800},
+    {"name": "col-reglages-effacer", "hash": "#/reglages", "actions": [["click", "#v-settings [data-act='clear']"], ["waitfor", "dialog.sheet[open] [data-x='clear']"], ["wait", 400]]},
+    {"name": "col-reglages-fermee", "actions": [["key", "Escape"], ["wait", 400]]}
+  ]
+}

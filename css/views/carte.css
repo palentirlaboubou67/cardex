@@ -1,1 +1,220 @@
-/* Styles de la vue Fiche carte (vague 2, propriétaire de la vue). Vide pour l’instant : index.html le lie déjà. */
+/* Fiche carte (#/carte/:id, FINAL-design W-H, W-X) : image inclinable, quantités par finition, cote, alerte, détails.
+   Une colonne ; deux à partir de 900 px (image de 360 px collante à gauche, le reste à droite). */
+
+/* ---------- mise en page ---------- */
+#v-card .cp { padding-bottom: 8px; }
+#v-card .cp-info [data-part] > .sect:first-child { padding-top: 24px; }
+#v-card .cp-info [data-part]:empty { display: none; }
+@media (min-width: 900px) {
+  #v-card .cp {
+    display: grid; grid-template-columns: 360px minmax(0, 640px); justify-content: center; align-items: start;
+    gap: 0 40px; padding: 8px var(--gutter) 0;
+  }
+  #v-card .cp-media { position: sticky; top: calc(var(--top) + 8px); }
+  #v-card .cp-info { --gutter: 0px; }
+}
+
+/* ---------- image : inclinaison, calque de la finition, reflet ---------- */
+.cp-hero { display: flex; justify-content: center; padding: 8px var(--gutter) 20px; perspective: 900px; }
+.cp-card {
+  position: relative; display: block; flex: none; width: min(240px, 62vw); aspect-ratio: 63 / 88;
+  margin: 0; padding: 0; border: 0; border-radius: var(--card-radius); overflow: hidden; isolation: isolate;
+  background: var(--pocket); box-shadow: var(--hero-shadow); color: inherit; font: inherit;
+  transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); transition: transform var(--dur-1) ease-out;
+  touch-action: pan-y pinch-zoom; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+button.cp-card { cursor: zoom-in; }
+.cp-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+/* bord de carte dessiné dans la boîte */
+.cp-card::after {
+  content: ''; position: absolute; inset: 0; z-index: 4; border-radius: inherit; box-shadow: var(--card-edge); pointer-events: none;
+}
+.cp-cardsk { background: var(--fill); box-shadow: none; }
+.cp-img { position: absolute; inset: 0; display: block; }
+.cp-img .card-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; }
+.cp-img .cp-hi { opacity: 0; transition: opacity var(--dur-2) ease-out; }
+.cp-img .cp-hi.on { opacity: 1; }
+.cp-card .card-ph-sym { width: 40px; height: 40px; }
+.cp-card .card-ph-no { font-size: var(--fs-body); line-height: var(--lh-body); }
+.cp-card .pill-en { position: absolute; top: 8px; left: 8px; z-index: 3; }
+@media (min-width: 600px) { .cp-card { width: 280px; } }
+@media (min-width: 900px) { .cp-hero { padding: 8px 0 16px; } .cp-card { width: 360px; } }
+
+/* calques de finition de la fiche : plus présents que sur les tuiles, ils glissent avec le doigt (--px, --py) */
+.cp-card .fx { z-index: 1; }
+.cp-card .fx-reverse {
+  background: linear-gradient(115deg, transparent 25%, rgb(255 255 255 / .42) 45%, rgb(200 225 255 / .26) 55%, transparent 75%)
+    var(--px, 72%) var(--py, 72%) / 250% 250% no-repeat;
+  mix-blend-mode: overlay;
+}
+.cp-card .fx-holo {
+  background: linear-gradient(115deg, rgb(255 0 170 / .2), rgb(0 200 255 / .2) 25%, rgb(255 240 0 / .2) 50%, rgb(0 255 140 / .18) 75%, rgb(255 0 170 / .2))
+    var(--px, 35%) var(--py, 35%) / 300% 300%;
+  mix-blend-mode: color-dodge;
+}
+.cp-card .fx-cosmos {
+  background:
+    radial-gradient(circle at 30% 40%, rgb(255 255 255 / .8) 0 1px, transparent 1.6px) 0 0 / 14px 14px,
+    radial-gradient(circle at 70% 70%, rgb(255 255 255 / .6) 0 1.4px, transparent 2.2px) 0 0 / 23px 23px,
+    linear-gradient(115deg, rgb(120 0 255 / .18), rgb(0 200 255 / .2), rgb(255 0 170 / .18), rgb(120 0 255 / .18)) var(--px, 35%) var(--py, 35%) / 300% 300%;
+  mix-blend-mode: color-dodge;
+}
+.cp-card .fx-pokeball {
+  background:
+    radial-gradient(circle, transparent 0 3px, rgb(255 255 255 / .4) 3.5px 4.6px, transparent 5.2px) 0 0 / 15px 15px,
+    linear-gradient(115deg, transparent 35%, rgb(255 90 90 / .3) 47%, rgb(255 255 255 / .35) 53%, transparent 65%) var(--px, 72%) var(--py, 72%) / 250% 250% no-repeat;
+  mix-blend-mode: overlay;
+}
+.cp-card .fx-masterball {
+  background:
+    radial-gradient(circle, transparent 0 3px, rgb(230 160 255 / .45) 3.5px 4.6px, transparent 5.2px) 0 0 / 15px 15px,
+    linear-gradient(115deg, transparent 20%, rgb(150 60 255 / .28), rgb(255 80 200 / .25), rgb(120 200 255 / .22), transparent 80%) var(--px, 35%) var(--py, 35%) / 300% 300%;
+  mix-blend-mode: color-dodge;
+}
+/* reflet au point touché (opacité 0,5 au plus) */
+.cp-glare {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none; border-radius: inherit;
+  opacity: calc(var(--shine, 0) * .5); transition: opacity var(--dur-2);
+  background: radial-gradient(circle at var(--mx, 50%) var(--my, 50%), rgb(255 255 255 / .95), rgb(255 255 255 / 0) 55%);
+  mix-blend-mode: overlay;
+}
+
+/* légende de l'illustration (anglaise, ou empruntée à une réimpression). L'image (perspective) est peinte comme un
+   élément positionné : la légende l'est aussi, sinon elle passerait dessous. Lien : zone de 44 px de haut qui
+   déborde sur le bas vide de l'image et le haut du nom, sans changer la mise en page. */
+.cp-hero.has-cap { padding-bottom: 12px; }
+.cp-cap {
+  position: relative; margin: 0 var(--gutter) 4px; text-align: center;
+  font-size: var(--fs-cap); line-height: var(--lh-cap); color: var(--text-2);
+}
+.cp-cap a { display: inline-block; max-width: 100%; margin: -12px 0 -16px; padding: 12px 8px 16px; font-weight: 500; }
+.cp-cap a:focus-visible { outline-offset: -4px; }
+
+/* ---------- nom, série, numéro ---------- */
+.cp-head { padding: 4px var(--gutter) 0; }
+.cp-name { font-size: var(--fs-title); line-height: var(--lh-title); font-weight: 650; overflow-wrap: anywhere; text-wrap: balance; }
+.cp-meta { margin-top: 2px; font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--text-2); }
+.cp-meta a { font-weight: 600; }
+.cp-sk1 { display: block; width: 60%; height: 22px; border-radius: 6px; }
+.cp-sk2 { display: block; width: 40%; height: 14px; margin-top: 8px; border-radius: 6px; }
+@media (min-width: 900px) {
+  .cp-head { padding-top: 16px; }
+  .cp-name { font-size: 26px; line-height: 32px; }
+}
+
+/* ---------- Ma collection : une ligne par finition (toucher la ligne = aperçu), compteur ---------- */
+.cp-sum { flex: none; font-weight: 500; font-variant-numeric: tabular-nums; }
+.cp-fin { gap: 4px; padding: 0 8px 0 0; }
+.cp-pv {
+  flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: 10px;
+  padding: 8px 8px 8px 12px; border: 0; background: none; color: inherit; font: inherit; text-align: left;
+}
+button.cp-pv { cursor: pointer; }
+button.cp-pv:focus-visible { outline-offset: -2px; }
+button.cp-pv:active { background: var(--fill); }
+.cp-pv .body { flex: 1; min-width: 0; }
+.cp-pvl { color: var(--text-2); font-weight: 400; }
+.cp-fin:not(.sel) .cp-pvl { display: none; }
+.cp-fin .cp-ae { font-size: var(--fs-cap); line-height: var(--lh-cap); }
+.cp-pr { flex: none; font-variant-numeric: tabular-nums; }
+.cp-pr.na, .price.na { color: var(--text-2); font-weight: 500; }
+.cp-psk { display: inline-block; width: 52px; height: 14px; vertical-align: middle; border-radius: 4px; }
+.cp-own .stepper { flex: none; }
+/* écran étroit : la cote passe sous le nom de la finition (le nom reste lisible en entier) */
+@media (max-width: 359px) {
+  .cp-pvl { display: none; }                       /* la ligne choisie est déjà surlignée (et aria-pressed) */
+  .cp-pv { flex-wrap: wrap; row-gap: 0; }
+  .cp-pv .body { flex: 1 0 calc(100% - 18px); }
+  .cp-pr { margin-left: 18px; font-size: var(--fs-sec); line-height: var(--lh-sec); }
+}
+
+/* ---------- cote de la finition ---------- */
+.cp-price .cp-p1 { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; padding: 12px 12px 0; }
+.cp-price .cp-p1 .delta { font-size: var(--fs-sec); line-height: var(--lh-sec); }
+.cp-price .kv { padding: 8px 12px 12px; }
+.cp-note { padding: 4px 12px 12px; font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--text-2); }
+.cp-p1 + .cp-note { padding-top: 2px; }
+.cp-note + .kv { padding-top: 0; }
+.cp-bsk { display: block; width: 96px; height: 24px; margin: 2px 0; border-radius: 6px; }
+.cp-ksk { display: block; width: 70%; height: 30px; border-radius: 6px; }
+.cp-cm { min-height: 48px; }
+.cp-cm::before { content: ''; position: absolute; top: 0; right: 0; left: 12px; height: 1px; background: var(--line); }
+.cp-cm .t { color: var(--accent); }
+.cp-cm .chev { color: var(--accent); width: 18px; height: 18px; }
+@media (max-width: 359px) {
+  .cp-price .kv { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
+}
+
+/* ---------- alerte prix ---------- */
+.cp-wish { gap: 0; padding: 0 4px 0 0; --inset: 52px; }
+.cp-wb {
+  flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: 12px;
+  padding: 8px 4px 8px 12px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.cp-wb:active { background: var(--fill); }
+.cp-wb:focus-visible { outline-offset: -2px; }
+.cp-wish .lead { color: var(--text-2); }
+.cp-in { color: var(--up); font-weight: 600; }
+.cp-del { flex: none; }
+.cp-aform .cp-now { min-height: 18px; font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.cp-aform .cp-err { font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--down); }
+.cp-aform .btn.text { justify-self: center; }
+.cp-other-note { padding: 0 0 8px; font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--text-2); }
+
+/* ---------- détails ---------- */
+.cp-links .row { min-height: 60px; }
+.cp-spr { position: relative; flex: none; width: 64px; height: 44px; display: grid; place-items: center; color: var(--text-3); }
+.cp-spr > img { width: 48px; height: 48px; object-fit: contain; }
+.cp-spr > svg { width: 24px; height: 24px; }
+.cp-links .row:has(> .cp-spr) { --inset: 88px; }
+.cp-facts .row.dl .v { display: flex; flex-wrap: wrap; align-items: center; overflow-wrap: anywhere; }
+.cp-ty { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cp-ty + .cp-ty { margin-left: 8px; }
+.cp-sep { padding: 0 5px; color: var(--text-2); }
+.cp-combat { position: relative; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cp-combat::before, .cp-flavor::before, .cp-facts > .sk-row::before {
+  content: ''; position: absolute; top: 0; right: 0; left: 12px; height: 1px; background: var(--line);
+}
+.cp-combat b { display: flex; flex-wrap: wrap; gap: 4px 8px; white-space: normal; font-weight: 500; }
+.cp-combat .cp-ty { gap: 4px; }
+.cp-combat .cp-ty + .cp-ty { margin-left: 0; }
+.cp-combat .cp-ty[role="img"] { gap: 2px; }
+.cp-flavor { position: relative; padding: 12px; font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--text-2); }
+
+/* ---------- talents, attaques, effet ---------- */
+.cp-move { position: relative; padding: 12px; }
+.cp-move + .cp-move::before { content: ''; position: absolute; top: 0; right: 0; left: 12px; height: 1px; background: var(--line); }
+.cp-mh { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.cp-mh b { font-size: var(--fs-body); line-height: var(--lh-body); font-weight: 600; overflow-wrap: anywhere; }
+.cp-cost { display: inline-flex; flex: none; gap: 2px; }
+.cp-cost .nrg + .nrg { margin-left: 0; }
+.cp-cost-0 { display: none; }
+.cp-dmg { flex: none; font-size: var(--fs-body); line-height: var(--lh-body); font-weight: 650; }
+.cp-tag {
+  flex: none; height: 20px; padding: 0 8px; border-radius: 10px; background: var(--fill); color: var(--text-2);
+  font: 600 var(--fs-micro)/20px var(--font); font-stretch: var(--cond); white-space: nowrap;
+}
+.cp-move p { margin-top: 4px; font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--text-2); }
+.cp-move p .nrg { width: 14px; height: 14px; vertical-align: -2px; }
+.cp-move p.cp-eff { margin-top: 0; font-size: var(--fs-body); line-height: 21px; color: var(--text); }
+.cp-credit { padding-top: 16px; }
+
+/* pastille Incolore (presque blanche) : contour un peu plus net sur fond clair ; toutes lisibles sur fond sombre */
+#v-card .nrg-C { box-shadow: inset 0 0 0 1px rgb(0 0 0 / .3); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) #v-card .nrg { box-shadow: inset 0 0 0 1px rgb(255 255 255 / .28); }
+}
+:root[data-theme="dark"] #v-card .nrg { box-shadow: inset 0 0 0 1px rgb(255 255 255 / .28); }
+
+/* ---------- image agrandie (feuille) ---------- */
+.cp-zoom { display: grid; place-items: center; padding: 0 0 8px; }
+.cp-zoom .card-img {
+  display: block; width: min(100%, calc((85vh - 120px) * 63 / 88)); width: min(100%, calc((85dvh - 120px) * 63 / 88));
+  height: auto; aspect-ratio: 63 / 88; object-fit: cover; border-radius: var(--card-radius); background: var(--pocket);
+}
+/* ordinateur : la feuille de l'image agrandie peut prendre presque toute la hauteur (sinon l'image ne serait pas plus
+   grande que celle de la fiche) */
+@media (min-width: 900px) {
+  dialog.sheet:has(.cp-zoom) { max-height: 94vh; }
+  .cp-zoom .card-img { width: min(100%, calc((94vh - 100px) * 63 / 88)); }
+}

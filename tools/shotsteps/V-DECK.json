@@ -1,0 +1,24 @@
+{
+  "about": "V-DECK : onglet Decks (liste Méta actuelle / Saisons passées avec saison, tri, filtres, recherche, feuille ⓘ) et page d'un deck (cartes possédées par nom, carte hors catalogue français sans lien, cartes non reliées, deck inconnu, menu ⋯).",
+  "steps": [
+    {"name": "dk-actuelle", "hash": "#/decks/actuelle", "wait": 1200},
+    {"name": "dk-recherche-carte", "hash": "#/decks/actuelle?q=fantyrm", "wait": 800},
+    {"name": "dk-recherche-ailleurs", "hash": "#/decks/actuelle?q=dracaufeu", "wait": 600},
+    {"name": "dk-recherche-vide", "hash": "#/decks/actuelle?q=zzzz", "wait": 600},
+    {"name": "dk-jouables-vide", "hash": "#/decks/actuelle?filtre=jouables", "wait": 600},
+    {"name": "dk-presque", "hash": "#/decks/actuelle?filtre=presque&tri=complets", "wait": 600},
+    {"name": "dk-passees", "hash": "#/decks/passees", "wait": 1800},
+    {"name": "dk-passees-saison", "hash": "#/decks/passees?saison=1415&tri=prix", "wait": 1200},
+    {"name": "dk-passees-recherche", "hash": "#/decks/passees?q=dracaufeu&tri=complets", "wait": 1200},
+    {"name": "dk-loupe", "hash": "#/decks/actuelle", "actions": [["click", ".appbar [data-act=\"0\"]"], ["fill", ".dk-search input", "lanssorien"], ["wait", 500]]},
+    {"name": "dk-info", "hash": "#/decks/passees", "actions": [["click", ".appbar [data-act=\"1\"]"], ["waitfor", "dialog.sheet[open]"], ["wait", 400]]},
+    {"name": "dk-info-fermee", "actions": [["key", "Escape"], ["wait", 400]]},
+    {"name": "dk-deck", "hash": "#/deck/1months-284", "wait": 1500},
+    {"name": "dk-deck-bas", "actions": [["eval", "scrollTo(0, document.documentElement.scrollHeight)"], ["wait", 600]]},
+    {"name": "dk-deck-hors-catalogue", "hash": "#/deck/1415-1", "wait": 1500},
+    {"name": "dk-deck-non-relie", "hash": "#/deck/2223-188", "wait": 1500},
+    {"name": "dk-deck-inconnu", "hash": "#/deck/zzz", "wait": 600},
+    {"name": "dk-deck-menu", "hash": "#/deck/1months-284", "actions": [["click", ".appbar .more"], ["waitfor", "dialog.sheet[open]"], ["wait", 400]]},
+    {"name": "dk-deck-menu-ferme", "actions": [["key", "Escape"], ["wait", 400]]}
+  ]
+}

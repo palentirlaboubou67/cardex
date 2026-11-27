@@ -1,0 +1,25 @@
+{
+  "about": "V-CARD : fiche carte (#/carte/:id). Holo seule possédée, plusieurs finitions avec aperçu dans l'URL, image anglaise, même illustration qu'une réimpression, sans image, dresseur, énergie, 1re édition « prix toutes éditions » (et sa feuille d'alerte, sans prix suggéré), finitions sans cote (« — »), carte « ? » (id avec %), carte introuvable, feuilles (alerte prix, image agrandie, finition non répertoriée), page défilée (titre dans la barre).",
+  "steps": [
+    {"name": "carte-holo", "hash": "#/carte/sv03.5-006", "wait": 1500},
+    {"name": "carte-defilee", "actions": [["eval", "scrollTo(0, 900)"], ["wait", 400]]},
+    {"name": "carte-finitions", "hash": "#/carte/sv03.5-025?finition=cosmos", "wait": 1500},
+    {"name": "carte-alerte", "hash": "#/carte/sv03.5-001", "wait": 800, "actions": [["key", "Escape"], ["waitfor", "#v-card .cp-alerts"], ["click", ".appbar .acts [data-act='0']"], ["waitfor", "dialog.sheet[open] form"], ["wait", 400]]},
+    {"name": "carte-alerte-fermee", "actions": [["key", "Escape"], ["wait", 400]]},
+    {"name": "carte-image", "hash": "#/carte/sv03.5-004", "wait": 800, "actions": [["key", "Escape"], ["click", "#v-card button.cp-card"], ["waitfor", "dialog.sheet[open] .cp-zoom img"], ["wait", 600]]},
+    {"name": "carte-image-fermee", "actions": [["key", "Escape"], ["wait", 400]]},
+    {"name": "carte-autre-finition", "hash": "#/carte/sv03.5-007", "wait": 800, "actions": [["key", "Escape"], ["click", ".appbar .more"], ["waitfor", "dialog.sheet[open] .menu"], ["click", "dialog.sheet .menu .row:first-child"], ["waitfor", "dialog.sheet[open] [data-add]"], ["wait", 400]]},
+    {"name": "carte-autre-fermee", "actions": [["key", "Escape"], ["wait", 400]]},
+    {"name": "carte-anglaise", "hash": "#/carte/dp1-1", "wait": 1500},
+    {"name": "carte-reimpression", "hash": "#/carte/2013bw-10", "wait": 1500},
+    {"name": "carte-sans-image", "hash": "#/carte/2013bw-1", "wait": 1500},
+    {"name": "carte-dresseur", "hash": "#/carte/sv03.5-196", "wait": 1500},
+    {"name": "carte-energie", "hash": "#/carte/sve-001?finition=pokeball", "wait": 1500},
+    {"name": "carte-1re-edition", "hash": "#/carte/base2-1?finition=firstEdition", "wait": 1500},
+    {"name": "carte-1re-edition-alerte", "actions": [["waitfor", "#v-card .cp-alerts"], ["click", ".appbar .acts [data-act='0']"], ["waitfor", "dialog.sheet[open] form"], ["wait", 400]]},
+    {"name": "carte-1re-edition-alerte-fermee", "actions": [["key", "Escape"], ["wait", 400]]},
+    {"name": "carte-sans-cote", "hash": "#/carte/sv03-056?finition=holo", "wait": 1500},
+    {"name": "carte-zarbi", "hash": "#/carte/exu-%253F", "wait": 1500},
+    {"name": "carte-introuvable", "hash": "#/carte/abc%25", "wait": 600}
+  ]
+}

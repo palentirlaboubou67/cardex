@@ -1,1 +1,131 @@
-/* Styles de la vue Decks (vague 2, propriétaire de la vue). Vide pour l’instant : index.html le lie déjà. */
+/* Onglet Decks : liste des decks (W-N) et page d'un deck (W-O). Composants partagés : css/base.css. */
+
+/* ---------- Illustration d'un deck : deux cartes en éventail ---------- */
+.dk-art { position: relative; flex: none; display: block; width: 56px; height: 66px; }
+.dk-c {
+  position: absolute; display: block; width: 40px; aspect-ratio: 63 / 88; overflow: hidden;
+  border-radius: var(--card-radius); background: var(--pocket);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .18);
+}
+.dk-c::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: var(--card-edge); pointer-events: none; }
+.dk-c .card-img { width: 100%; height: 100%; object-fit: cover; }
+.dk-c .card-ph { gap: 2px; padding: 2px; }
+.dk-c .card-ph-no { font-size: var(--fs-micro); line-height: 12px; }
+.dk-c:first-child { left: 1px; top: 8px; transform: rotate(-6deg); }
+.dk-c:nth-child(2) { left: 15px; top: 2px; transform: rotate(5deg); }
+.dk-c:only-child { left: 8px; top: 5px; transform: none; }
+.dk-c.dk-none { display: grid; place-items: center; color: var(--text-2); }
+.dk-c.dk-none svg { width: 22px; height: 22px; }
+.dk-art.lg { width: 84px; height: 100px; }
+.dk-art.lg .dk-c { width: 62px; }
+.dk-art.lg .dk-c:first-child { left: 1px; top: 10px; }
+.dk-art.lg .dk-c:nth-child(2) { left: 21px; top: 2px; }
+.dk-art.lg .dk-c:only-child { left: 11px; top: 6px; }
+
+/* ---------- Liste des decks ---------- */
+.dk-search { padding-top: 12px; }
+.dk-season { padding-top: 20px; }
+.dk-list > .dk-season:first-child { padding-top: 6px; }   /* juste sous les puces (premier contenu ≤ 260 px) */
+.dk-season .grow { font-weight: 600; }
+.dk-era { font-weight: 400; }
+.dk-season .num { flex: none; font-weight: 500; }
+.dk-list > .group:first-child { margin-top: 4px; }
+.dk-row {
+  --inset: 80px;
+  align-items: center; min-height: 92px; padding: 10px 12px 10px 12px;
+  contain-intrinsic-block-size: auto 92px;
+}
+.dk-row .body {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(112px, auto); align-items: center; column-gap: 12px;   /* barres de même longueur d'une ligne à l'autre */
+  grid-template-areas: "t t" "s s" "bar rest" "n price";
+}
+.dk-row .t { grid-area: t; font-weight: 600; }
+.dk-row .dk-n { grid-area: n; justify-self: start; font-size: var(--fs-cap); line-height: var(--lh-cap); font-weight: 600; white-space: nowrap; }
+.dk-row .dk-meta { grid-area: s; font-size: var(--fs-cap); line-height: var(--lh-cap); }
+.dk-row .dk-bar { grid-area: bar; margin-top: 6px; }
+.dk-row .dk-rest {
+  grid-area: rest; justify-self: end; display: inline-flex; align-items: center; gap: 3px; margin-top: 6px;
+  font-size: var(--fs-sec); line-height: var(--lh-sec); font-weight: 600; white-space: nowrap;
+}
+.dk-row .dk-rest svg { width: 15px; height: 15px; stroke-width: 2.25; }
+.dk-row.ready .dk-rest { color: var(--up); }
+.dk-row .dk-price { grid-area: price; justify-self: end; font-size: var(--fs-cap); line-height: var(--lh-cap); color: var(--text-2); white-space: nowrap; }
+.dk-sk { min-height: 92px; }
+.dk-sk .sk-a { width: 44px; height: 60px; border-radius: 4px; }
+.dk-foot { padding-top: 12px; }
+/* états vides : une proposition pleine, une seconde en texte dessous */
+.dk-eacts { display: grid; justify-items: center; gap: 4px; margin-top: 12px; }
+.dk-eacts:empty { display: none; }
+.dk-eacts .btn { margin-top: 0; }
+
+/* tablette et ordinateur : une ligne de tableau (nom et méta | progression et cartes | reste et prix) */
+@media (min-width: 720px) {
+  .dk-row .body {
+    grid-template-columns: minmax(0, 1fr) minmax(120px, 220px) 150px; column-gap: 20px;
+    grid-template-areas: "t bar rest" "s n price";
+  }
+  .dk-row .dk-bar, .dk-row .dk-rest { margin-top: 0; }
+  .dk-row .dk-n { font-weight: 500; color: var(--text-2); }
+}
+
+/* ---------- Page d'un deck ---------- */
+.dk-head { display: flex; align-items: center; gap: 16px; padding: 16px var(--gutter) 4px; }
+.dk-sum { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.dk-hero { font-size: var(--fs-body); line-height: var(--lh-hero); color: var(--text-2); white-space: nowrap; }
+.dk-hero b { margin-right: 2px; font-size: var(--fs-hero); font-weight: 650; letter-spacing: -.3px; color: var(--text); }
+.dk-sum .prog { margin: 2px 0 2px; }
+.dk-sum .prog .pc { display: inline-flex; align-items: center; justify-content: flex-end; gap: 3px; white-space: nowrap; }
+.dk-sum .prog .pc svg { width: 15px; height: 15px; stroke-width: 2.25; }
+.dk-money { font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--text-2); }
+.dk-money b { color: var(--text); font-weight: 600; white-space: nowrap; }
+.dk-meta { font-size: var(--fs-cap); line-height: var(--lh-cap); color: var(--text-2); }
+.dk-sum .dk-meta { overflow-wrap: anywhere; }
+.dk-acts { padding-top: 12px; padding-bottom: 4px; }
+.dk-wish { display: contents; }
+/* bouton pleine largeur : le libellé passe à la ligne plutôt que de déborder (320 px) */
+.dk-acts .btn { flex: 1 1 100%; max-width: 100%; height: auto; min-height: 44px; padding-top: 10px; padding-bottom: 10px; white-space: normal; text-align: center; }
+@media (min-width: 600px) {
+  .dk-acts .btn { flex: 0 1 auto; padding-left: 20px; padding-right: 20px; }
+  .dk-sum .prog { max-width: 440px; }
+}
+.dk-ll { justify-self: start; margin: 2px 0 -6px -8px; font-size: var(--fs-sec); }
+.dk-ll svg { width: 15px; height: 15px; }
+.dk-sk-art { background: var(--fill); border-radius: var(--r-2); }
+.dk-head .sk-t { display: block; width: 70%; height: 22px; border-radius: 6px; background: var(--fill); }
+.dk-head .sk-s { display: block; width: 50%; height: 10px; border-radius: 5px; background: var(--fill); }
+.dk-main > .sect .sk-s { display: block; width: 90px; height: 10px; border-radius: 5px; background: var(--fill); }
+
+.dk-grp .sect { padding-top: 20px; }
+.dk-gown { flex: none; display: inline-flex; align-items: center; gap: 3px; font-weight: 500; }
+.dk-gown svg { width: 14px; height: 14px; color: var(--up); stroke-width: 2.25; }
+
+/* ligne de carte : vignette · 4× · nom et série · état et prix */
+.dkc { gap: 10px; padding-right: 12px; --inset: 62px; contain-intrinsic-block-size: auto 72px; }
+.dkc .thumb { width: 40px; }
+.dkc .dkc-n { flex: none; min-width: 24px; font-size: var(--fs-sec); line-height: var(--lh-sec); font-weight: 600; color: var(--text-2); }
+.dkc .end { padding-right: 0; gap: 2px; }
+.dkc-st {
+  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+  font-size: var(--fs-sec); line-height: var(--lh-sec); font-weight: 600; color: var(--text-2); font-variant-numeric: tabular-nums;
+}
+.dkc-st .dk-st-i { width: 16px; height: 16px; stroke-width: 2; }
+.dkc-st.ok { color: var(--up); }
+.dkc-st.ok .dk-st-i { stroke-width: 2.5; }
+.dkc-st.part { color: var(--accent); }
+.dkc .dkc-p { font-size: var(--fs-sec); line-height: var(--lh-sec); font-weight: 500; }
+div.dkc .t { color: var(--text); }
+
+/* légende (feuille ⓘ) */
+.dk-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; }
+.dk-legend + p { margin-top: 10px; }
+
+/* ordinateur : résumé à gauche (collé en haut), cartes à droite */
+@media (min-width: 900px) {
+  .dk-page { display: grid; grid-template-columns: 352px minmax(0, 1fr); column-gap: 24px; align-items: start; padding-top: 8px; }
+  .dk-side { position: sticky; top: calc(var(--top) + 8px); }
+  .dk-acts .btn { flex: 1 1 100%; }
+  .dk-head { padding-top: 16px; }
+  .dk-main .group { margin: 0; }
+  .dk-main .sect { padding-left: 0; padding-right: 0; }
+  .dk-main .dk-foot { padding-left: 0; }
+}

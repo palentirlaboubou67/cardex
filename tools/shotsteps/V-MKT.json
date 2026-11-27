@@ -1,0 +1,293 @@
+{
+ "about": "V-MKT : Marché (Cotes, Scellé pistes et catalogue, Mon scellé, Envies) et fiche produit. La première étape ajoute du scellé possédé et suivi et trois envies ; les deux dernières vident Mon scellé et les envies.",
+ "steps": [
+  {
+   "name": "mkt-cotes",
+   "hash": "#/marche/cotes",
+   "wait": 1200,
+   "actions": [
+    [
+     "eval",
+     "async () => { const retry = async f => { for (let i = 0; ; i++) { try { return await f(); } catch (e) { if (i >= 4) throw e; await new Promise(r => setTimeout(r, 400)); } } }; const c = await import('./js/state/collection.js'); c.sealedSet(903956, { qty: 2, cost: 150, at: '2026-11-08' }); c.sealedSet(377493, { qty: 1, cost: 160, at: '2024-03-02' }); c.sealedSet(271940, { qty: 1, cost: null, at: '2026-01-02' }); c.sealedSet(858381, { qty: 3, cost: 4.5, at: '2026-11-01' }); for (const id of [903954, 805594, 574594, 858381]) if (!c.watching(id)) c.toggleWatch(id); const W = window.WishDB; const mk = (id, name, lid, img, v, min, max) => W.make({ id, name, setName: '151', localId: lid, setId: 'sv03.5', image: img }, v, { min, max }); await retry(() => W.put(mk('sv03.5-025', 'Pikachu', '025', 'https://assets.tcgdex.net/fr/sv/sv03.5/025', 'normal', 0, 5))); await retry(() => W.put(mk('sv03.5-006', 'Dracaufeu-ex', '006', 'https://assets.tcgdex.net/fr/sv/sv03.5/006', 'normal', 1, 2))); await retry(() => W.put(mk('sv03.5-001', 'Bulbizarre', '001', 'https://assets.tcgdex.net/fr/sv/sv03.5/001', 'reverse', 0, 2))); return true; }"
+    ]
+   ]
+  },
+  {
+   "name": "mkt-cotes-baisse",
+   "hash": "#/marche/cotes",
+   "actions": [
+    [
+     "click",
+     "#v-market [data-f=\"baisse\"]"
+    ]
+   ]
+  },
+  {
+   "name": "mkt-cotes-cheres",
+   "hash": "#/marche/cotes?filtre=cheres"
+  },
+  {
+   "name": "mkt-cotes-info",
+   "hash": "#/marche/cotes",
+   "actions": [
+    [
+     "click",
+     ".appbar .acts [data-act=\"0\"]"
+    ],
+    [
+     "waitfor",
+     "dialog.sheet[open]"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-cotes-info-fermee",
+   "actions": [
+    [
+     "key",
+     "Escape"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-pistes",
+   "hash": "#/marche/scelle",
+   "wait": 1200
+  },
+  {
+   "name": "mkt-pistes-avertissement",
+   "hash": "#/marche/scelle",
+   "actions": [
+    [
+     "click",
+     "#v-market .mk-warn"
+    ],
+    [
+     "waitfor",
+     "dialog.sheet[open]"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-pistes-avertissement-fermee",
+   "actions": [
+    [
+     "key",
+     "Escape"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-catalogue",
+   "hash": "#/marche/scelle?vue=catalogue",
+   "wait": 800
+  },
+  {
+   "name": "mkt-catalogue-recherche",
+   "hash": "#/marche/scelle?vue=catalogue",
+   "actions": [
+    [
+     "fill",
+     "#v-market .mk-search input",
+     "dracaufeu"
+    ],
+    [
+     "wait",
+     600
+    ]
+   ]
+  },
+  {
+   "name": "mkt-catalogue-etb-prix",
+   "hash": "#/marche/scelle?vue=catalogue&type=etb&tri=desc"
+  },
+  {
+   "name": "mkt-catalogue-japonais",
+   "hash": "#/marche/scelle?vue=catalogue&langue=ja"
+  },
+  {
+   "name": "mkt-catalogue-suivis",
+   "hash": "#/marche/scelle?vue=catalogue&type=suivis"
+  },
+  {
+   "name": "mkt-catalogue-vide",
+   "hash": "#/marche/scelle?vue=catalogue&q=zzzzzz"
+  },
+  {
+   "name": "mkt-catalogue-plus",
+   "hash": "#/marche/scelle?vue=catalogue&tri=c30",
+   "actions": [
+    [
+     "eval",
+     "document.querySelector('#v-market .mk-cat [data-more]').click()"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-mon-scelle",
+   "hash": "#/marche/mon-scelle",
+   "wait": 800
+  },
+  {
+   "name": "mkt-envies",
+   "hash": "#/marche/envies",
+   "wait": 1000
+  },
+  {
+   "name": "mkt-envies-notifications",
+   "hash": "#/marche/envies",
+   "actions": [
+    [
+     "click",
+     "#v-market [data-ninfo]"
+    ],
+    [
+     "waitfor",
+     "dialog.sheet[open]"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-envies-notifications-fermee",
+   "actions": [
+    [
+     "key",
+     "Escape"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-produit",
+   "hash": "#/produit/903956",
+   "wait": 1500
+  },
+  {
+   "name": "mkt-produit-30j",
+   "hash": "#/produit/377493?periode=30j",
+   "wait": 1500
+  },
+  {
+   "name": "mkt-produit-mon-scelle",
+   "hash": "#/produit/903956",
+   "wait": 800,
+   "actions": [
+    [
+     "click",
+     "#v-product [data-own]"
+    ],
+    [
+     "waitfor",
+     "dialog.sheet[open]"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-produit-mon-scelle-fermee",
+   "actions": [
+    [
+     "key",
+     "Escape"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  },
+  {
+   "name": "mkt-produit-suivi",
+   "hash": "#/produit/903944",
+   "wait": 800,
+   "actions": [
+    [
+     "click",
+     ".appbar .acts [data-act=\"0\"]"
+    ],
+    [
+     "wait",
+     300
+    ]
+   ]
+  },
+  {
+   "name": "mkt-produit-sans-vente",
+   "hash": "#/produit/858381",
+   "wait": 1200
+  },
+  {
+   "name": "mkt-produit-sans-photo",
+   "hash": "#/produit/271940",
+   "wait": 1200
+  },
+  {
+   "name": "mkt-produit-fige",
+   "hash": "#/produit/606923",
+   "wait": 1200
+  },
+  {
+   "name": "mkt-produit-introuvable",
+   "hash": "#/produit/1",
+   "wait": 800
+  },
+  {
+   "name": "mkt-mon-scelle-vide",
+   "hash": "#/marche/mon-scelle",
+   "actions": [
+    [
+     "eval",
+     "async () => { const c = await import('./js/state/collection.js'); for (const o of c.sealedAll()) c.sealedSet(o.id, null); return true; }"
+    ],
+    [
+     "wait",
+     300
+    ]
+   ]
+  },
+  {
+   "name": "mkt-envies-vide",
+   "hash": "#/marche/envies",
+   "actions": [
+    [
+     "eval",
+     "async () => { const retry = async f => { for (let i = 0; ; i++) { try { return await f(); } catch (e) { if (i >= 4) throw e; await new Promise(r => setTimeout(r, 400)); } } }; await retry(async () => { for (const w of await window.WishDB.all()) await window.WishDB.del(w.key); }); return true; }"
+    ],
+    [
+     "wait",
+     400
+    ]
+   ]
+  }
+ ]
+}
