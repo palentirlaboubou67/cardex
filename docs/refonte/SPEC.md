@@ -104,7 +104,7 @@ tools/kitchen.html             F1   component gallery (every component, light/da
 data/decks.json, tools/build_decks.py   existing (W2 decks owner may adapt reading code, not the builder unless needed)
 data/pokedex.json              existing (read by js/data/dex.js)
 data/logos.json                legacy, replaced by sets.json logo fields (CA may delete it at the end)
-legacy/                        the old app, read-only reference; deleted at the end of the overhaul
+legacy/                        the old app, read-only reference; deleted on 28/11 after the phone check (still in git history up to commit d0517c7)
 .github/workflows/*            orchestrator (site.yml: data + Pages deploy; decks.yml)
 docs/refonte/WAVE1.md          integrator (state after wave 1, how-to for view owners)
 ```

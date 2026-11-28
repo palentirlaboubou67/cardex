@@ -246,7 +246,8 @@ QA-SCAN's `final` / `final2`).
   logos needed (CA).
 - **Sealed photos**: 1 586 products have no photo; 682 get a generated tile, the rest a pictogram; Japanese photos need
   TCGCSV category 85 in the weekly build.
-- **« EN » / « ≈ » pill on grid tiles** sits over the printed card name (fixed on the card page only).
+- **« EN » / « ≈ » pill on grid tiles**: fixed after this report (commit 78e3627, pill moved to the bottom right of the
+  tile, clear of the printed name and the ×N badge).
 - **Collection value with a cold cache on a slow network** takes about 11 s to be complete (`prices.ensure()` loads 6
   price files at a time); Doubles no longer waits for it.
 - **XY and Sun & Moon master sets changed**: commons, uncommons and rares now have a reverse (rarity rule, the sources
@@ -258,6 +259,9 @@ QA-SCAN's `final` / `final2`).
   already met it before tracking started can get its toast on that first change (rare).
 - **Not tested**: real devices (iPhone Safari installed and in the browser, Android Chrome Back button, notifications,
   camera with torch and zoom), screen readers (VoiceOver, TalkBack), keyboard-only desktop pass.
+- **After publishing (28/11)**: the owner used the published app on their own phone and reported it works well,
+  camera scan included. Back button, install, offline and notifications were not reported one by one. `legacy/` was
+  deleted after this check.
 
 ## 8. Before publishing
 
