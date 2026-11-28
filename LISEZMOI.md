@@ -1,41 +1,51 @@
 # Cardex
 
-Appli web (installable sur téléphone) pour scanner ses cartes Pokémon et suivre sa collection.
+Appli web installable sur téléphone pour scanner ses cartes Pokémon et suivre sa collection, avec les cotes du marché
+français (Cardmarket, en euros).
 
-- **Scanner** : la caméra lit le numéro en bas de la carte (ex. `025/165`) et le nom, puis retrouve la carte.
-- **Recherche** : par nom, si le scan ne trouve pas.
-- **Collection** : quantités par variante (normale, reverse, holo, 1re édition), valeur estimée (cote Cardmarket).
-- **Séries** : rangées par bloc (Méga-Évolution, Écarlate et Violet, Épée et Bouclier…), avec la progression de chacune.
-  Dans une série : vue Grille, Liste à cocher (une case par version, pour saisir vite) ou Classeur (9 cartes par page).
-- **Doubles** : les cartes en plusieurs exemplaires et une liste d'échange (doubles + envies) à copier.
-- **Succès** : des objectifs de collection (Trio de départ, Pokédex de Kanto, Master Ball, série complète…).
-- **Valeur** : la courbe de la valeur estimée de la collection, notée chaque jour.
-- **Marché** :
-  - *Cotes* : l'évolution de la cote de chaque carte de la collection (moyenne Cardmarket sur 7 jours comparée à 30 jours), hausses, baisses, cartes les plus chères.
-  - *Scellé* : tous les produits scellés du JCC (displays, coffrets dresseur d'élite, bundles, coffrets, blisters, pokébox, decks…)
-    avec leur cote et son historique depuis février 2024, et des pistes d'investissement expliquées (ce ne sont pas des conseils).
-    Source : TCGplayer via TCGCSV (marché américain), converti en euros. `data/sealed.json` et l'historique `data/sealed/`
-    sont reconstruits par `python tools/build_sealed.py` le lundi et le jeudi (GitHub Action) ; `--backfill` reconstitue l'historique.
-  - *Mon scellé* : les produits possédés avec leur prix d'achat, leur valeur actuelle et la plus-value.
-  - *Envies* : alertes prix. On fixe une fourchette ; Cardex prévient quand l'offre la moins chère sur Cardmarket y entre
-  (vérification en arrière-plan toutes les ~12 h sur Chrome Android avec l'appli installée, sinon à chaque ouverture).
-- **Decks** : les meilleurs decks de la méta actuelle et de chaque saison depuis l'ère XY (2014-2015), d'après Limitless TCG, avec le prix
-  (cote Cardmarket), les cartes déjà dans la collection et celles à acheter. `data/decks.json` est reconstruit
-  par `python tools/build_decks.py`, et automatiquement chaque lundi par une GitHub Action.
-- **Sauvegarde** : automatique sur l'appareil, plus export/import d'un fichier `.json` (bouton en haut à droite).
+En ligne : **https://palentirlaboubou67.github.io/cardex/**. L'ouvrir sur le téléphone puis « Ajouter à l'écran d'accueil ».
 
-Les données des cartes viennent de l'API gratuite [TCGdex](https://tcgdex.dev), en français.
-La lecture des cartes (OCR) utilise Tesseract.js ; le premier scan télécharge quelques Mo.
+## Les cinq onglets
+
+- **Collection** : cartes possédées (filtres, tris, finitions), Pokédex et page de chaque Pokémon, doubles et liste
+  d'échange, 18 succès, courbe de la valeur. Réglages (thème, sauvegarde) dans le menu ⋯.
+- **Séries** : toutes les séries par bloc, avec leur logo et la progression ; recherche de cartes et de séries.
+  Dans une série : grille, liste à cocher ou classeur (9 par page), master set (Poké Ball, Master Ball…), valeur de la
+  série, tri par prix. Chaque carte a sa fiche : cotes par finition, quantités, alerte prix.
+- **Scanner** : la caméra reconnaît la carte à son image (empreintes calculées sur l'appareil, sans serveur) ; la
+  lecture du numéro (Tesseract) sert seulement en secours. L'ajout se fait toujours d'un geste, avec « Annuler ».
+  On peut aussi importer une photo.
+- **Marché** : cotes de la collection (hausses, baisses), produits scellés Cardmarket avec historique et pistes
+  (ce ne sont pas des conseils), « Mon scellé » (investi, valeur, plus-value), envies avec alertes prix.
+- **Decks** : decks de la méta actuelle et des saisons passées depuis l'ère XY (Limitless TCG), prix et cartes manquantes.
+
+Une flèche ← en haut à gauche ramène à l'écran précédent sur toutes les sous-pages ; le bouton retour d'Android aussi.
+La collection reste sur l'appareil (avec export/import d'un fichier `.json`). L'appli marche hors ligne.
+
+## Données
+
+- Cartes et séries : [TCGdex](https://tcgdex.dev) en français. Quand l'illustration française manque, l'anglaise est
+  utilisée (pastille « EN »), puis la même illustration d'une réimpression (« ≈ »). Logos des séries hébergés ici.
+- Cotes : fichiers publics de Cardmarket (price guide et catalogue), lus deux fois par jour au plus. Cardex n'est pas
+  affilié à Cardmarket.
+- Tout est construit par `.github/workflows/site.yml` (« Données et mise en ligne ») : cotes chaque jour à 04:15 et
+  10:15 UTC, catalogue et base du scanner le lundi, puis publication sur GitHub Pages (source « GitHub Actions »).
+  Les fichiers de cotes ne sont pas versionnés : ils n'existent que dans le site publié.
+- Decks : `tools/build_decks.py`, chaque lundi (`.github/workflows/decks.yml`).
 
 ## Lancer sur le PC
 
-Double-clic sur `lancer.bat` (il faut Python), puis ouvrir http://localhost:8000.
+Double-clic sur `lancer.bat` (il faut Python), puis ouvrir http://localhost:8000. Les cotes n'apparaissent en local
+qu'après `python -P tools/build_market.py` (qui télécharge les fichiers Cardmarket du jour).
 
-## Sur le téléphone
+## Pour les développeurs
 
-En ligne sur **https://palentirlaboubou67.github.io/cardex/** (GitHub Pages, mis à jour à chaque `git push`).
-L'ouvrir sur le téléphone puis « Ajouter à l'écran d'accueil ».
+Appli statique sans étape de build (modules JavaScript). Le contrat de l'architecture est dans `docs/refonte/SPEC.md` ;
+l'état et les tests sont dans `docs/refonte/WAVE1.md`, `WAVE2.md` et `QA.md`. Tests : `tools/tests/*.py`,
+`tools/shots.py`, `tools/scan_bench.py`, `tools/market/test_market.py` (Python 3.12 avec Playwright, lancer avec
+`python -P`).
 
 ## Conseils de scan
 
-Carte à plat, bien éclairée, qui remplit le cadre ; le numéro du bas doit être net.
+Carte bien éclairée, sans reflet, qui remplit le cadre. Dans un étui rigide ou un boîtier gradé, le scan marche moins
+bien : sors la carte, ou cherche-la par son nom.
