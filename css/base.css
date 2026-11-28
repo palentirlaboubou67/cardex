@@ -386,13 +386,14 @@ a.row:active, button.row:active, label.row:active { background: var(--fill); }
   font: 600 var(--fs-micro)/18px var(--font); font-stretch: var(--cond);
 }
 .fin > i { width: 7px; height: 7px; }
+.tile-img:has(.pill-en) > .fin { max-width: calc(100% - 38px); }   /* laisse la place à la pastille EN */
 .pill-en {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   height: 18px; min-width: 18px; padding: 0 5px; border-radius: 9px;
   background: var(--pill-bg); color: #fff;
   font: 600 var(--fs-micro)/18px var(--font); font-stretch: var(--cond); font-style: normal;
 }
-.tile-img .pill-en { position: absolute; top: 4px; left: 4px; z-index: 3; }
+.tile-img .pill-en { position: absolute; right: 4px; bottom: 4px; z-index: 3; }   /* en bas à droite : ne cache ni le nom imprimé ni le badge ×N */
 /* légende sous la tuile : nom une ligne, méta une ligne (prix à droite) */
 .cap { display: block; margin-top: 6px; font-stretch: var(--cond); }
 .cap b {

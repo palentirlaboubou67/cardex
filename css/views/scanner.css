@@ -176,7 +176,7 @@
 .scn-thumb:active .tile-img { transform: scale(.95); }
 .scn-thumb[aria-current="true"] .tile-img { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
 .scn-thumb[aria-current="true"] { margin: 0 4px; }
-.scn-thumbs .tile-img .pill-en { top: 2px; left: 2px; }
+.scn-thumbs .tile-img .pill-en { right: 2px; bottom: 2px; }
 
 /* « Laquelle est-ce ? » */
 .scn-ttl { font-size: var(--fs-bar); line-height: var(--lh-bar); font-weight: 600; }
