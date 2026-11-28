@@ -21,8 +21,9 @@ const alertOn = () => {
 
 const ORDER = Object.keys(LABELS);
 const DOT_LABEL = 'une envie est dans ta fourchette';
-// l'onglet « Scellé » rouvre la vue et les filtres laissés (catalogue, recherche, type, tri), comme l'ancienne appli
-const hrefOf = k => (k === 'scelle' ? scelle.href() : `#/marche/${k}`);
+// les onglets « Cotes » et « Scellé » rouvrent la vue et les filtres laissés (catalogue, recherche, type, tri),
+// comme l'ancienne appli
+const hrefOf = k => SECS[k].href?.() || `#/marche/${k}`;
 
 // onglets dessinés une fois, puis corrigés sur place : le lien qui a le focus (clavier) n'est jamais remplacé
 function tabs() {

@@ -3,7 +3,6 @@
 import { html, setHTML, delegate } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { eur, num, plural, norm, cardNo } from '../../core/format.js';
-import { renderChunked } from '../../core/list.js';
 import { openSheet, infoSheet } from '../../core/sheet.js';
 import { toast } from '../../core/toast.js';
 import { tileHTML, patchTile } from '../../components/tile.js';
@@ -12,7 +11,7 @@ import * as prefs from '../../state/prefs.js';
 import * as prices from '../../data/prices.js';
 import { FINISHES, LABEL, order } from '../../data/finishes.js';
 import { metaSync, setIdOf } from '../../data/catalog.js';
-import { tileSel, insertAt, tilePrice, CHUNK } from './grid.js';
+import { tileSel, insertAt, tilePrice, CHUNK, renderGrid as paint } from './grid.js';
 
 const keySel = k => { const i = k.lastIndexOf('|'); return tileSel(k.slice(0, i), k.slice(i + 1)); };
 const finText = f => (f && f !== 'normal' ? ` (${LABEL[f] || f})` : '');
@@ -95,7 +94,7 @@ export function create(box, api) {
     keys = list.map(e => e.k);
     els.grid.classList.toggle('compact', !!prefs.get('compact', false));
     busy = true;
-    const p = renderChunked(els.grid, list, tpl, { ...CHUNK, empty: EMPTY() });
+    const p = paint(els.grid, list, tpl, { ...CHUNK, empty: EMPTY() });
     p.then(ok => { if (ok) busy = false; });
     syncButton();
     return p;

@@ -73,8 +73,8 @@ function render() {
   setHTML(body, html`
     <h2 class="sect">Sauvegarde</h2>
     <div class="group">
-      <button type="button" class="row" data-act="export"><span class="lead">${icon('download')}</span><span class="body"><span class="t">Exporter ma collection</span><span class="s"><span>Fichier .json · ${c.what}</span></span></span></button>
-      <button type="button" class="row" data-act="import"><span class="lead">${icon('upload')}</span><span class="body"><span class="t">Importer une sauvegarde</span><span class="s"><span>Ajoutée à ta collection : rien n’est effacé</span></span></span></button>
+      <button type="button" class="row" data-act="export"><span class="lead">${icon('download')}</span><span class="body"><span class="t">Exporter ma collection</span><span class="s set-wrap"><span>Fichier .json · ${c.what}</span></span></span></button>
+      <button type="button" class="row" data-act="import"><span class="lead">${icon('upload')}</span><span class="body"><span class="t">Importer une sauvegarde</span><span class="s set-wrap"><span>Ajoutée à ta collection : rien n’est effacé</span></span></span></button>
       <div class="row set-info"><span class="lead">${icon('clock')}</span><span class="body"><span class="t">Enregistrée sur cet appareil</span><span class="s set-wrap"><span>${c.saved ? `Dernier changement le ${when(c.saved)}` : 'Aucun changement pour l’instant'}</span></span><span class="s set-wrap"><span class="${c.late ? 'set-late' : ''}">${c.last ? `Dernier export ${relDay(c.last)}` : c.recs.length ? 'Jamais exportée' : 'Rien à exporter pour l’instant'}</span></span></span></div>
       <label class="row"><span class="lead">${icon('bell')}</span><span class="body"><span class="t">Rappel de sauvegarde</span><span class="s set-wrap"><span>Chaque mois, sur l’écran Collection</span></span></span><input type="checkbox" role="switch" class="switch" data-pref="backupReminder"${backup.enabled() ? ' checked' : ''}></label>
     </div>

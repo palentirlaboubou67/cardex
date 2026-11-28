@@ -216,7 +216,7 @@ function countIn(pers) {
 }
 
 // États vides, rédigés pour la saison choisie. Propositions, dans l'ordre : l'autre filtre de la même liste, toutes
-// les saisons (une saison choisie) ou l'autre section ; au plus deux boutons, sinon « Voir tous les decks » / « Effacer ».
+// les saisons (une saison choisie), l'autre section ; au plus deux boutons, sinon « Voir tous les decks » / « Effacer ».
 function emptyHTML(counts) {
   const season = sec === 'passees' && !!P.saison;
   const [one, many] = P.filtre === 'jouables' ? ['deck jouable', 'decks jouables'] : P.filtre === 'presque' ? ['deck presque complet', 'decks presque complets'] : ['deck', 'decks'];
@@ -224,7 +224,7 @@ function emptyHTML(counts) {
   const wider = () => {
     if (season) {
       const n = countIn(decks.past().filter(p => p.id !== P.saison));
-      if (n) { acts.push(b => html`<button type="button" class="${b}" data-saison="">Voir ${plural(n, one, many)} dans toutes les saisons</button>`); return; }
+      if (n) acts.push(b => html`<button type="button" class="${b}" data-saison="">Voir ${plural(n, one, many)} dans toutes les saisons</button>`);
     }
     const other = sec === 'actuelle' ? 'passees' : 'actuelle';
     const n = countIn(other === 'passees' ? decks.past() : [decks.current()].filter(Boolean));

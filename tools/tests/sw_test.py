@@ -305,6 +305,9 @@ async def main():
             # Séries hors ligne, liste entière parcourue : aucun logo ni symbole manquant
             await pg.goto(srv.url + '#/series')
             await pg.wait_for_timeout(600)
+            # vague 2 : les blocs sont repliables (seul le premier est ouvert sans collection) : on les ouvre tous
+            await pg.evaluate('''async () => { const P = await import('./js/state/prefs.js'); const C = await import('./js/data/catalog.js');
+              P.set('openBlocs', (await C.sets()).blocs.map(b => b.id)); }''')
             failed = []
 
             def on_failed(r):

@@ -651,3 +651,69 @@ Details and examples for view owners: `docs/refonte/WAVE1.md`.
 - §12 scanner « card absent ≤ 2 % »: 4.7 % overall (SC, standard preset, 300 cases), 3.5 % after the illustrator
   check of the twins (INT, 200 cases); 0.6–1.2 % on unique-art cards, 18–20 % when a same-art reprint of the masked
   card is in the database (in real use both are). Target kept, not met.
+
+## Changelog (wave 2)
+
+Changes made by the wave 2 view owners and while integrating them (28/11/2026). The sections above stay the
+contract; this list says what moved. State, tests and open items: `docs/refonte/WAVE2.md`.
+
+**§2 Layout and ownership**
+- Shared view helpers: `js/views/setrow.js` (V-SER: set row and progress, used by Séries and Série) and
+  `js/views/ptile.js` (V-MKT: product tile and row, used by Marché and the product page). Sub-modules live in
+  `js/views/{collection,carte,scanner,marche,decks}/`. `js/features/*` belong to V-COL, `js/data/sealed.js` to V-MKT,
+  `js/data/decks.js` to V-DECK.
+- `tools/shotsteps/V-COL.json`, `V-SER.json`, `V-CARD.json`, `V-SCAN.json`, `V-MKT.json`, `V-DECK.json` (133 steps)
+  next to F1's `shell.json` (26): `tools/shots.py` plays all 159.
+- Tests adapted at integration (no app code changed): `tools/tests/router_test.py` 91 removes the Scanner's
+  `onChange` for the duration of the check (every view has one now); `tools/tests/sw_test.py` « données ?h= » opens
+  every bloc (prefs `openBlocs`) before browsing Séries offline (blocs are collapsible, only the first one is open in
+  an empty collection).
+
+**§3 Navigation** (query parameters added or made precise; all go through `setParams`, kept on reload)
+- `#/serie/:setId`: `tri=prix|prix-asc|nom` (sort by price, SPEC §11 « new »; the binder has no filter or sort),
+  `page` = binder page (9 pockets).
+- `#/collection/pokedex`: `filtre=possedes|manquants`; `#/pokemon/:n`: `filtre=possedees|manquantes`.
+- `#/marche/cotes`: `filtre=hausse|baisse|cheres`. `#/marche/scelle`: `langue=int|ja|tout` (default from prefs
+  `sealedLang`), `type` = a product kind or `suivis`, `tri` = `new`, `c7…c365` (up), `b7…b365` (down), `mult`, `asc`,
+  `desc`. The Scellé and Cotes tabs reopen the last view and filters.
+- `#/decks/*`: `filtre=jouables|presque`, `tri=joues|complets|reste|prix`, `saison=<period id>` (Saisons passées only;
+  the last season is kept when passing through Méta actuelle); `q`, `tri` and `filtre` follow from one section to
+  the other.
+- Unknown ids show an empty state with a way out: « Série introuvable », « Carte introuvable », « Produit
+  introuvable · Voir le catalogue », « Ce deck n'est plus dans la liste · Voir les decks ».
+
+**§3.1 View contract**
+- All eleven views implement `onChange` (the Scanner too: it patches an open result) and `resume()`, which redoes
+  only what changed while the view was hidden (prices arrived, collection changed, failed load retried).
+- Collection grids (Cartes, Pokédex, Doubles, Pokémon page) render in batches paced by `requestAnimationFrame` then a
+  task (`js/views/collection/grid.js`); the other long lists still use `core/list.js` `renderChunked` (open item in
+  WAVE2.md §7).
+
+**§5 Module APIs** (additions by the view owners)
+- `js/features/achievements.js`: `list()` → 18 achievements in 5 groups; storage `cardex.ach.v2` (v1 migrated);
+  date 0 = reached before tracking (no toast on migration or first launch); « Tout effacer » then « Annuler » within
+  2 min restores the earlier dates. `js/features/valuehistory.js`: `cardex.history.v1`, one point per day `{ d, v, n }`.
+- `js/data/sealed.js` (V-MKT): `load()`, `get(id)`, `KIND`, `CHIP`, `SORTS`, `PERIODS`, `change()`, `stillSince()`,
+  `matcher()`, `warmSearch()`, catalogue and ideas helpers. `js/data/decks.js` (V-DECK): `load()`, `current()`,
+  `past()`, `status(deck)` (memoised on collection rev + price version), `priceOf()`, `cheapest()`, `toBuy()`,
+  `linked()` (`OUTSIDE` = sets known to be absent from the French catalogue: `bw11`), `best()`.
+- Prefs keys added: `scanCam` (camera left off by the user stays off), `setListTip`, `backupReminder` (Réglages
+  switch); `sealedLang` also takes `'ja'`. Session storage: `cardex.scanSession.v1` (scan session list).
+- Wishes created by the card page and by « Ajouter les manquantes aux envies » get a max of 90 % of the cote, and the
+  toast says when they are already in range. A `firstEdition` / `stamp` price with `allEditions` never suggests a max
+  and is never written into a wish (card page) and is kept out of En hausse / En baisse (Cotes).
+
+**§11 Feature parity**: where each feature lives is in `docs/refonte/WAVE2.md` §2. Decks count only the 9 basic
+energies as owned basic energy (special energies such as Jet or Mist are cards to collect).
+
+**§12 Acceptance** (measured at integration, details in WAVE2.md §3 and §5)
+- Exception pending a decision: Collection › Cartes with the backup reminder shows its first tile at 293 px (253 px
+  without it); the summary value is at 149 px. The reminder is one line at the top (FINAL-design W-V), temporary.
+- Router scenarios 98/98, store 16/16, data 21/21, `wave1_test` 13/13, `sw_test` 11/12 (development worker only);
+  `tools/shots.py`, 159 steps × 320/360/390/430/768/1280 × light/dark: 1 908 captures, 0 problems; no request to
+  pokemontcg.io on any route.
+- « ≤ 180 KB before the first screen is usable » (CPU ×4, gzip, before the first content): Collection 172, Séries 181,
+  Série 191, card page 202, Scanner 192 (its card database follows); screens that need a large data file are above
+  (Scellé 342, Decks 299, Pokémon page 461). Open for QA: count only the shell, or trim it (font 56, view CSS 20).
+- « No long task > 50 ms at startup »: none in 3 cold starts of 11 routes at CPU ×4 at integration; owners saw a
+  49–57 ms task (`main.js` evaluation, shell's first frame) in about one run in three. Open (F1).

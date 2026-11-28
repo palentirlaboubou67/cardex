@@ -5,7 +5,6 @@
 import { html, setHTML, selectChip, delegate } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { eur, num, plural, norm, localNo } from '../../core/format.js';
-import { renderChunked } from '../../core/list.js';
 import { setParams } from '../../core/router.js';
 import { whenIdle, yieldToMain } from '../../core/idle.js';
 import { tileHTML, patchTile } from '../../components/tile.js';
@@ -15,7 +14,7 @@ import * as prices from '../../data/prices.js';
 import { FINISHES, SHORT, DOT, order } from '../../data/finishes.js';
 import { dexNums, pokedex } from '../../data/dex.js';
 import { sets as catalogSets, metaSync, setIdOf } from '../../data/catalog.js';
-import { tileSel, insertAt, tilePrice, CHUNK, fill } from './grid.js';
+import { tileSel, insertAt, tilePrice, CHUNK, fill, renderGrid as paint } from './grid.js';
 import * as backup from './backup.js';
 
 const SORTS = [['recentes', 'Récentes'], ['nom', 'Nom'], ['pokedex', 'N° Pokédex'], ['serie', 'Série'], ['valeur', 'Valeur']];
@@ -143,7 +142,7 @@ export function create(box, api) {
     const list = sortList(all.filter(e => match(e, t)));
     keys = list.map(e => e.k);
     busy = true;
-    const p = renderChunked(els.grid, list, tileTpl, { ...CHUNK, empty: NONE() });
+    const p = paint(els.grid, list, tileTpl, { ...CHUNK, empty: NONE() });
     p.then(ok => { if (ok) busy = false; });
     return p;
   }

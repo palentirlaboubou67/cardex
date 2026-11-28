@@ -7,7 +7,6 @@ import { setBar } from '../core/appbar.js';
 import { html, setHTML, delegate } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { num, localNo } from '../core/format.js';
-import { renderChunked } from '../core/list.js';
 import { setParams } from '../core/router.js';
 import { MESSAGES } from '../core/net.js';
 import { tileHTML, patchTile } from '../components/tile.js';
@@ -16,7 +15,7 @@ import { pokedex, nameOf, count as dexCount, artwork, dexNums } from '../data/de
 import { sortFinishes } from '../data/finishes.js';
 import * as col from '../state/collection.js';
 import * as prefs from '../state/prefs.js';
-import { fill } from './collection/grid.js';
+import { fill, renderGrid as paint, CHUNK } from './collection/grid.js';
 
 const FILTERS = [['', 'Toutes'], ['possedees', 'Possédées'], ['manquantes', 'Manquantes']];
 const FILTER_KEYS = new Set(FILTERS.map(f => f[0]));
@@ -85,8 +84,8 @@ function renderGrid() {
   refilter = false;
   els.grid.classList.toggle('compact', !!prefs.get('compact', false));
   busy = true;
-  const p = renderChunked(els.grid, list, tpl, {
-    first: 48, batch: 60,
+  const p = paint(els.grid, list, tpl, {
+    ...CHUNK,
     empty: html`<div class="empty" data-content><span class="ic">${icon('card')}</span><b>${cur.filtre === 'manquantes' ? 'Tu les as toutes' : cur.filtre === 'possedees' ? 'Pas encore' : 'Aucune carte'}</b><p>${
       cur.filtre === 'manquantes' ? 'Chaque version de ce Pokémon est dans ta collection.' : cur.filtre === 'possedees' ? 'Tu n’as aucune carte de ce Pokémon.' : 'Ce Pokémon n’a pas encore de carte en français.'}</p></div>`,
   });

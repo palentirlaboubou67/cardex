@@ -620,9 +620,12 @@ def fixes(b, base, sample, errs):
     rec("90b Réessayer : la série s'affiche (structure de la vue gardée)", not s["err"] and not s["failed"] and s["tiles"] > 0, s)
     tab(p, "scan")
     shows = p.evaluate("__cardex.views.get('scan').shows")
+    # vague 2 : toutes les vues ont un onChange ; on le retire au Scanner le temps du test (comportement de main.js)
+    p.evaluate("() => { const m = window.__cardex.views.get('scan').mod; m._onChange = m.onChange; delete m.onChange; }")
     p.evaluate("async () => { const col = await import('./js/state/collection.js'); col.add({ id: 'sv03.5-004', localId: '004', name: 'Bulbizarre', setId: 'sv03.5', image: '' }, 'normal', 1); }")
     p.wait_for_timeout(300); settle(p)
     rec("91 vue sans onChange (Scanner) : pas redessinée sous les yeux", p.evaluate("__cardex.views.get('scan').shows") == shows and p.evaluate("__cardex.views.get('scan').stale"))
+    p.evaluate("() => { const m = window.__cardex.views.get('scan').mod; m.onChange = m._onChange; delete m._onChange; }")
     c.close()
 
     # 92 démarrage : data/cardimg.json lent -> Séries et Collection s'affichent sans l'attendre (au plus 600 ms)

@@ -59,7 +59,7 @@ export function infoDecks() {
     'Ta collection est comparée par nom de carte, toutes séries et finitions confondues : n’importe quelle impression d’une carte suffit pour jouer. Les énergies de base sont comptées comme possédées.',
     legend,
     'Prix : pour chaque carte, la cote Cardmarket la moins chère entre normale, holo et reverse. « Reste » additionne les cartes qui te manquent.',
-    '« Ajouter les manquantes aux envies » pose une alerte par carte, 10 % sous sa cote : une notification te prévient quand une offre passe à ce prix.',
+    '« Ajouter les manquantes aux envies » pose une alerte par carte, 10 % sous sa cote : une notification te prévient quand une offre passe à ce prix. Une carte déjà en vente à ce prix est tout de suite dans ta fourchette.',
     prices.creditText(),
     `Listes : Limitless TCG${up ? `, mises à jour le ${up}` : ''}. Cartes : TCGdex.`,
   ]);

@@ -21,7 +21,12 @@ const EEVEE = [133, 134, 135, 136, 196, 197, 470, 471, 700];
 
 let unlocked = null;          // { id: ms (0 = date inconnue) }
 let SETS = null, DECKS = null, decksP = null;
-let started = false, timer = 0, silent = false, firstSync = false;
+let started = false, timer = 0, silent = false;
+// collection déjà là sans liste de succès (premier lancement, liste v1 reprise) : calculs sans toast et sans date
+// (0 = inconnue) jusqu'au premier calcul complet : Pokédex, séries, cotes chargés et finitions v1 revues par main.js
+// (la valeur change après cette correction) ; 20 s au plus si la correction ne peut pas finir (hors ligne)
+let hush = false, hushEnd = 0, full = false;
+const quietStart = () => { hush = true; hushEnd = Date.now() + 20e3; };
 let cleared = null;           // succès d'avant la remise à zéro : { at, until }
 const UNDO = 120e3;
 const subs = new Set();
@@ -41,6 +46,7 @@ function load() {
   if (Array.isArray(old)) {
     unlocked = {};
     for (const k of old) if (typeof k === 'string' && k.length < 20) unlocked[k] = 0;
+    quietStart();
     save();
     try { localStorage.removeItem(OLD); } catch { /* rien */ }
     return unlocked;
@@ -86,7 +92,7 @@ function deckPct(deck, owned) {
 
 // Tout ce qu'il faut pour un calcul complet (écran Succès) : Pokédex, séries, decks, cotes. Ne rejette jamais.
 export function ready() {
-  return Promise.allSettled([pokedex(), loadSets(), loadDecks(), col.ensurePrices()]);
+  return Promise.allSettled([pokedex(), loadSets(), loadDecks(), col.ensurePrices()]).then(r => { full = true; return r; });
 }
 
 // ---------- calcul ----------
@@ -160,14 +166,16 @@ export function check({ quiet = false } = {}) {
   const first = load() === null;
   if (first) unlocked = {};
   const fresh = [];
-  // premier calcul sur une collection déjà là : date inconnue (0), pas « aujourd'hui »
-  const when = first || firstSync ? 0 : Date.now();
-  firstSync = false;
+  const q = quiet || silent || hush;
+  silent = false;
+  // collection déjà là (premier calcul, reprise v1) : date inconnue (0), pas « aujourd'hui »
+  const when = first || hush ? 0 : Date.now();
+  if (full && (!col.needsFinishCheck?.() || Date.now() > hushEnd)) hush = false;
   for (const [id, , title, , have, need] of compute()) {
     if (have >= need && !Object.prototype.hasOwnProperty.call(unlocked, id)) { unlocked[id] = when; fresh.push(title); }
   }
   if (first || fresh.length) save();
-  if (fresh.length && !first && !quiet) {
+  if (fresh.length && !first && !q) {
     toast(fresh.length === 1 ? `Succès débloqué : ${fresh[0]}` : `${fresh.length} succès débloqués`, { action: 'Voir', onAction: openList });
   }
   if (fresh.length) notify();
@@ -194,7 +202,7 @@ function restore() {
 
 function schedule(ms = 800) {
   clearTimeout(timer);
-  timer = setTimeout(() => whenIdle(() => { const q = silent; silent = false; check({ quiet: q }); }, { timeout: 4000 }), ms);
+  timer = setTimeout(() => whenIdle(() => check(), { timeout: 4000 }), ms);
 }
 
 export function init() {
@@ -203,7 +211,7 @@ export function init() {
   // premier lancement : liste vide notée tout de suite (la première carte ajoutée aura son toast) ; une collection
   // déjà là (sauvegarde importée, données d'avant les succès) est notée sans toast
   const firstRun = load() === null;
-  if (firstRun) { unlocked = {}; save(); if (col.all().length) { silent = true; firstSync = true; } }
+  if (firstRun) { unlocked = {}; save(); if (col.all().length) quietStart(); }
   col.on(evs => {
     const reload = evs.some(e => e.type === 'reload');
     if (reload && !col.all().length) { clearTimeout(timer); reset(); return; }   // collection vidée
@@ -215,5 +223,5 @@ export function init() {
   addEventListener('storage', e => { if (e.key === KEY) { unlocked = null; load(); notify(); } });
   // données au repos ; les decks seulement si le succès « tournoi » reste à gagner (70 Ko)
   const needDecks = col.all().length && !Object.prototype.hasOwnProperty.call(load(), 'deck');
-  Promise.allSettled([pokedex(), loadSets(), needDecks ? loadDecks() : null, col.ensurePrices()]).then(() => schedule(0));
+  Promise.allSettled([pokedex(), loadSets(), needDecks ? loadDecks() : null, col.ensurePrices()]).then(() => { full = true; schedule(0); });
 }

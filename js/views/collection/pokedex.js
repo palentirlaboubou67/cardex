@@ -4,11 +4,10 @@
 import { html, setHTML, delegate } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { num, norm } from '../../core/format.js';
-import { renderChunked } from '../../core/list.js';
 import { setParams } from '../../core/router.js';
 import { MESSAGES } from '../../core/net.js';
 import * as col from '../../state/collection.js';
-import { fill } from './grid.js';
+import { fill, renderGrid as paint } from './grid.js';
 import { pokedex, sprite } from '../../data/dex.js';
 
 const FILTERS = [['', 'Tous'], ['possedes', 'Possédés'], ['manquants', 'Manquants']];
@@ -53,8 +52,8 @@ export function create(box, api) {
   function renderGrid() {
     const list = DEX.filter(p => matchF(p) && matchQ(p));
     busy = true;
-    const p = renderChunked(els.grid, list, x => cellHTML(x, owned.get(x.n) || 0), {
-      first: 60, batch: 80,
+    const p = paint(els.grid, list, x => cellHTML(x, owned.get(x.n) || 0), {
+      first: 32, batch: 80,
       empty: html`<div class="empty" data-content><span class="ic">${icon('search')}</span><b>Aucun Pokémon</b><p>${st.q ? 'Rien ne correspond à ta recherche.' : st.filtre === 'possedes' ? 'Ajoute une carte de Pokémon pour commencer ton Pokédex.' : 'Tu les as tous.'}</p></div>`,
     });
     p.then(ok => { if (ok) busy = false; });

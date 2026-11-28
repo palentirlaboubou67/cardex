@@ -12,7 +12,8 @@ import { LABEL, DOT } from '../../data/finishes.js';
 
 const FILTERS = [['hausse', 'En hausse'], ['baisse', 'En baisse'], ['cheres', 'Les plus chères']];
 const PAGE = 60;
-let box = null, filtre = 'hausse', shown = PAGE, data = null, memo = '', dirty = true, visible = false, loading = null;
+let box = null, ctx = null, filtre = 'hausse', shown = PAGE, data = null, memo = '', dirty = true, visible = false, loading = null;
+let listKey = '';            // lignes affichées : la liste n'est refaite que si elles changent
 
 // lignes (carte × finition possédée) et totaux ; mémorisés sur la révision de la collection et des cotes
 function compute() {
@@ -66,15 +67,22 @@ function emptyFor() {
   return html`<div class="empty"><span class="ic">${icon(filtre === 'baisse' ? 'market-down' : 'market')}</span><b>${t}</b><p>Les cotes de tes cartes bougent peu en ce moment.</p></div>`;
 }
 
+const rowKey = r => `${r.rec.id}|${r.f}|${r.n}|${r.now}|${r.ch}|${r.a7}|${r.a30}`;
+
 function renderList(d) {
   const L = list(d);
   const g = box.querySelector('.mk-clist');
-  g.hidden = !L.length;
-  setHTML(g, html`${L.slice(0, shown).map(rowHTML)}`);
-  setHTML(box.querySelector('.mk-cempty'), L.length ? '' : emptyFor());
+  const vis = L.slice(0, shown);
+  // +1 sur une carte hors des lignes affichées : seuls la synthèse et les comptes changent
+  const key = `${filtre}|${L.length ? vis.map(rowKey).join(';') : 'vide'}`;
   const more = box.querySelector('[data-more]');
   more.hidden = L.length <= shown;
   more.textContent = `Afficher plus (${num(L.length - shown)})`;
+  if (key === listKey) return;
+  listKey = key;
+  g.hidden = !L.length;
+  setHTML(g, html`${vis.map(rowHTML)}`);
+  setHTML(box.querySelector('.mk-cempty'), L.length ? '' : emptyFor());
 }
 
 function chipsHTML(d) {
@@ -91,6 +99,7 @@ function render() {
     return;
   }
   if (!box.dataset.built) {
+    listKey = '';
     setHTML(box, html`<div class="summary mk-sum" data-content><span class="hero num"></span><span class="meta mk-sum1"></span><span class="meta mk-sum2"></span></div>
 <div class="chips" role="group" aria-label="Filtrer les cartes"></div>
 <div class="mk-err"></div>
@@ -127,13 +136,15 @@ function errRow() {
 }
 
 export default {
-  mount(el) {
+  mount(el, c) {
     box = el;
+    ctx = c;
     delegate(box, 'click', '[data-f]', (e, b) => {
       if (b.dataset.f === filtre) return;
       filtre = b.dataset.f;
       shown = PAGE;
       setParams({ filtre: filtre === 'hausse' ? null : filtre });
+      ctx?.refreshTabs();             // l'onglet « Cotes » rouvre ce filtre
       for (const c of box.querySelectorAll('[data-f]')) c.setAttribute('aria-pressed', c.dataset.f === filtre ? 'true' : 'false');
       renderList(compute());
     });
@@ -145,7 +156,10 @@ export default {
     visible = true;
     const f = r.q.get('filtre');
     const nf = FILTERS.some(([k]) => k === f) ? f : 'hausse';
-    if (nf !== filtre) { filtre = nf; shown = PAGE; }
+    const same = nf === filtre;
+    if (!same) { filtre = nf; shown = PAGE; }
+    // section revue telle quelle (rien n'a changé depuis son dernier rendu) : pas de nouveau rendu
+    if (same && !dirty && box.dataset.built) return;
     const need = col.all().length && [...col.ownedBySet().keys()].some(s => !prices.has(s));
     if (need && !box.dataset.built) {
       // premier affichage : squelette pendant le chargement des cotes
@@ -158,8 +172,11 @@ export default {
   },
   resume() { visible = true; if (dirty) render(); },
   hide() { visible = false; },
+  // adresse de la section avec son filtre : lien de l'onglet « Cotes »
+  href: () => (/^#\/marche\/cotes(\?|$)/.test(location.hash) ? location.hash : `#/marche/cotes${filtre === 'hausse' ? '' : `?filtre=${filtre}`}`),
   onChange(events, isVisible) {
     if (!events.some(e => e.type === 'qty' || e.type === 'reload')) return;
+    if (events.some(e => e.type === 'reload')) listKey = '';      // noms, images des cartes : tout est refait
     if (isVisible) schedule(); else dirty = true;
   },
   info: () => ({

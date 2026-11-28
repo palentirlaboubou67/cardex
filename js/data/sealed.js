@@ -84,6 +84,8 @@ export const isJa = p => p.l === 'ja';
 
 // texte de recherche (sans accents ni casse), calculé à la première recherche
 const qOf = p => (p._q ??= norm(`${p.fr} ${p.n} ${p.set} ${CHIP[p.k]} ${KIND[p.k]} ${p.l === 'ja' ? 'japonais japon' : ''} ${p.rel ? p.rel.slice(0, 4) : ''}`));
+// textes de recherche préparés d'avance (au repos, catalogue affiché) : la première frappe ne les calcule pas tous
+export function warmSearch() { for (const p of DB?.products || []) qOf(p); }
 export function matcher(q) {
   const words = norm(q).split(' ').filter(Boolean);
   if (!words.length) return null;

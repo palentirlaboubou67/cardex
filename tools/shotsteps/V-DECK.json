@@ -10,6 +10,8 @@
     {"name": "dk-passees", "hash": "#/decks/passees", "wait": 1800},
     {"name": "dk-passees-saison", "hash": "#/decks/passees?saison=1415&tri=prix", "wait": 1200},
     {"name": "dk-passees-recherche", "hash": "#/decks/passees?q=dracaufeu&tri=complets", "wait": 1200},
+    {"name": "dk-saison-jouables-vide", "hash": "#/decks/passees?saison=1415&filtre=jouables", "wait": 1200},
+    {"name": "dk-saison-recherche-vide", "hash": "#/decks/passees?saison=1415&q=lanssorien", "wait": 1200},
     {"name": "dk-loupe", "hash": "#/decks/actuelle", "actions": [["click", ".appbar [data-act=\"0\"]"], ["fill", ".dk-search input", "lanssorien"], ["wait", 500]]},
     {"name": "dk-info", "hash": "#/decks/passees", "actions": [["click", ".appbar [data-act=\"1\"]"], ["waitfor", "dialog.sheet[open]"], ["wait", 400]]},
     {"name": "dk-info-fermee", "actions": [["key", "Escape"], ["wait", 400]]},

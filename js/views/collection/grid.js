@@ -17,7 +17,7 @@ const nextPaint = () => new Promise(res => {
 
 // el.innerHTML = premier écran, puis un lot par image (remplace renderChunked de core/list.js pour ces grilles).
 // tpl(item, i) -> chaîne ou Safe. Renvoie false si un rendu plus récent (ou fill) a pris la place.
-export async function renderGrid(el, items, tpl, { first = 48, batch = 60, empty = '' } = {}) {
+export async function renderGrid(el, items, tpl, { first = CHUNK.first, batch = CHUNK.batch, empty = '' } = {}) {
   const my = Symbol('grid');
   runs.set(el, my);
   const join = (from, to) => { let s = ''; for (let i = from; i < to; i++) s += tpl(items[i], i); return s; };
@@ -33,8 +33,9 @@ export async function renderGrid(el, items, tpl, { first = 48, batch = 60, empty
 // contenu fixe (vide, squelette, erreur) : arrête aussi un rendu par lots encore en cours
 export const fill = (el, content) => renderGrid(el, [], null, { empty: content });
 
-// premier écran de 48 tuiles, puis 60 par image : chaque image reste sous 50 ms à CPU ×4
-export const CHUNK = { first: 48, batch: 60 };
+// premier lot : 18 tuiles (un écran de téléphone et plus ; ce qui manque à l'écran arrive à l'image suivante), puis
+// 60 par image : la première image (police, en-tête, 2e passe de content-visibility) reste sous 50 ms à CPU ×4
+export const CHUNK = { first: 18, batch: 60 };
 export const tileSel = (id, f) => `.tile[data-card="${CSS.escape(id)}"][data-finish="${CSS.escape(f)}"]`;
 
 // insère `htmlStr` dans `grid` avant la tuile de la première clé suivante présente (ordre de `keys`), sinon à la fin

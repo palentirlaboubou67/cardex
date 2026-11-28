@@ -5,7 +5,7 @@ import { num, plural, dateFr } from '../../core/format.js';
 import { icon } from '../../core/icons.js';
 import { setParams } from '../../core/router.js';
 import { infoSheet } from '../../core/sheet.js';
-import { yieldToMain } from '../../core/idle.js';
+import { yieldToMain, whenIdle } from '../../core/idle.js';
 import * as col from '../../state/collection.js';
 import * as prefs from '../../state/prefs.js';
 import { MESSAGES } from '../../core/net.js';
@@ -13,7 +13,7 @@ import * as sealed from '../../data/sealed.js';
 import { ptileHTML, prowHTML, ready as ptileReady } from '../ptile.js';
 
 const PAGE = 60;
-const FIRST = 6;            // tuiles par rail au premier passage ; les suivantes (hors écran) après une pause
+const RAIL = 12;            // tuiles par rail
 const LANGS = [['int', 'International'], ['ja', 'Japonais'], ['tout', 'Toutes les langues']];
 const PREF_OF = { int: 'int', ja: 'ja', tout: 'int+ja' };
 const FROM_PREF = { int: 'int', ja: 'ja', 'int+ja': 'tout' };
@@ -24,6 +24,7 @@ let box = null, ctx = null, visible = false;
 let st = { vue: 'pistes', q: '', type: '', tri: 'new', lang: 'int' };
 let shown = PAGE, cur = [], keyP = '', keyC = '', wrev = 0, qT = 0, failed = null;
 let catK = null, counts0 = null, ptok = 0, navRaf = 0, navAll = false, navOne = null;
+let pend = null, pendStop = null, ownSig = '', warmed = false;
 
 const defLang = () => FROM_PREF[prefs.get('sealedLang', 'int')] || 'int';
 
@@ -63,36 +64,46 @@ function skeleton() {
 }
 
 // ---------- pistes ----------
-// une section ; all : ses 12 tuiles d'un coup (sinon FIRST, le reste après une pause)
-function ideaHTML(s, { first = false, all = false } = {}) {
+// tuiles visibles dans la largeur d'un rail (140 px + 12, 160 px + 12 sur ordinateur), sans mesurer la page
+const fitN = () => Math.min(RAIL, Math.ceil(innerWidth / (innerWidth >= 900 ? 172 : 152)));
+// après l'affichage de l'image en cours (le passage suivant ne s'ajoute pas à sa mise en page)
+const afterPaint = fn => requestAnimationFrame(() => setTimeout(fn, 0));
+
+// une section avec ses n premières tuiles (data-rest : la suite viendra au passage suivant)
+function ideaHTML(s, { first = false, n = RAIL } = {}) {
   const langQ = st.lang === defLang() ? '' : `&langue=${st.lang}`;
   const more = s.type ? `#/marche/scelle?vue=catalogue&type=${s.type}${langQ}` : `#/marche/scelle?vue=catalogue&tri=${s.tri}${langQ}`;
-  const rest = !all && s.list.length > FIRST;
+  const rest = n < RAIL && s.list.length > n;
   return html`<section class="mk-idea" data-idea="${s.id}" aria-labelledby="mk-i-${s.id}"${first ? raw(' data-content') : ''}><div class="sect"><span class="grow" id="mk-i-${s.id}">${s.title}</span><span class="mk-rnav" hidden><button type="button" class="ibtn sm" data-rail="-1" aria-label="Produits précédents">${icon('chevron-left')}</button><button type="button" class="ibtn sm" data-rail="1" aria-label="Produits suivants">${icon('chevron-right')}</button></span>${
     s.list.length > 3 || s.type ? html`<a href="${more}" data-replace aria-label="Tout voir : ${s.title}">Tout voir${icon('chevron-right')}</a>` : ''}</div><p class="mk-isub">${s.sub}</p><div class="mk-rail" data-per="${s.per || ''}"${rest ? raw(' data-rest') : ''}>${
-    s.list.slice(0, all ? 12 : FIRST).map(p => ptileHTML(p, { key: s.per || null }))}</div></section>`;
+    s.list.slice(0, n).map(p => ptileHTML(p, { key: s.per || null }))}</div></section>`;
 }
 
 function renderPistes() {
   const key = `${st.lang}|${wrev}|${sealed.loaded() ? 1 : 0}`;
   if (key === keyP) return;
   keyP = key;
+  ownSig = sigOf();
   const tok = ++ptok;
   const S = sealed.ideas({ lang: st.lang, watch: col.watchList() });
   const lang = st.lang === 'int' ? '' : st.lang === 'ja' ? ' · produits japonais' : ' · toutes les langues';
+  const n = fitN();
   setHTML(box.querySelector('.mk-pistes'), html`<button type="button" class="mk-warn" data-warn>${icon('info', { size: 18 })}<span class="grow">Tendances passées, pas des conseils financiers${lang}</span>${icon('chevron-right', { size: 18 })}</button>
-${S.length ? S.map((s, i) => ideaHTML(s, { first: !i }))
+${S.length ? S.map((s, i) => ideaHTML(s, { first: !i, n }))
     : html`<div class="empty" data-content><span class="ic">${icon('box')}</span><b>Pas encore de piste</b><p>Les pistes se calculent sur l’historique des cotes : reviens dans quelques jours.</p></div>`}
 <p class="caption mk-credit">${creditLine()}</p>`);
   railNavSoon();
-  if (!S.some(s => s.list.length > FIRST)) return;
-  yieldToMain().then(() => {
+  const pistes = box.querySelector('.mk-pistes');
+  if (!pistes.querySelector('.mk-rail[data-rest]')) return;
+  // suite des rails (hors écran, à droite) après l'affichage : toutes les sections sont là dès le premier passage
+  // (hauteur de page juste pour le défilement rendu par le routeur), seules leurs tuiles cachées attendent
+  afterPaint(() => {
     if (tok !== ptok) return;
     const byId = new Map(S.map(s => [s.id, s]));
-    for (const rail of box.querySelectorAll('.mk-pistes .mk-rail[data-rest]')) {
+    for (const rail of pistes.querySelectorAll('.mk-rail[data-rest]')) {
       rail.removeAttribute('data-rest');
       const s = byId.get(rail.closest('.mk-idea')?.dataset.idea);
-      if (s) rail.insertAdjacentHTML('beforeend', s.list.slice(FIRST, 12).map(p => String(ptileHTML(p, { key: s.per || null }))).join(''));
+      if (s) rail.insertAdjacentHTML('beforeend', s.list.slice(rail.children.length, RAIL).map(p => String(ptileHTML(p, { key: s.per || null }))).join(''));
     }
     railNavSoon();
   });
@@ -156,12 +167,9 @@ function paintChips(counts) {
   const chips = box.querySelector('.mk-cchips');
   const focused = chips.contains(document.activeElement) ? document.activeElement : null;
   const fk = focused?.dataset.type ?? (focused?.tagName === 'SELECT' ? `sel:${focused.getAttribute('aria-label')}` : null);
-  const T = [performance.now()]; const M = () => T.push(performance.now());
-  const sx = chips.scrollLeft; M();
-  const hh = html`${chipsHTML(counts)}`; M();
-  setHTML(chips, hh); M();
-  chips.scrollLeft = sx; M();
-  (window.__pc ||= []).push(T.slice(1).map((t, i) => Math.round((t - T[i]) * 10) / 10));
+  const sx = chips.scrollLeft;
+  setHTML(chips, html`${chipsHTML(counts)}`);
+  chips.scrollLeft = sx;
   // arrivée par un lien (« Tout voir ») : la puce du type choisi est visible
   const on = !sx && st.type ? chips.querySelector('.chip[aria-pressed="true"]') : null;
   if (on && on.offsetLeft + on.offsetWidth > chips.clientWidth) chips.scrollLeft = on.offsetLeft - 16;
@@ -175,10 +183,12 @@ function renderCat(force = false) {
   const key = `${st.q}|${st.type}|${st.tri}|${st.lang}|${wrev}|${sealed.loaded() ? 1 : 0}`;
   if (key === keyC && !force) return;
   keyC = key;
+  ownSig = sigOf();
   const input = box.querySelector('.mk-search input');
   if (input && input.value !== st.q && document.activeElement !== input) input.value = st.q;
   const { list, counts } = sealed.catalogue({ q: st.q, type: st.type, tri: st.tri, lang: st.lang, watch: col.watchList() });
   cur = list;
+  if (!warmed) { warmed = true; whenIdle(sealed.warmSearch); }
   paintChips(counts);
   const g = box.querySelector('.mk-plist');
   const k = catK = sealed.sortKey(st.tri);
@@ -211,7 +221,6 @@ function appendMore() {
 const nodeOf = safe => { const t = document.createElement('template'); t.innerHTML = String(safe); return t.content.firstElementChild; };
 
 function patchProducts(ids, watchChanged) {
-  const T = [performance.now()]; const M = () => T.push(performance.now());
   const watch = col.watchList();
   if (keyP) {
     const pistes = box.querySelector('.mk-pistes');
@@ -220,7 +229,6 @@ function patchProducts(ids, watchChanged) {
       if (!p) continue;
       for (const t of pistes.querySelectorAll(`.ptile[data-product="${id}"]`)) t.replaceWith(nodeOf(ptileHTML(p, { key: t.closest('.mk-rail')?.dataset.per || null })));
     }
-    M();
     if (watchChanged) {
       // section « Tes produits suivis » : refaite seule (ajoutée, retirée) ; pistes vides : tout est redessiné
       const idea = sealed.followedIdea(watch);
@@ -229,7 +237,7 @@ function patchProducts(ids, watchChanged) {
       else {
         if (!idea) old?.remove();
         else {
-          const n = nodeOf(ideaHTML(idea, { all: true }));
+          const n = nodeOf(ideaHTML(idea));
           if (old) old.replaceWith(n); else pistes.querySelector('.mk-warn').after(n);
         }
         pistes.querySelectorAll('.mk-idea[data-content]').forEach(e => e.removeAttribute('data-content'));
@@ -237,7 +245,6 @@ function patchProducts(ids, watchChanged) {
       }
     }
   }
-  M();
   if (keyC) {
     if (watchChanged && st.type === 'suivis') keyC = '';            // la liste elle-même change
     else {
@@ -247,12 +254,30 @@ function patchProducts(ids, watchChanged) {
         const row = p && g.querySelector(`.row[data-product="${id}"]`);
         if (row) row.replaceWith(nodeOf(prowHTML(p, { key: catK })));
       }
-      M();
       if (watchChanged && counts0) paintChips({ ...counts0, suivis: sealed.followedCount(st.q, watch) });
     }
   }
-  M(); (window.__pp ||= []).push(T.slice(1).map((t, i) => Math.round((t - T[i]) * 10) / 10));
 }
+
+// changements vus section cachée (fiche produit ouverte) : appliqués au repos, ou au retour s'il n'est pas venu,
+// jamais pendant le toucher de ☆
+function queuePatch(ids, watchChanged) {
+  pend ??= { ids: new Set(), watch: false };
+  for (const id of ids) pend.ids.add(id);
+  pend.watch ||= watchChanged;
+  pendStop ??= whenIdle(flushPatch);
+}
+function flushPatch() {
+  pendStop?.();
+  pendStop = null;
+  const q = pend;
+  pend = null;
+  if (q && sealed.loaded() && box.dataset.built) patchProducts([...q.ids], q.watch);
+}
+function dropPatch() { pendStop?.(); pendStop = pend = null; }
+
+// la seule partie de la collection que montre la section : produits suivis et scellé possédé (quantités)
+const sigOf = () => `${col.watchList().join(',')}|${col.sealedAll().map(o => `${o.id}:${o.qty}`).join(',')}`;
 
 function renderVue() {
   for (const b of box.querySelectorAll('[data-vue]')) b.setAttribute('aria-pressed', b.dataset.vue === st.vue ? 'true' : 'false');
@@ -367,23 +392,33 @@ export default {
     if (!box.dataset.built) build();
     const input = box.querySelector('.mk-search input');
     if (input && input.value.trim() !== st.q) input.value = st.q;     // adresse ouverte (lien, Retour) : le champ la suit
+    flushPatch();
     renderVue();
   },
 
-  resume() { visible = true; if (sealed.loaded() && box.dataset.built) renderVue(); },
+  resume() { visible = true; if (sealed.loaded() && box.dataset.built) { flushPatch(); renderVue(); } },
   hide() { visible = false; clearTimeout(qT); },
 
-  // ☆ ou Mon scellé : tuiles et lignes corrigées sur place, même section cachée ; 'reload' (import…) : tout refait
+  // ☆ ou Mon scellé : tuiles et lignes corrigées sur place (au repos si la section est cachée) ; 'reload' (import,
+  // autre onglet…) : tout refait, seulement si le suivi ou le scellé possédé ont changé (pas pour les cartes seules)
   onChange(events, isVisible) {
     if (events.some(e => e.type === 'reload')) {
+      const sig = sigOf();
+      if (sig === ownSig) return;
+      ownSig = sig;
+      dropPatch();
       wrev++;
       if (isVisible && sealed.loaded() && box.dataset.built) renderVue();
       return;
     }
     const mine = events.filter(e => e.type === 'watch' || e.type === 'sealed');
-    if (!mine.length || !sealed.loaded() || !box.dataset.built) return;
-    if (mine.length > 40) wrev++;
-    else patchProducts([...new Set(mine.map(e => Number(e.id)))], mine.some(e => e.type === 'watch'));
+    if (!mine.length) return;
+    ownSig = sigOf();
+    if (!sealed.loaded() || !box.dataset.built) return;
+    const ids = [...new Set(mine.map(e => Number(e.id)))], w = mine.some(e => e.type === 'watch');
+    if (mine.length > 40) { dropPatch(); wrev++; }
+    else if (isVisible) patchProducts(ids, w);
+    else queuePatch(ids, w);
     if (isVisible) renderVue();     // ne refait que ce qui a été invalidé (liste « Suivis », pistes vides)
   },
 

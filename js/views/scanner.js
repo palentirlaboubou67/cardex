@@ -461,6 +461,8 @@ function showNone({ src, file = null, title, text, retry, search = true, again =
   token++;
   shown = { mode: 'none', src, file, title, text, retry, search, again };
   render();
+  // photo sans résultat (y compris choix sans aucune carte connue) : le scan en direct reprend derrière le message
+  if (src === 'photo' && camOn) loop?.start();
   if (visible) announce(title || 'Carte non reconnue');
 }
 
@@ -680,8 +682,6 @@ async function importPhoto(file) {
   let res = null, err = null;
   try { res = await scan.identifyImage(file); } catch (e) { err = e; }
   if (stale(my, 'photo')) return;
-  // rien à garder à l'écran : le scan en direct reprend derrière le message
-  if (err || !res) { if (camOn) loop?.start(); }
   if (err) {
     const decode = err instanceof scan.ScanError || err?.kind === 'decode';
     if (!decode) console.warn('scan : photo :', err?.kind || err?.message || err);

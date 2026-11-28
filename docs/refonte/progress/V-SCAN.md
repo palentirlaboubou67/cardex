@@ -1,8 +1,9 @@
 # V-SCAN — journal (vue Scanner)
 
-Port local : 8804. Scripts et captures : scratchpad `work-V-SCAN\` (h.py = serveur + Chromium, t_*.py = tests).
+Port local : 8804 (construction), 8824 (correcteur, h.py actuel). Scripts et captures : scratchpad `work-V-SCAN\`
+(h.py = serveur + Chromium, t_*.py = tests).
 
-## Statut : TERMINÉ (27/11) — rapport remis
+## Statut : TERMINÉ (27/11) — rapport remis ; correctifs de la relecture faits (voir plus bas)
 
 ## Fait
 - Lecture : SPEC §0–5, 8–12 + changelog, WAVE1 §5, FINAL-design §3.2/4/8 (W-A, W-B)/9, FINAL-scanner §0/5.7,
@@ -37,6 +38,29 @@ Port local : 8804. Scripts et captures : scratchpad `work-V-SCAN\` (h.py = serve
 - t_offline.py : base coupée → pastille + panneau « Base des cartes indisponible », reprise 1,1 s après « online ».
 - t_perf.py (CPU ×4, 2 000 cartes, Collection montée) : +1 64 ms puis 32 ms, vignette 24, séance 24, puce 24,
   fermer 16 ; scan en direct ×4 : 0 tâche longue.
+
+## Correctifs de la relecture (correcteur, port 8824, 27/11) — TERMINÉ
+Scripts : scratchpad `work-V-SCAN\t_fix_*.py` (h.py sert le dépôt sur 8824) ; reproductions du relecteur : `rv_t*.py`.
+1. Photo en cours d'analyse puis départ de la vue : `stale(my, src)` ne jette plus un résultat de photo parce que la
+   vue est cachée (seulement si le contenu a changé). Le résultat, le choix ou « non reconnue » est là au retour ;
+   plus de squelette sans fin ; le scan en direct reprend (✕, ou tout de suite derrière « non reconnue »).
+   Relance de la boucle déplacée dans showNone (photo) : couvre aussi un choix sans aucune carte connue.
+   t_fix_leave 21/21, t_fix_none 8/8, rv_t12 : résultat au retour (avec et sans caméra).
+2. ✕ / Échap sur un résultat ou un choix en direct : `dismiss({ user: true })` appelle `loop.hold()` (travail en cours
+   annulé, pause jusqu'à ce que la carte sorte du cadre ; « non reconnue » : stop + start). La fermeture « carte
+   partie » (onState) garde son comportement. t_fix_late 18/18 (manuel et auto, 6 fermetures chacun, rien ne rouvre
+   seul ; le déclencheur marche juste après) ; rv_t11 : plus de réouverture.
+3. Focus : render() note si le focus était dans le panneau avant de remplacer le contenu et le remet sur le titre
+   (`.scn-name`, `.scn-ttl`, `.scn-busy-h` en tabindex -1), ou sur la ligne « Annuler » voisine dans la liste.
+   t_fix_focus 8/8 (photo : analyse → choix → résultat, focus jamais sur body ; résultat venu seul : focus pas volé),
+   t_fix_shutterfocus 5/5, rv_t7 et rv_t10 : focus sur le titre.
+4. Paysage (844×390…) : `@media (max-height: 480px) { .scn { min-height: 0; } }`. t_fix_land 25/25 (5 tailles,
+   bas du panneau au-dessus des onglets, pas de débordement, bloc caméra refusée lisible).
+Non-régression : shots.py --only V-SCAN,scanner (390 et 1280, clair et sombre) 56 captures, 0 problème ; t_live 15/15 ;
+t_features 23/24 (échec connu : console.error de tesseract, demande à SC) ; t_sizes 0 problème ; t_perf (CPU ×4,
+2 000 cartes) +1 48 ms, Reverse 40, vignette 32, séance 32, version 24, fermer 24.
+Remarque : une passe a vu des erreurs CORS sur assets.tcgdex.net (limitation de débit de TCGdex, 429 sans en-tête
+CORS) ; relancée, aucune erreur. Pas de notre ressort.
 
 ## Si reprise
 - Lire ce journal, puis les fichiers ci-dessus ; ne pas repartir de zéro. Relancer les t_*.py du scratchpad.

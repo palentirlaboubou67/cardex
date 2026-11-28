@@ -219,14 +219,15 @@ async function addMissing() {
       for (const f of fins) {
         if (!decks.PLAY_FINISHES.includes(f)) continue;
         const p = prices.get(r.c.id, f);
-        if (p?.eur != null && (!best || p.eur < best.eur)) best = { f, eur: p.eur, low: p.low };
+        if (p?.eur != null && (!best || p.eur < best.eur)) best = { f, eur: p.eur, low: p.low, trend: p.trend };
       }
       if (!best && r.c.price != null) best = { f: fins.includes('normal') ? 'normal' : fins[0], eur: r.c.price, low: null };
       if (!best) { noPrice++; continue; }
       const meta = catalog.metaSync(card.setId);
       const w = db.make({ ...card, setName: card.setName || meta?.name || '', setTotal: card.setTotal || meta?.total || null },
         best.f, { min: 0, max: maxOf(best.eur) });
-      db.update(w, { low: best.low ?? null, trend: best.eur });
+      // comme la fiche carte : offre la moins chère connue tout de suite (dans la fourchette ou non, dit dans le message)
+      db.update(w, { low: best.low ?? null, trend: best.trend ?? best.eur });
       try { await db.put(w); added.push(w.key); if (w.inRange) inRange++; } catch { /* base indisponible : carte ignorée */ }
     }
     if (!added.length) {
