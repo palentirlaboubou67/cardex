@@ -10,7 +10,7 @@
   python -P tools/shots.py --big 2000               collection de 2 000 cartes tirées de data/cards-index.json
   python -P tools/shots.py --full                   capture de toute la page (sinon : l'écran)
   python -P tools/shots.py --port 8771              port du serveur local (chaque agent a le sien)
-  python -P tools/shots.py --fresh                  sans le cache HTTP partagé (.cache/shots-profile)
+  python -P tools/shots.py --fresh                  sans le cache HTTP partagé (.cache/shots-profile-<port>)
 
 Sert le dépôt sur http://127.0.0.1:<port>, remplit une collection d'exemple (tools/sample_collection.json, ou --big),
 puis joue les étapes de tools/shotsteps/*.json (fichiers lus par ordre de nom ; chacun contient un tableau d'étapes
@@ -31,7 +31,7 @@ Code de sortie 1 s'il y a une erreur JavaScript, une règle non tenue, un fichie
 (la chaîne de secours des images de cartes essaie des URL qui peuvent manquer : listées à part ; --strict-images les
 compte aussi) et les pannes d'un service distant (TCGdex qui limite le débit : réponse 429/5xx sans en-tête CORS,
 erreur réseau ; listées à part, --strict-remote les compte). Un 4xx lisible d'un service distant fait échouer.
-Les passes (largeurs × thèmes) partagent un profil Chromium dans .cache/shots-profile (ignoré par git) : les images
+Les passes (largeurs × thèmes) partagent un profil Chromium dans .cache/shots-profile-<port> (ignoré par git) : les images
 de TCGdex ne sont téléchargées qu'une fois (moins de requêtes, pas de limitation de débit qui ferait échouer les images).
 Stockage local, IndexedDB, caches et service workers sont vidés au début de chaque passe.
 Installation : python -m pip install --user playwright && python -m playwright install chromium
@@ -90,6 +90,8 @@ MEASURE = r"""(sel) => {
       const el = all[i];
       const b = el.getBoundingClientRect();
       if (!b.width || !b.height) continue;
+      // texte pour les lecteurs d'écran (.sr : 1 px, margin -1 px, découpé) : invisible, jamais « hors de l'écran »
+      if ((b.width <= 1 && b.height <= 1) || el.closest('.sr')) continue;
       let scroller = false, box = null, clipped = false;
       for (let p = el.parentElement; p && p !== v.parentElement; p = p.parentElement) {
         const cs = getComputedStyle(p);
@@ -249,8 +251,10 @@ def run_one(pw, args, width, theme, steps, collection, base, out_dir):
         browser = pw.chromium.launch()
         ctx = browser.new_context(**opts)
     else:
-        # profil partagé entre les passes : le cache HTTP (images distantes) est gardé, le reste est vidé
-        profile = os.path.join(ROOT, ".cache", "shots-profile")
+        # profil partagé entre les passes : le cache HTTP (images distantes) est gardé, le reste est vidé. Un profil par
+        # port : deux shots.py lancés en même temps (un par agent) ne se partagent jamais un profil Chromium (verrou de
+        # la base IndexedDB : « UnknownError: Internal error » sur les étapes qui écrivent des envies)
+        profile = os.path.join(ROOT, ".cache", f"shots-profile-{args.port}")
         os.makedirs(profile, exist_ok=True)
         ctx = browser = pw.chromium.launch_persistent_context(profile, **opts)
         ctx.clear_cookies()

@@ -34,8 +34,11 @@ const isV1 = k => k.startsWith('cardex-shell-') || k === 'cardex-images-v1';
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const c = await caches.open(APP);
-    // cache: 'reload' : jamais la copie HTTP d'un déploiement précédent
-    await c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })));
+    // Mise à jour (une version précédente est en cache) : cache 'reload', jamais la copie HTTP d'un déploiement
+    // précédent. Première installation : 'no-cache' (revalidation par ETag) : la page vient de charger une bonne part
+    // de ces fichiers, le serveur répond 304 pour ceux-là au lieu de les renvoyer (environ la moitié des ~400 Ko).
+    const first = !(await caches.keys()).some(k => k.startsWith('cardex-app-') && k !== APP);
+    await c.addAll(SHELL.map(u => new Request(u, { cache: first ? 'no-cache' : 'reload' })));
     // Données du démarrage (manifest, séries, images, Pokédex) : la page qui a enregistré le service worker les a
     // chargées sans lui ; sans cette copie, un rechargement hors ligne juste après la première visite serait vide.
     await precacheData().catch(() => {});
@@ -47,13 +50,25 @@ self.addEventListener('install', e => {
 
 self.addEventListener('message', e => {
   const m = e.data;
-  if (m === 'activate-now' || m?.type === 'activate-now' || m?.type === 'SKIP_WAITING') self.skipWaiting();
+  if (m === 'activate-now' || m?.type === 'activate-now' || m?.type === 'SKIP_WAITING') {
+    // l'ancienne version arrête son travail de fond (son activation l'attendrait), puis on prend la main
+    try {
+      const old = self.registration.active;
+      if (old && (self.serviceWorker ? old !== self.serviceWorker : !activated)) old.postMessage({ type: 'yield' });
+    } catch { /* rien */ }
+    self.skipWaiting();
+  }
+  // seulement d'une page de Cardex ou de la nouvelle version (le domaine github.io est partagé)
+  else if (m?.type === 'yield' && String(e.source?.url || e.source?.scriptURL || '').startsWith(SCOPE.href)) yieldToUpdate();
   else if (m?.type === 'version') e.source?.postMessage({ type: 'version', version: VERSION });
   else if (m?.type === 'offline-status') e.waitUntil(offlineStatus().then(s => e.source?.postMessage({ type: 'offline-status', ...s })));
   else if (m?.type === 'warm') e.waitUntil(warm(0));
   // seulement d'une page de Cardex (les autres applis du domaine github.io peuvent écrire à ce service worker)
   else if (m?.type === 'seen' && Array.isArray(m.urls) && String(e.source?.url || '').startsWith(SCOPE.href)) {
-    e.waitUntil(keepSeen(m.urls).catch(() => {}));
+    // première visite (js/core/net.js l'envoie quand ce service worker prend la main) : copie de ce que la page a
+    // chargé, puis la consultation hors ligne de toutes les séries dès cette première séance (sinon elle ne démarrait
+    // qu'au lancement suivant, quand le manifest passe par le service worker)
+    e.waitUntil(keepSeen(m.urls).catch(() => {}).then(() => warmSoon()));
   }
 });
 
@@ -83,7 +98,7 @@ async function keepSeen(urls) {
   const names = { app: APP, data: DATA, vendor: VEND };
   let i = 0;
   await Promise.all([0, 1, 2, 3].map(async () => {
-    while (i < jobs.length) {
+    while (i < jobs.length && !yielding) {
       const [kind, href, ic] = jobs[i++];
       try {
         const c = await caches.open(kind === 'img' ? ic[0] : names[kind]);
@@ -97,7 +112,9 @@ async function keepSeen(urls) {
   }));
 }
 
+let activated = false;      // cette version est (ou a été) la version active
 self.addEventListener('activate', e => {
+  activated = true;
   e.waitUntil((async () => {
     for (const k of await caches.keys()) {
       if (!k.startsWith('cardex-')) continue;                       // jamais les caches des autres applis du domaine
@@ -205,14 +222,48 @@ async function imageFirst(e, name, max) {
   return res;
 }
 
-// File d'attente : keys() est dans l'ordre d'insertion ; au plus une coupe par minute et par cache.
-const lastTrim = {};
-async function trimSoon(name, max) {
-  if (Date.now() - (lastTrim[name] || 0) < 60000) return;
-  lastTrim[name] = Date.now();
+// File d'attente bornée : keys() est dans l'ordre d'insertion (les plus anciennes partent). keys() sur 3 000 entrées
+// n'est pas gratuit : une coupe au plus par minute et par cache, sauf après TRIM_BURST ajouts (un afflux ne dépasse
+// jamais le plafond de plus de TRIM_BURST entrées). Une coupe est aussi prévue à la fin de la minute, sans retenir le
+// service worker (une attente dans waitUntil retarderait l'activation d'une mise à jour) : s'il s'est arrêté entre-temps,
+// le prochain ajout coupe.
+const TRIM = {}, TRIM_GAP = 60000, TRIM_BURST = 20;
+const trimOf = name => (TRIM[name] ??= { at: 0, n: 0, timer: 0 });
+function trimSoon(name, max) {
+  const t = trimOf(name);
+  t.n++;
+  const wait = t.at + TRIM_GAP - Date.now();
+  if (wait <= 0 || t.n >= TRIM_BURST) return trimNow(name, max);
+  t.timer ||= setTimeout(() => { t.timer = 0; trimNow(name, max).catch(() => {}); }, wait);
+  return Promise.resolve();
+}
+async function trimNow(name, max) {
+  const t = trimOf(name);
+  clearTimeout(t.timer);
+  t.timer = 0;
+  t.at = Date.now();
+  t.n = 0;
   const c = await caches.open(name);
   const keys = await c.keys();
   for (let i = 0; i < keys.length - max; i++) await c.delete(keys[i]);
+}
+
+// ---------- travail de fond et mises à jour ----------
+// Une nouvelle version n'est activée qu'une fois terminés les événements en cours de l'ancienne : son travail de fond
+// (consultation hors ligne, avec son attente de 20 s) s'arrête dès que « Recharger » est demandé (message 'yield',
+// envoyé par js/main.js et par la nouvelle version), sinon le rechargement attendrait jusqu'à la fin.
+let yielding = false;
+const waits = new Set();
+function pause(ms) {
+  return new Promise(res => {
+    const done = () => { clearTimeout(t); waits.delete(done); res(); };
+    const t = setTimeout(done, ms);
+    waits.add(done);
+  });
+}
+function yieldToUpdate() {
+  yielding = true;
+  for (const done of [...waits]) done();
 }
 
 // ---------- données versionnées ----------
@@ -303,7 +354,8 @@ function warmSoon() {
 function warm(delay) {
   warming ??= (async () => {
     try {
-      if (delay) await new Promise(r => setTimeout(r, delay));
+      if (delay) await pause(delay);
+      if (yielding) return;
       const cx = self.navigator?.connection;
       if (cx?.saveData || /(^|-)2g$/.test(cx?.effectiveType || '')) return;
       const m = await currentManifest(true);
@@ -315,13 +367,13 @@ function warm(delay) {
         const u = new URL(`${p}?h=${h}`, SCOPE).href;
         if (!(await c.match(u))) todo.push(u);
       }
-      if (!(await fetchAll(c, todo))) return;    // hors ligne : on arrête
+      if (!(await fetchAll(c, todo)) || yielding) return;    // hors ligne (ou mise à jour) : on arrête
       // puis les logos et symboles des séries (noms avec hash, ~1 Mo en tout), et le ménage des anciens
       const pics = await setPictures(c, m);
       if (!pics) return;
       const want = [];
       for (const u of pics) if (!(await c.match(u))) want.push(u);
-      if (!(await fetchAll(c, want))) return;
+      if (!(await fetchAll(c, want)) || yielding) return;
       const keep = new Set(pics);
       for (const req of await c.keys()) {
         const p = rel(new URL(req.url));
@@ -336,7 +388,7 @@ function warm(delay) {
 async function fetchAll(c, urls) {
   let i = 0, ok = true;
   await Promise.all([0, 1].map(async () => {
-    while (ok && i < urls.length) {
+    while (ok && !yielding && i < urls.length) {
       const u = urls[i++];
       try {
         const res = await fetch(u, { priority: 'low' });

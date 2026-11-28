@@ -25,11 +25,13 @@ export const list = () => items;
 export const count = () => items.reduce((a, x) => a + x.n, 0);
 export const on = fn => (subs.add(fn), () => subs.delete(fn));
 
-// +1 (ou n) pour cette carte dans cette version : l'entrée remonte en tête
-export function added(card, finish, n = 1) {
+// +1 (ou n) pour cette carte dans cette version : l'entrée remonte en tête. before = exemplaires de cette version
+// avant le premier ajout de la séance (base) : « Annuler » ne descend jamais en dessous (cartes d'avant le scan)
+export function added(card, finish, n = 1, before = null) {
   const i = items.findIndex(x => x.id === card.id && x.finish === finish);
   const prev = i >= 0 ? items.splice(i, 1)[0] : null;
-  items.unshift({ ...slim(card), finish, n: (prev?.n || 0) + n, at: Date.now() });
+  const base = prev ? prev.base : (Number.isFinite(before) ? before : null);
+  items.unshift({ ...slim(card), finish, n: (prev?.n || 0) + n, base, at: Date.now() });
   if (items.length > MAX) items.length = MAX;
   save();
 }

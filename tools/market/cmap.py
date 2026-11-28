@@ -6,12 +6,14 @@
 - liens vérifiés par le nom anglais (☆ = Gold Star, δ, ex/EX gardés), relinkés ou retrouvés dans l'extension
   de la série (nom puis attaques), sinon abandonnés (la carte affiche « — »).
 """
+import html
 import re
 import zipfile
 from collections import Counter, defaultdict
+from datetime import date
 
 from .tsparse import parse_object
-from .util import norm_words, straight
+from .util import norm_words, num, straight
 
 
 POCKET = re.compile(r"^(A\d|B\d|P-A)")
@@ -20,6 +22,42 @@ POCKET = re.compile(r"^(A\d|B\d|P-A)")
 # quand TCGdex ajoute ses identifiants).
 CM_EXP_EXTRA = {"sma": 2514, "bwp": 1611, "np": 1608, "tk-xy-latia": 1683, "tk-xy-latio": 1683,
                 "tk-xy-sy": 1631, "tk-xy-n": 1631, "tk-xy-b": 1632, "tk-xy-w": 1632, "tk-xy-su": 1707, "tk-xy-p": 1707}
+
+# Cartes que TCGdex ne relie à rien : « A jaune » (xya), versions alternatives ajoutées par Cardmarket le 19/05/2017
+# dans l'extension de la carte d'origine (vérifié le 2026-11-28 : nom, attaques, date d'ajout).
+# xy10-54a est la même carte que xya-54a (TCGdex la range aussi dans la série d'origine) : même produit.
+CM_CARD_EXTRA = {"xya-24a": 297894, "xya-28a": 297892, "xya-54a": 297893, "xya-55a": 297891, "xya-92a": 297897,
+                 "xya-107a": 297896, "xy10-54a": 297893}
+
+# Rang de rareté (anglais de cards-database) pour répartir des produits jumeaux : la carte la plus rare reçoit le
+# produit le plus cher quand les raretés diffèrent (sm12-29 commune / sm12-237 secrète).
+_RANK = {"common": 0, "uncommon": 1, "rare": 2, "holo rare": 3, "rare holo": 3, "promo": 3, "none": 3,
+         "secret rare": 6, "hyper rare": 6, "special illustration rare": 6, "mega hyper rare": 6}
+
+
+PROMO_SETS = ("basep", "np", "dpp", "hgssp", "bwp", "xyp", "smp", "swshp", "svp", "mep")
+
+
+def _added(p):
+    """Date d'ajout d'un produit Cardmarket (None pour l'import d'origine, « 0000-00-00 »)."""
+    d = str((p or {}).get("dateAdded") or "")[:10]
+    try:
+        return date.fromisoformat(d)
+    except ValueError:
+        return None
+
+
+def _close(a, b, days=183):
+    """Deux produits de la même époque : tous deux sans date, ou à moins de six mois d'écart."""
+    if a is None or b is None:
+        return a is None and b is None
+    return abs((a - b).days) <= days
+
+
+def rarity_rank(c):
+    """Rang de la carte ; une sous-série à préfixe (RC, SV, TG, GG…) passe après la série principale."""
+    r = _RANK.get(str(c.get("rarity") or "none").lower(), 5)
+    return r + (10 if re.match(r"^[A-Za-z]+\d", c["local"]) else 0)
 
 APP_FOILS = ("cosmos", "pokeball", "masterball")
 FINISH_ORDER = ["normal", "reverse", "holo", "cosmos", "pokeball", "masterball", "firstEdition", "stamp"]
@@ -133,7 +171,13 @@ NAME_ALIAS = {
     "legendary trench": "legendary marine trench",
     "blend energy grass fire psychic darkness": "blend energy gfpd",
     "blend energy water lightning fighting metal": "blend energy wlfm",
+    "delta rainbow energy": "rainbow energy delta",
 }
+
+# « Unit Energy GrassFireWater », « Fairy Charm Lightning » (TCGdex) = « Unit Energy [GRW] », « Fairy Charm [L] »
+_TYPE_CODE = {"Grass": "G", "Fire": "R", "Water": "W", "Lightning": "L", "Psychic": "P", "Fighting": "F",
+              "Darkness": "D", "Metal": "M", "Fairy": "Y", "Dragon": "N", "Colorless": "C"}
+_TYPED = re.compile(r"^(Unit Energy|Fairy Charm) ((?:%s)+)$" % "|".join(_TYPE_CODE))
 
 
 def tcgdex_name(c):
@@ -145,6 +189,9 @@ def tcgdex_name(c):
     if en.strip().lower() == "unown" and re.fullmatch(r"[A-Z!?]|%3F|%21", c["local"]):
         letter = {"%3F": "?", "%21": "!"}.get(c["local"], c["local"])
         return f"Unown [{letter}]"
+    m = _TYPED.match(en)
+    if m:
+        return f"{m.group(1)} [{''.join(_TYPE_CODE[t] for t in re.findall('[A-Z][a-z]+', m.group(2)))}]"
     low = en.lower()
     if (c.get("stage") == "LEVEL-UP" or "lv.x" in (c.get("rarity") or "").lower()) and "lv" not in low:
         return en + " LV.X"
@@ -156,7 +203,7 @@ def tcgdex_name(c):
 def card_key(name, species=frozenset(), cm=False):
     """Nom anglais -> clé stricte. ☆ = « gold star », δ = « delta » ; « Lv.NN » retiré ; ex/EX/GX/δ restent
     (ce sont des cartes différentes). cm=True : nom Cardmarket, on retire le dernier groupe [attaques]."""
-    s = straight(name)
+    s = straight(html.unescape(name))  # Cardmarket : « Nidoran &female; »
     if cm:
         s = re.sub(r"\s*\[[^\[\]]*\]\s*$", "", s)  # attaques
         s = _cm_codes(s)
@@ -167,7 +214,7 @@ def cm_keys(name, species=frozenset()):
     """Clés d'un nom Cardmarket : sans le dernier groupe entre crochets (attaques), et avec (« Ancient Technical
     Machine [Ice] » : le crochet fait partie du nom)."""
     a = card_key(name, species, cm=True)
-    b = _key(_cm_codes(straight(name)), species)
+    b = _key(_cm_codes(straight(html.unescape(name))), species)
     return {a, b}
 
 
@@ -309,8 +356,26 @@ def api_finishes(c):
     return f
 
 
+def _serves_unstamped(c, prod, finish, remap=None):
+    """Le produit d'une 1re édition / d'un tampon sert-il aussi une impression de la carte sans ce tampon ?"""
+    for e in _entries(c, remap):
+        if e["cm"] != prod:
+            continue
+        if finish == "firstEdition" and "1st-edition" not in e["stamps"]:
+            return True
+        if finish == "stamp" and not [x for x in e["stamps"] if x != "1st-edition"]:
+            return True
+    return False
+
+
 def _plain(e):
     return not e["foil"] and not e["stamps"]
+
+
+def _ballish(foil):
+    """Motifs de reverse qui ne sont pas la reverse de l'appli : Copain Ball, Love Ball, Sombre Ball, Rapide Ball…
+    (Héros Transcendants) et le motif Team Rocket ; Poké Ball / Master Ball ont leur propre finition."""
+    return bool(foil) and (foil.endswith("ball") or foil == "team-rocket")
 
 
 def _pick(es, pred, prefer=()):
@@ -383,6 +448,11 @@ def plan_card(c, remap=None, base_hint=None, app=()):
                 return x
         return None
 
+    # tampon commun à toute la série (McDonald's, 25 ans, 30 ans) : aucune impression sans tampon hors 1re édition ;
+    # ailleurs, une normale ou une holo qui n'existe que tamponnée (deck des Championnats du monde, Gym Challenge,
+    # avant-première) n'a pas de prix « normale » / « holo » : c'est une version à part (« — »)
+    common_stamp = bool(es) and not any(not [st for st in e["stamps"] if st != "1st-edition"] for e in es
+                                        if e["foil"] not in APP_FOILS)
     for t in ("normal", "holo"):
         if t not in fins:
             continue
@@ -390,10 +460,12 @@ def plan_card(c, remap=None, base_hint=None, app=()):
             if base:
                 plan[t] = (base, BASE)
             continue
-        x = own([lambda e: e["type"] == t and _plain(e),
+        preds = [lambda e: e["type"] == t and _plain(e),
                  lambda e: e["type"] == t and not e["stamps"] and e["foil"] not in APP_FOILS,
-                 lambda e: e["type"] == t and not e["stamps"],
-                 lambda e: e["type"] == t])
+                 lambda e: e["type"] == t and not e["stamps"]]
+        if common_stamp:
+            preds.append(lambda e: e["type"] == t)
+        x = own(preds)
         prod = (x and x["cm"]) or (None if es else base)
         sd = side_for(t, prod)
         if not sd and t == "holo" and prod and prod == base and not any(y["type"] == "reverse" for y in es) \
@@ -402,14 +474,19 @@ def plan_card(c, remap=None, base_hint=None, app=()):
             sd = (base, HOLO)
         if sd:
             plan[t] = sd
-    # reverse : la reverse simple, sinon le motif de la série (logo, énergie…), jamais Poké Ball / Master Ball
+    # reverse : la reverse simple, sinon le motif de la série (logo, énergie), sinon un autre motif sans tampon
+    # (cracked ice…) ; jamais Poké Ball / Master Ball / Cosmo (finitions à part), ni une Ball de Héros Transcendants
+    # ou le motif Team Rocket (me02.5 : la reverse de l'appli est la reverse Énergie), ni une reverse tamponnée.
+    # Sans aucune de celles-là : les annonces reverse du produit de la carte, sauf si ses reverses sont Poké Ball,
+    # Master Ball ou Cosmo (ces annonces seraient les leurs).
     plain_rev = any(x["type"] == "reverse" and x["foil"] not in APP_FOILS for x in es)
     if "reverse" in fins:
         x = own([lambda e: e["type"] == "reverse" and _plain(e),
                  lambda e: e["type"] == "reverse" and not e["foil"] and e["stamps"] == ["set-logo"],
-                 lambda e: e["type"] == "reverse" and not e["stamps"] and e["foil"] not in APP_FOILS,
-                 lambda e: e["type"] == "reverse" and e["foil"] not in APP_FOILS])
-        if x or not es:
+                 lambda e: e["type"] == "reverse" and e["foil"] == "energy" and not e["stamps"],
+                 lambda e: (e["type"] == "reverse" and not e["stamps"] and e["foil"] not in APP_FOILS
+                            and not _ballish(e["foil"]))])
+        if x or not any(y["type"] == "reverse" and y["foil"] in APP_FOILS for y in es):
             sd = side_for("reverse", (x and x["cm"]) or base)
             if sd:
                 plan["reverse"] = sd
@@ -465,9 +542,10 @@ def plan_card(c, remap=None, base_hint=None, app=()):
 
 
 # ---------- construction ----------
-def build(zip_path, singles, nonsingles, species, app_cards=None, log=print):
+def build(zip_path, singles, nonsingles, species, app_cards=None, log=print, guide=None):
     """singles/nonsingles = listes Cardmarket ; species = {nom anglais: nom français} (PokéAPI) ;
-    app_cards = {cardId: [finitions]} des fichiers de séries de l'appli (facultatif).
+    app_cards = {cardId: [finitions]} des fichiers de séries de l'appli (facultatif) ; guide = {idProduct: ligne du
+    guide des prix} (facultatif : ordre des produits jumeaux selon la rareté).
     -> (cm-map, audit, base lue)."""
     app_cards = app_cards or {}
     sets, cards, asia = read_db(zip_path)
@@ -527,12 +605,17 @@ def build(zip_path, singles, nonsingles, species, app_cards=None, log=print):
 
     # 1. liens TCGdex vérifiés (produit de base et produits des finitions)
     claimed = defaultdict(set)  # produit -> signatures (nom, attaques) des cartes qui l'utilisent
+    claimers = defaultdict(set)  # produit -> cartes qui l'utilisent
     sig = {cid: (tkey[cid], tatk[cid]) for cid in cards}
+
+    def claim(prod, cid):
+        claimed[prod].add(sig[cid])
+        claimers[prod].add(cid)
     status = {}
     for cid, (base, btype, plan) in plans.items():
         if base and name_ok(cid, base) and not atk_clash(cid, base):
             status[cid] = "ok"
-            claimed[base].add(sig[cid])
+            claim(base, cid)
         elif base and name_ok(cid, base):
             status[cid] = "suspect"  # même nom, attaques toutes différentes (cartes inversées dans TCGdex)
         elif base:
@@ -541,7 +624,7 @@ def build(zip_path, singles, nonsingles, species, app_cards=None, log=print):
             status[cid] = "missing"
         for f, (prod, side) in plan.items():
             if prod != base and name_ok(cid, prod):
-                claimed[prod].add(sig[cid])
+                claim(prod, cid)
 
     def free(prod, cid):
         """Produit libre, ou déjà pris par des cartes identiques (même nom, mêmes attaques : réimpressions)."""
@@ -583,6 +666,11 @@ def build(zip_path, singles, nonsingles, species, app_cards=None, log=print):
                             C = [i for i in C if not cm_attacks(pname(i))]
             if not C:
                 continue
+            # un produit libre plutôt qu'un produit déjà pris par une carte identique (même nom, mêmes attaques) :
+            # sm10-198 (Marshadow full art) reçoit son produit libre, pas celui de sm10-82
+            fresh = [i for i in C if not claimers.get(i, set()) - set(K)]  # libre, ou pris par ces cartes mêmes
+            if fresh:
+                C = fresh
             if len(C) == 1:
                 for cid in K:
                     got[cid] = C[0]
@@ -612,37 +700,100 @@ def build(zip_path, singles, nonsingles, species, app_cards=None, log=print):
         got, amb, by_order = resolve(cids, pool)
         for cid, prod in got.items():
             found[cid] = prod
-            claimed[prod].add(sig[cid])
+            claim(prod, cid)
         audit["ordered"] += by_order
         audit["ambiguous"] += amb
     for cid in order:
+        base = plans[cid][0]
+        if cid in CM_CARD_EXTRA and CM_CARD_EXTRA[cid] in by_id:
+            fixes[cid] = CM_CARD_EXTRA[cid]
+            claim(fixes[cid], cid)
+            if fixes[cid] != base:
+                audit["relinked" if base else "recovered"][cid] = [base, fixes[cid]] if base else fixes[cid]
+            continue
         if status[cid] == "ok":
             continue
-        base = plans[cid][0]
         if cid in found:
             fixes[cid] = found[cid]
             if found[cid] != base:
                 audit["relinked" if base else "recovered"][cid] = [base, found[cid]] if base else found[cid]
         elif status[cid] == "suspect" or (status[cid] == "mismatch" and soft_ok(cid, base) and free(base, cid)):
             fixes[cid] = base
-            claimed[base].add(sig[cid])
+            claim(base, cid)
             audit["kept"][cid] = base
         else:
             if status[cid] == "mismatch":
                 audit["dropped"][cid] = base
             fixes[cid] = None
 
+    # 2 bis. un produit pris par plusieurs numéros d'une même série, alors que l'extension a des produits libres au
+    # nom exactement identique (attaques comprises) : TCGdex donne l'id de la carte courante à ses versions full art
+    # ou secrètes (xy2-100, sm10-205) et celui de la holo à la non-holo (ecard1-40).
+    # - jumeaux retenus : créés dans les 6 mois du produit partagé (ou tous deux de l'import d'origine, sans date) ;
+    #   pas les réimpressions de decks ajoutées des années après (sm5-122, g1-RC29). Promos et versions « a » / « b »
+    #   (alternatives ajoutées par lots en 2017) : toutes dates ;
+    # - au moins autant de produits que de cartes, sinon rien ne change ;
+    # - autant de produits que de cartes et des raretés différentes (pas des versions « a » / « b ») : rareté
+    #   croissante <-> tendance croissante (Cardmarket a parfois créé les secrètes avant les communes : sm12-29 /
+    #   sm12-237) ; sinon numéros croissants <-> idProduct croissants (Cardmarket crée les produits dans l'ordre de
+    #   la série), la carte de base garde le plus petit.
+    final = {cid: (fixes[cid] if cid in fixes else plans[cid][0]) for cid in fr_ids}
+    users = defaultdict(list)
+    for cid in fr_ids:
+        if cid in CM_CARD_EXTRA:
+            continue
+        if final[cid] in by_id and name_ok(cid, final[cid]) and not atk_clash(cid, final[cid]):
+            users[(cards[cid]["sid"], final[cid])].append(cid)
+    used = set(claimed) | {p for p in final.values() if p}
+    by_exp_name = defaultdict(list)
+    for p in singles:
+        by_exp_name[(p["idExpansion"], p["name"])].append(p["idProduct"])
+    audit["split"] = {}
+    audit["splitSkipped"] = []
+    for (sid, prod), cids in sorted(users.items()):
+        if len({cards[cid]["local"] for cid in cids}) < 2:
+            continue
+        p = by_id[prod]
+        alt = any(re.search(r"\d[ab]$", cards[x]["local"]) for x in cids)
+        any_date = alt or sid in PROMO_SETS
+        d0 = _added(p)
+        twins = [i for i in by_exp_name[(p["idExpansion"], p["name"])] if i != prod and i not in used
+                 and (any_date or _close(d0, _added(by_id[i])))]
+        if not twins:
+            continue
+        prods = sorted([prod] + twins)
+        ordered = sorted(cids, key=lambda x: cards[x]["local"].zfill(6))
+        if len(prods) < len(ordered):
+            audit["splitSkipped"].append(f"{sid}:{prod}")
+            continue
+        trend = {i: num((guide or {}).get(i, {}).get("trend")) for i in prods}
+        # versions « a » / « b » : TCGdex leur donne une rareté plus basse que celle de la carte d'origine
+        if (not alt and len(prods) == len(ordered) and len({rarity_rank(cards[x]) for x in cids}) > 1
+                and all(trend.values())):
+            prods.sort(key=lambda i: (trend[i], i))
+            ordered.sort(key=lambda x: (rarity_rank(cards[x]), cards[x]["local"].zfill(6)))
+            audit.setdefault("splitByRarity", []).append(f"{sid}:{prod}")
+        for cid, nb in zip(ordered, prods):
+            if nb != final[cid]:
+                fixes[cid] = nb
+                used.add(nb)
+                claim(nb, cid)
+                audit["split"][cid] = [final[cid], nb]
+
     # 3. table finale (séries françaises et cartes de l'appli)
     out_cards = defaultdict(dict)
     st = Counter()
+    rows = {}
     for cid in fr_ids:
         c = cards[cid]
         app = app_cards.get(cid, ())
         base, btype, plan = plans[cid]
+        remap = None
         if cid in fixes and fixes[cid] != base:
             nb = fixes[cid]
             if base:
-                base, btype, plan = plan_card(c, remap={base: nb}, app=app)
+                remap = {base: nb}
+                base, btype, plan = plan_card(c, remap=remap, app=app)
             else:
                 base, btype, plan = plan_card(c, base_hint=nb, app=app)
             if not base:
@@ -660,11 +811,41 @@ def build(zip_path, singles, nonsingles, species, app_cards=None, log=print):
                 st["reverse link replaced"] += 1
             else:
                 st["finish link dropped"] += 1
-        if clean:
-            out_cards[c["sid"]][c["local"]] = {f: list(clean[f]) for f in FINISH_ORDER if f in clean}
+        rows[cid] = (base, base_ok, clean, remap)
+    # 1re édition / tampon : un produit à part n'est gardé que si aucune autre carte de la série ne s'en sert
+    # (base2-17 : TCGdex donne à la 1re édition de la non-holo le produit de la holo base2-1) ; sinon le produit de
+    # la carte (prix toutes éditions). Produit à part qui sert aussi une impression sans ce tampon (base1 : produits
+    # « Shadowless », 1re édition et sans tampon) : 3e élément 1 = prix toutes éditions (prices.py -> 6e valeur).
+    set_use = defaultdict(set)
+    for cid, (base, _, clean, _) in rows.items():
+        for f, (prod, _) in clean.items():
+            if f not in ("firstEdition", "stamp"):
+                set_use[(cards[cid]["sid"], prod)].add(cards[cid]["local"])
+    for cid in fr_ids:
+        c = cards[cid]
+        base, base_ok, clean, remap = rows[cid]
+        out = {}
+        for f in FINISH_ORDER:
+            if f not in clean:
+                continue
+            prod, side = clean[f]
+            if f in ("firstEdition", "stamp") and prod != base:
+                if set_use.get((c["sid"], prod), set()) - {c["local"]}:
+                    st[f"{f} shared product replaced"] += 1
+                    if not base_ok:
+                        continue
+                    prod, side = base, BASE
+                elif _serves_unstamped(c, prod, f, remap):
+                    out[f] = [prod, side, 1]
+                    st[f"{f} all editions"] += 1
+                    continue
+            out[f] = [prod, side]
+        if out:
+            out_cards[c["sid"]][c["local"]] = out
             st["fr cards linked"] += 1
         else:
             st["fr cards unlinked"] += 1
+    st["split"] = len(audit["split"])
     st["fr cards"] = len(fr_ids)
     st["app cards"] = len(app_cards)
     for k in ("relinked", "recovered", "kept", "dropped"):

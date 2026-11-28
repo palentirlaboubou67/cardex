@@ -36,7 +36,10 @@ button.cp-card { cursor: zoom-in; }
 .cp-img .cp-hi.on { opacity: 1; }
 .cp-card .card-ph-sym { width: 40px; height: 40px; }
 .cp-card .card-ph-no { font-size: var(--fs-body); line-height: var(--lh-body); }
-.cp-card .pill-en { position: absolute; top: 8px; left: 8px; z-index: 3; }
+/* pastille « EN » / « ≈ » : devant la légende, sous l'image (posée sur l'illustration, elle cachait le nom imprimé) */
+.cp-capill { display: inline-flex; vertical-align: 1px; margin-right: 6px; }
+.cp-capill .pill-en { height: 16px; min-width: 16px; padding: 0 4px; line-height: 16px; }
+.cp-capill:has(+ a) { margin-right: -2px; }        /* le lien a déjà 8 px de marge intérieure (cible de 44 px) */
 @media (min-width: 600px) { .cp-card { width: 280px; } }
 @media (min-width: 900px) { .cp-hero { padding: 8px 0 16px; } .cp-card { width: 360px; } }
 

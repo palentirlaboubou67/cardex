@@ -6,7 +6,7 @@
 import { setBar } from '../core/appbar.js';
 import { html, setHTML, delegate } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { num, localNo } from '../core/format.js';
+import { num } from '../core/format.js';
 import { setParams } from '../core/router.js';
 import { MESSAGES } from '../core/net.js';
 import { tileHTML, patchTile } from '../components/tile.js';
@@ -72,7 +72,7 @@ function renderChips(c) {
 
 const tpl = v => {
   const q = qtyOf(v);
-  return tileHTML(v.c, { qty: q, finish: v.f, missing: !q, meta: [v.c.setName, localNo(v.c.localId)].filter(Boolean).join(' · ') });
+  return tileHTML(v.c, { qty: q, finish: v.f, missing: !q });
 };
 
 function renderGrid() {
@@ -130,7 +130,8 @@ const view = {
     setBar({ title: nameOf(n) || 'Pokémon', subtitle: no4(n), back: true, signal });
     // même Pokémon, autre filtre (Retour, rechargement) : la liste déjà chargée suffit ; les finitions encore en
     // route sont appliquées par le chargement lancé au premier affichage (rattaché à cur, pas au jeton)
-    if (rendered && cur.n === n && cur.cards) { cur.filtre = filtre; await renderGrid(); return; }
+    // (premier lot de la grille posé tout de suite : show() n'attend pas les lots suivants)
+    if (rendered && cur.n === n && cur.cards) { cur.filtre = filtre; renderGrid(); return; }
     cur = { n, cards: null, full: false, filtre };
     const mine = cur;
     rendered = false;
@@ -164,7 +165,7 @@ const view = {
     cur.cards = fullCards(cards);
     cur.full = inTime;
     rendered = true;
-    await renderGrid();
+    renderGrid();
     if (!inTime) {
       loadAll.then(() => {
         if (cur !== mine || mine.full) return;               // autre Pokémon affiché depuis

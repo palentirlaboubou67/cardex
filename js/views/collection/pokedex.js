@@ -74,7 +74,7 @@ export function create(box, api) {
     if (els.input.value.trim() !== st.q) els.input.value = st.q;
     renderHead();
     renderChips();
-    return renderGrid();
+    renderGrid();          // premier lot posé tout de suite ; les suivants continuent à chaque image (show() n'attend pas)
   }
 
   delegate(box, 'input', 'input[name="dq"]', (e, inp) => {

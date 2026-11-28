@@ -401,6 +401,7 @@ function sameArt(id) {
     const link = (a, b) => { if (a !== b) { if (!SAME.has(a)) SAME.set(a, new Set()); SAME.get(a).add(b); } };
     for (const g of d.dups || []) for (const a of g) for (const b of g) link(a, b);
     for (const [a, list] of Object.entries(d.twins || {})) for (const b of list || []) { link(a, b); link(b, a); }
+    for (const [a, b] of d.arts || []) { link(a, b); link(b, a); }     // holo / non holo, réimpressions (même nom)
   }
   return [id, ...(SAME.get(id) || [])];
 }
@@ -580,14 +581,15 @@ function addFinish(f) {
   if (shown?.mode !== 'result') return;
   const c = shown.cards.get(shown.id);
   if (!c || !FINISHES.includes(f)) return;
+  const before = col.qtyOf(c.id, f);
   try { col.add(c, f); } catch (e) { console.error(e); toast('Impossible d’ajouter cette carte'); return; }
-  session.added(c, f);
+  session.added(c, f, 1, before);
   try { navigator.vibrate?.(20); } catch { /* pas de vibreur */ }
   toast(`${c.name} ajoutée en ${LABEL[f] || f} · ${col.qtyOf(c.id)} au total`, {
     action: 'Annuler',
     onAction: () => {
       const n = col.qtyOf(c.id, f);
-      if (n > 0) col.setQty(col.get(c.id) || c, f, n - 1);
+      if (n > before) col.setQty(col.get(c.id) || c, f, n - 1);     // jamais un exemplaire d'avant le scan
       session.removed(c.id, f, 1);
       toast('Ajout annulé');
     },
@@ -597,10 +599,12 @@ function addFinish(f) {
 function undoEntry(id, finish) {
   const x = session.find(id, finish);
   if (!x) return;
+  // retire au plus les exemplaires ajoutés pendant le scan : si la fiche en a déjà retiré, ceux d'avant restent
   const n = col.qtyOf(id, finish);
-  if (n > 0) col.setQty(col.get(id) || x, finish, Math.max(0, n - x.n));
+  const k = Math.min(x.n, Math.max(0, n - (Number.isFinite(x.base) ? x.base : 0)));
+  if (k > 0) col.setQty(col.get(id) || x, finish, n - k);
   session.removed(id, finish, x.n);
-  toast(`Ajout annulé : ${x.name}`);
+  toast(k ? `Ajout annulé : ${x.name}` : `${x.name} : ajout déjà retiré de ta collection`);
 }
 
 function sessionValue() {

@@ -50,7 +50,10 @@ export function create(box, api) {
     <div class="col-trade"><button type="button" class="btn block" data-act="trade">${icon('copy')}Copier ma liste d’échange</button><button type="button" class="ibtn" data-act="info" aria-label="À propos des doubles">${icon('info')}</button></div>
     <div class="grid col-grid"></div>`;
   const els = { sum: box.querySelector('.col-dsum'), trade: box.querySelector('.col-trade'), grid: box.querySelector('.col-grid') };
-  let keys = [], rendered = false, dirty = false, busy = false, pricesTried = false, partial = false;
+  let keys = [], rendered = false, dirty = false, busy = false, pricesTried = false, partial = false, resortT = 0;
+  // séries des doubles : leurs cotes passent avant celles du reste de la collection (ordre et valeur des doubles)
+  const dsets = () => [...new Set(doubles().map(e => e.r.setId))];
+  const priced = () => dsets().every(id => prices.has(id));
   let wishes = null, wishesP = null, wishSub = false;
 
   // envies lues d'avance : le clic copie tout de suite (Safari refuse le presse-papiers après une attente)
@@ -68,8 +71,7 @@ export function create(box, api) {
 
   function renderSummary() {
     const list = doubles();
-    const s = col.stats();
-    const ready = !s.pending || pricesTried;
+    const ready = pricesTried || list.every(e => prices.has(e.r.setId));
     let value = 0, extra = 0, unpriced = 0;
     for (const e of list) {
       extra += e.n - 1;
@@ -85,7 +87,7 @@ export function create(box, api) {
 
   const tpl = e => {
     const n = col.qtyOf(e.r.id, e.f);
-    return tileHTML(e.r, { qty: n - 1, finish: e.f, badge: 'extra', price: tilePrice(e.r.id, e.r.setId, e.f), meta: `${e.r.setName || ''} · ${n} ex.` });
+    return tileHTML(e.r, { qty: n - 1, finish: e.f, badge: 'extra', price: tilePrice(e.r.id, e.r.setId, e.f), meta: [`${n} ex.`, e.r.setName].filter(Boolean).join(' · ') });
   };
   const EMPTY = () => html`<div class="empty" data-content><span class="ic">${icon('copy')}</span><b>Aucun double</b><p>Quand tu ajoutes une carte que tu as déjà, elle apparaît ici.</p></div>`;
 
@@ -103,7 +105,8 @@ export function create(box, api) {
   function render() {
     dirty = false;
     rendered = true;
-    partial = col.stats().pending > 0;                       // ordre fait sans toutes les cotes : refait à leur arrivée
+    clearTimeout(resortT);
+    partial = !priced();                                     // ordre fait sans toutes les cotes : refait à leur arrivée
     renderSummary();
     return renderGrid();
   }
@@ -153,7 +156,7 @@ export function create(box, api) {
         if (t) {
           patchTile(t, { qty: e.after - 1 });
           const meta = t.querySelector('.cap i');
-          if (meta) meta.textContent = `${col.get(e.id)?.setName || ''} · ${e.after} ex.`;
+          if (meta) meta.textContent = [`${e.after} ex.`, col.get(e.id)?.setName].filter(Boolean).join(' · ');
         } else if (e.before < 2) {
           if (!keys.length) { renderGrid(); changed = true; continue; }     // l'état vide laisse la place à la grille
           const ks = doubles().map(x => x.k);
@@ -170,20 +173,39 @@ export function create(box, api) {
     if (changed) { renderSummary(); syncButton(); }
   }
 
+  // cotes arrivées : prix des tuiles corrigés en place ; l'ordre (les plus chères d'abord) n'est refait que s'il change,
+  // une fois par salve de fichiers
   function onPrices() {
     if (!rendered) return;
-    if (!partial) { renderSummary(); return; }
-    if (api.shown()) render(); else dirty = true;              // l'ordre suit les cotes
+    renderSummary();
+    if (!partial) { patchPrices(); return; }
+    if (!api.shown()) { dirty = true; return; }
+    clearTimeout(resortT);
+    resortT = setTimeout(() => {
+      if (!api.shown()) { dirty = true; return; }
+      const ks = doubles().map(e => e.k);
+      if (busy || ks.join(';') !== keys.join(';')) { render(); return; }
+      partial = !priced();
+      patchPrices();
+    }, 150);
+  }
+  function patchPrices() {
+    for (const t of els.grid.querySelectorAll('.tile[data-card]')) {
+      const id = t.dataset.card, s = setIdOf(id);
+      if (prices.has(s)) patchTile(t, { price: tilePrice(id, s, t.dataset.finish) });
+    }
   }
 
+  // Affiché tout de suite (ordre des cotes déjà là) ; les cotes des séries des doubles sont demandées en premier,
+  // puis celles du reste de la collection, et l'ordre se corrige à leur arrivée (onPrices). Avant : jusqu'à 1,2 s
+  // d'attente et 544 Ko de fichiers de cotes avant le premier contenu avec une collection étalée sur 177 séries.
   async function show(q, signal) {
     loadWishes();
     if (rendered && !dirty) { syncButton(); return; }
-    // l'ordre dépend des cotes : on les attend un peu (déjà là le plus souvent, chargées par Cartes)
-    const ready = col.ensurePrices().then(() => { pricesTried = true; if (rendered) renderSummary(); });
-    if (col.stats().pending) await Promise.race([ready, new Promise(r => setTimeout(r, 1200))]);
+    if (!priced()) prices.ensure(dsets());
+    col.ensurePrices().then(() => { pricesTried = true; if (rendered) renderSummary(); });
     if (signal?.aborted && rendered) return;
-    await render();
+    render();
   }
 
   return { show, resume() { if (dirty) render(); }, onChange, onPrices };

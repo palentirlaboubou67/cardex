@@ -25,8 +25,7 @@ const credits = () => [
 ];
 
 const THEMES = [['auto', 'Auto'], ['light', 'Clair'], ['dark', 'Sombre']];
-const MAX_FILE = 30 * 1024 * 1024;
-let el = null, body = null, picker = null, sig = null, est = null, persisted = null;
+let el = null, body = null, sig = null, est = null, persisted = null;
 
 const size = n => (n < 1024 ? `${num(n)} o` : n < 1048576 ? `${num(Math.round(n / 1024))} Ko`
   : n < 1073741824 ? `${(n / 1048576).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`
@@ -84,7 +83,7 @@ function render() {
     <div class="group">
       <div class="row"><span class="lead">${icon('box')}</span><span class="body"><span class="t">Collection</span><span class="s"><span>${size(s.bytes)} dans le stockage du navigateur</span></span></span></div>
       <div class="row set-est"><span class="lead">${icon('collection')}</span><span class="body"><span class="t">Espace du site</span><span class="s set-wrap"><span>${est ? `${size(est.usage)} utilisés sur ${size(est.quota)} (cartes, images et cotes gardées pour le hors ligne)` : 'Calcul…'}</span></span></span></div>
-      <div class="row"><span class="lead">${icon('check')}</span><span class="body"><span class="t">Stockage persistant</span><span class="s set-wrap"><span>${persisted === true ? 'Oui : le navigateur ne l’effacera pas de lui-même' : persisted === false ? 'Non : le navigateur peut l’effacer s’il manque de place' : 'Inconnu sur ce navigateur'}</span></span>${
+      <div class="row"><span class="lead">${icon(persisted === true ? 'check' : persisted === false ? 'alert' : 'info')}</span><span class="body"><span class="t">Stockage persistant</span><span class="s set-wrap"><span>${persisted === true ? 'Oui : le navigateur ne l’effacera pas de lui-même' : persisted === false ? 'Non : le navigateur peut l’effacer s’il manque de place' : 'Inconnu sur ce navigateur'}</span></span>${
         persisted === false && navigator.storage?.persist ? html`<button type="button" class="btn text sm set-inline" data-act="persist">Demander au navigateur</button>` : ''}</span></div>
       ${s.hasCorruptText ? html`<div class="row"><span class="lead">${icon('alert')}</span><span class="body"><span class="t">Collection illisible</span><span class="s set-wrap"><span>Plus de place pour en garder une copie : télécharge-la avant de repartir de zéro</span></span></span></div>
         <div class="row set-btnrow"><button type="button" class="btn sm" data-act="raw-dl">${icon('download')}Télécharger</button><button type="button" class="btn sm danger" data-act="raw-discard">Repartir de zéro</button></div>` : ''}
@@ -137,40 +136,6 @@ function clearSheet() {
     });
 }
 
-// éléments du fichier que la validation compte (cartes, scellé) -> { n, watch }
-function entries(text) {
-  try {
-    const d = JSON.parse(text);
-    const k = o => (o && typeof o === 'object' ? Object.keys(o).length : 0);
-    const a = o => (Array.isArray(o) ? o.length : 0);
-    return { n: k(d.cards) + k(d.sealed) + (d.v === 2 ? k(d.tcg?.sealed) : 0), watch: a(d.watch) + (d.v === 2 ? a(d.tcg?.watch) : 0) };
-  } catch { return { n: 0, watch: 0 }; }
-}
-
-async function importFile(file) {
-  if (!file) return;
-  if (file.size > MAX_FILE) { toast('Fichier trop gros pour une sauvegarde Cardex'); return; }
-  let text;
-  try { text = await file.text(); } catch { toast('Fichier illisible : ce n’est pas une sauvegarde Cardex'); return; }
-  let r;
-  try { r = col.importText(text); } catch (e) { toast(e?.message || 'Ce fichier n’est pas une sauvegarde Cardex', { ms: 6000 }); return; }
-  const parts = [];
-  if (r.cards) parts.push(plural(r.cards, 'nouvelle carte', 'nouvelles cartes'));
-  if (r.updated) parts.push(plural(r.updated, 'carte complétée', 'cartes complétées'));
-  if (r.sealed) parts.push(plural(r.sealed, 'produit scellé', 'produits scellés'));
-  if (r.watch) parts.push(plural(r.watch, 'produit suivi', 'produits suivis'));
-  // rien d'ajouté : fichier vide, rien de valide, ou tout était déjà là
-  const e = parts.length ? null : entries(text);
-  let msg = parts.length ? `Import réussi : ${parts.join(', ')}`
-    : !e.n && !e.watch ? 'Sauvegarde vide : rien à importer'
-    : r.skipped >= e.n && !e.watch ? 'Aucune carte valide dans ce fichier'
-    : 'Rien de nouveau : ta collection contenait déjà tout';
-  if (r.skipped) msg += ` · ${plural(r.skipped, 'élément ignoré (invalide)', 'éléments ignorés (invalides)')}`;
-  if (parts.length && !r.saved) msg = 'Import fait, mais pas enregistré sur l’appareil : exporte ta collection';
-  toast(msg, { ms: 6000 });
-  render();
-}
-
 async function refreshStorage() {
   try { est = await navigator.storage?.estimate?.() || null; } catch { est = null; }
   try { persisted = typeof navigator.storage?.persisted === 'function' ? await navigator.storage.persisted() : null; } catch { persisted = null; }
@@ -180,11 +145,9 @@ async function refreshStorage() {
 export default {
   mount(section) {
     el = section;
-    // le champ fichier est créé une fois, hors du contenu redessiné : un rendu pendant que le sélecteur est ouvert
-    // (date des cotes arrivée, autre onglet…) ne le remplace plus, et le fichier choisi arrive bien
+    // le champ fichier (backup.pickFile) est créé une fois, hors du contenu redessiné : un rendu pendant que le
+    // sélecteur est ouvert (date des cotes arrivée, autre onglet…) ne le remplace pas, et le fichier choisi arrive bien
     body = el.appendChild(Object.assign(document.createElement('div'), { className: 'set-body' }));
-    picker = el.appendChild(Object.assign(document.createElement('input'), { type: 'file', id: 'set-import', accept: '.json,application/json', hidden: true, tabIndex: -1 }));
-    picker.addEventListener('change', () => { const f = picker.files?.[0]; picker.value = ''; importFile(f); });
     delegate(el, 'click', '[data-theme-set]', (e, b) => {
       prefs.set('theme', b.dataset.themeSet);
       for (const x of el.querySelectorAll('[data-theme-set]')) x.setAttribute('aria-pressed', x === b ? 'true' : 'false');
@@ -193,7 +156,7 @@ export default {
     delegate(el, 'click', '[data-act]', async (e, b) => {
       const a = b.dataset.act, key = b.dataset.key;
       if (a === 'export') { backup.exportNow(); render(); }
-      else if (a === 'import') picker.click();
+      else if (a === 'import') backup.pickFile(() => { if (!el.hidden) render(); });
       else if (a === 'clear') clearSheet();
       else if (a === 'persist') {
         try { persisted = await navigator.storage.persist(); } catch { /* refusé */ }

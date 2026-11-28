@@ -2,12 +2,17 @@
 Limitless TCG, avec chaque carte reliée à TCGdex (nom français, image, cote Cardmarket).
 
 Lancer depuis la racine du projet :  python tools/build_decks.py
+  python tools/build_decks.py --relink   sans réseau : réapplique aux decks déjà construits les règles de liaison
+                                         (sous-séries SV/TG/GG, énergies de base) avec le catalogue local
+                                         (data/sets/) et les cotes locales (data/market/prices/)
 Uniquement la bibliothèque standard, pour tourner aussi dans GitHub Actions.
 """
 import csv
+import glob
 from html import unescape
 import io
 import json
+import os
 import re
 import sys
 import time
@@ -42,6 +47,28 @@ CODE_OVERRIDES = {"PR-SV": "svp", "PR-SW": "swshp", "PR-SM": "smp", "PR-XY": "xy
                   "SP": "swshp", "SMP": "smp", "XYP": "xyp", "BWP": "bwp"}
 # Les promos sont numérotées « 30 » chez Limitless et « SM30 » chez TCGdex.
 PROMO_PREFIX = {"SP": "SWSH", "PR-SW": "SWSH", "SMP": "SM", "PR-SM": "SM", "XYP": "XY", "PR-XY": "XY", "BWP": "BW", "PR-BLW": "BW"}
+# Sous-séries numérotées à part : Limitless garde le code de la série (« SHF SV118 »), TCGdex en fait une série
+# (swsh4.5sv-SV118). Série TCGdex -> {préfixe du numéro: sous-série}.
+SUBSETS = {"swsh4.5": {"SV": "swsh4.5sv"}, "sm115": {"SV": "sma"}, "swsh9": {"TG": "swsh9tg"},
+           "swsh10": {"TG": "swsh10tg"}, "swsh11": {"TG": "swsh11tg"}, "swsh12": {"TG": "swsh12tg"},
+           "swsh12.5": {"GG": "swsh12.5gg"}}
+# Énergies de base : les 9 types (pas les énergies spéciales « Jet Energy », « Mist Energy »… : des cartes à réunir)
+BASIC_ENERGY = re.compile(r"^(?:Basic )?(?:Grass|Fire|Water|Lightning|Psychic|Fighting|Darkness|Metal|Fairy) Energy$", re.I)
+
+
+def typo(s):
+    """Apostrophe typographique dans les noms affichés (comme l'interface et le catalogue)."""
+    return s.replace("'", "\u2019") if isinstance(s, str) else s
+
+
+def subset_of(sid, number):
+    """Série TCGdex de la carte : la sous-série quand le numéro en porte le préfixe (SHF SV118 -> swsh4.5sv)."""
+    m = re.match(r"^([A-Z]+)\d", str(number or ""))
+    return (SUBSETS.get(sid) or {}).get(m.group(1), sid) if m else sid
+
+
+def is_basic_energy(kind, en):
+    return kind == "energy" and bool(BASIC_ENERGY.match(str(en or "").strip()))
 
 _cache = {}
 
@@ -231,7 +258,81 @@ def price_of(card_id):
     return None, None
 
 
+# ---------- --relink : sans réseau ----------
+def _local_catalogue(root="."):
+    """{setId: {numéro normalisé: (localId, nom, i, dex, serie)}} depuis data/sets/."""
+    out = {}
+    for p in glob.glob(os.path.join(root, "data", "sets", "*.json")):
+        j = json.load(open(p, encoding="utf8"))
+        out[j["id"]] = {norm_num(c["l"]): (c["l"], c["n"], c["i"], c.get("d") or None, j.get("serie"))
+                        for c in j.get("cards", [])}
+    return out
+
+
+def _local_price(cid, root="."):
+    """Cote Cardmarket locale (data/market/prices/) : la plus basse des tendances / moyennes 30 j, normale ou holo,
+    comme price_of() ; None sans fichier."""
+    sid, lid = cid[:cid.rfind("-")], cid[cid.rfind("-") + 1:]
+    p = os.path.join(root, "data", "market", "prices", f"{sid}.json")
+    try:
+        row = json.load(open(p, encoding="utf8"))["c"].get(lid) or {}
+    except (OSError, ValueError, KeyError):
+        return None
+    vals = [v for f in ("normal", "holo") for v in ((row.get(f) or [None] * 4)[0], (row.get(f) or [None] * 4)[3])
+            if isinstance(v, (int, float)) and v > 0]
+    return round(min(vals) / 100, 2) if vals else None
+
+
+def relink(path=OUT, root="."):
+    """Réapplique les règles de liaison aux decks existants, sans réseau : énergies de base (9 types), sous-séries
+    (SHF SV118 -> swsh4.5sv-SV118, avec nom français, image, Pokédex et cote locales), apostrophes ; le prix total des
+    decks modifiés est recalculé."""
+    d = json.load(open(path, encoding="utf8"))
+    cat = _local_catalogue(root)
+    code_sid = {}  # code Limitless -> série TCGdex, d'après les lignes déjà reliées
+    for p in d["periods"]:
+        for k in p["decks"]:
+            for c in k["cards"]:
+                if c.get("id") and " " in (c.get("ref") or ""):
+                    code_sid.setdefault(c["ref"].split(" ")[0], c["id"][:c["id"].rfind("-")])
+    n_basic = n_link = 0
+    for p in d["periods"]:
+        for k in p["decks"]:
+            changed = False
+            k["name"] = typo(k.get("name"))
+            for c in k["cards"]:
+                c["name"] = typo(c.get("name"))
+                b = is_basic_energy(c.get("type"), c.get("en"))
+                if b != c.get("basicEnergy"):
+                    c["basicEnergy"] = b
+                    n_basic += 1
+                if c.get("id") or " " not in (c.get("ref") or ""):
+                    continue
+                code, num = c["ref"].split(" ", 1)
+                sid = code_sid.get(code) or CODE_OVERRIDES.get(code)
+                sid = subset_of(sid, num) if sid else None
+                hit = (cat.get(sid) or {}).get(norm_num(num)) if sid else None
+                if not hit:
+                    continue
+                lid, name, i, dex, serie = hit
+                c["id"] = f"{sid}-{lid}"
+                c["name"] = typo(name)
+                c["image"] = (f"https://assets.tcgdex.net/fr/{serie}/{sid}/{lid}" if i == 1
+                              else i if isinstance(i, str) else None)
+                c["dex"] = dex
+                c["price"] = _local_price(c["id"], root)
+                n_link += 1
+                changed = True
+            if changed:
+                k["price"] = round(sum((x["price"] or 0) * x["count"] for x in k["cards"]), 2)
+    json.dump(d, open(path, "w", encoding="utf8", newline="\n"), ensure_ascii=False, separators=(",", ":"))
+    print(f"-> {path} : {n_link} cartes reliées, {n_basic} drapeaux « énergie de base » corrigés")
+
+
 def main():
+    if "--relink" in sys.argv[1:]:
+        relink()
+        return
     code_map, en_sets = build_code_map()
     en2fr = species_names()
     periods = []
@@ -246,12 +347,13 @@ def main():
             cards = []
             for c in decklist(best[1]):
                 sid = resolve_code(c["set"], code_map, en_sets) if c["set"] else None
+                sid = subset_of(sid, c["number"]) if sid else None
                 tc, lang = tcgdex_card(sid, c["number"]) if sid else (None, None)
                 price, full = price_of(tc["id"]) if tc else (None, None)
-                basic = c["type"] == "energy" and bool(re.match(r"^(Basic )?\w+ Energy$", c["en"])) and "Special" not in c["en"]
+                basic = is_basic_energy(c["type"], c["en"])
                 cards.append({
                     "id": tc["id"] if tc else None,
-                    "name": (tc or {}).get("name") if lang == "fr" else translate(c["en"], en2fr),
+                    "name": typo((tc or {}).get("name") if lang == "fr" else translate(c["en"], en2fr)),
                     "en": c["en"], "count": c["count"], "type": c["type"],
                     "image": (tc or {}).get("image"), "price": price,
                     "dex": (full or {}).get("dexId"), "basicEnergy": basic,
@@ -260,7 +362,7 @@ def main():
             total = round(sum((x["price"] or 0) * x["count"] for x in cards), 2)
             decks.append({
                 "id": f"{period}-{a['id']}", "archetype": a["id"],
-                "name": translate(a["name"], en2fr), "en": a["name"], "share": a["share"],
+                "name": typo(translate(a["name"], en2fr)), "en": a["name"], "share": a["share"],
                 "placing": best[0], "event": best[2], "list": f"{LIMITLESS}/decks/list/{best[1]}",
                 "price": total, "cards": cards,
             })

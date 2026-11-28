@@ -1,5 +1,5 @@
 // Outils de grille de la Collection et de la page Pokémon (premier écran) : rendu par lots, tuile d'une version,
-// insertion à sa place.
+// insertion à sa place. renderGrid sert aussi aux longues listes de Séries, Série et Decks (un lot par image).
 import * as prices from '../../data/prices.js';
 
 const runs = new WeakMap();

@@ -1,11 +1,12 @@
-// Fiche carte : alertes de prix (les « envies » du Marché). IndexedDB via window.WishDB (js/state/wishes.js).
-// Une alerte par carte et par finition (clé « id|finition ») ; prévenu quand l'offre la moins chère entre dans la fourchette.
+// Fiche carte : alerte prix. L'objet enregistré est une « envie » (le même nom partout : ici, dans Marché › Envies et
+// dans les toasts). IndexedDB via window.WishDB (js/state/wishes.js). Une envie par carte et par finition
+// (clé « id|finition ») ; prévenu quand l'offre la moins chère entre dans la fourchette.
 import { html, raw } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { eur } from '../../core/format.js';
 import { openSheet } from '../../core/sheet.js';
 import { toast } from '../../core/toast.js';
-import { openRoot } from '../../core/router.js';
+import { go } from '../../core/router.js';
 import { LABEL, order } from '../../data/finishes.js';
 
 const W = () => (typeof window !== 'undefined' ? window.WishDB : null);
@@ -17,27 +18,37 @@ export async function wishesOf(id) {
   return all.filter(w => w?.id === id).sort((a, b) => order(a.variant) - order(b.variant));
 }
 
-const range = w => (Number(w.min) > 0 ? `${eur(Number(w.min))} – ${eur(Number(w.max))}` : `jusqu’à ${eur(Number(w.max))}`);
+// fourchette d'une envie, écrite de la même façon partout (fiche carte, Envies) : « jusqu’à 2,00 € », « 1,00 à 2,00 € »
+export const rangeText = w => {
+  const lo = Number(w.min) || 0, hi = Number(w.max);
+  return lo > 0 ? `${eur(lo).replace(/\s€$/, '')} à ${eur(hi)}` : `jusqu’à ${eur(hi)}`;
+};
+const range = rangeText;
 function stateOf(w) {
   if (w.inRange) return html`<span class="cp-in">Dans ta fourchette${w.low != null ? ` · dès ${eur(w.low)}` : ''}</span>`;
   if (w.low != null) return `En vente dès ${eur(w.low)}`;
   return w.checkedAt ? 'Aucune offre connue' : 'Prix pas encore vérifié';
 }
 
-// prix proposé : 90 % de la cote (arrondi au centime inférieur) ; aucun sur un prix toutes éditions (pas le sien)
+// prix max proposé : 10 % sous l'offre la moins chère du moment (ou sous la cote si elle est plus basse), arrondi au
+// centime inférieur. L'alerte compare l'offre la moins chère : proposer 90 % de la cote la mettait presque toujours
+// déjà « dans ta fourchette » (99,5 % des cartes ont une offre sous 90 % de leur cote), et elle ne prévenait jamais.
+// Aucun prix proposé sur un prix toutes éditions (pas le sien).
 export const suggestOf = p => {
   if (!p || p.allEditions) return null;
-  const ref = p.eur ?? p.trend ?? p.low;
-  return ref ? Math.floor(ref * 90) / 100 : null;
+  const refs = [p.low, p.eur ?? p.trend].filter(v => typeof v === 'number' && v > 0);
+  if (!refs.length) return null;
+  const v = Math.floor(Math.min(...refs) * 90) / 100;
+  return v >= 0.01 ? v : null;
 };
 const NO_OWN = 'Pas de prix propre à cette version';
 
 // lignes : alertes existantes (toucher = modifier, « Retirer ») + création.
 // allEditions(f) : la cote de f est celle de la carte de base (1re édition, tampon) : ni « en vente dès » ni « dans ta fourchette »
 export function rowsHTML(list, { fin, suggest, allEditions = () => false }) {
-  const rows = list.map(w => { const ae = allEditions(w.variant), ring = w.inRange && !ae; return html`<div class="row cp-wish" data-key="${w.key}"><button type="button" class="cp-wb" data-edit="${w.key}"><span class="lead">${icon(ring ? 'bell-ring' : 'bell')}</span><span class="body"><span class="t">${LABEL[w.variant] || w.variant} · ${range(w)}</span><span class="s"><span>${ae ? NO_OWN : stateOf(w)}</span></span></span></button><button type="button" class="btn text cp-del" data-del="${w.key}" aria-label="${`Retirer l’alerte ${LABEL[w.variant] || w.variant}`}">Retirer</button></div>`; });
+  const rows = list.map(w => { const ae = allEditions(w.variant), ring = w.inRange && !ae; return html`<div class="row cp-wish" data-key="${w.key}"><button type="button" class="cp-wb" data-edit="${w.key}"><span class="lead">${icon(ring ? 'bell-ring' : 'bell')}</span><span class="body"><span class="t">${LABEL[w.variant] || w.variant} · ${range(w)}</span><span class="s"><span>${ae ? NO_OWN : stateOf(w)}</span></span></span></button><button type="button" class="btn text cp-del" data-del="${w.key}" aria-label="${`Retirer l’envie ${LABEL[w.variant] || w.variant}`}">Retirer</button></div>`; });
   const has = list.some(w => w.variant === fin);
-  // W-H : « Me prévenir sous 7,12 € » (90 % de la cote de la finition en aperçu)
+  // W-H : « Me prévenir sous 7,12 € » (10 % sous l'offre la moins chère de la finition en aperçu)
   const title = suggest ? `Me prévenir sous ${eur(suggest)}` : 'Créer une alerte prix';
   const sub = `${LABEL[fin] || fin} · rejoint tes envies`;
   const add = has ? '' : html`<button type="button" class="row" data-new><span class="lead">${icon('bell')}</span><span class="body"><span class="t">${title}</span><span class="s"><span>${sub}</span></span></span>${icon('chevron-right', { cls: 'chev' })}</button>`;
@@ -69,9 +80,9 @@ export function openAlertSheet({ card, finishes, fin, existing = null, priceOf, 
     <p class="cp-now" aria-live="polite"></p>
     <p class="cp-err" role="alert" hidden></p>
     <button type="submit" class="btn primary block">${existing ? 'Enregistrer' : 'Me prévenir'}</button>
-    ${existing ? html`<button type="button" class="btn text danger cp-adel">Retirer l’alerte</button>` : ''}
+    ${existing ? html`<button type="button" class="btn text danger cp-adel">Retirer l’envie</button>` : ''}
   </form>`;
-  const s = openSheet({ title: existing ? 'Modifier l’alerte' : 'Alerte prix', body });
+  const s = openSheet({ title: existing ? 'Modifier l’envie' : 'Alerte prix', body });
   const form = s.el.querySelector('form');
   const now = form.querySelector('.cp-now');
   const err = form.querySelector('.cp-err');
@@ -81,7 +92,7 @@ export function openAlertSheet({ card, finishes, fin, existing = null, priceOf, 
   const showNow = f => {
     const p = priceOf(f);
     now.textContent = p?.allEditions ? `${NO_OWN}${p.eur != null ? ` · prix toutes éditions : cote ${eur(p.eur)}` : ''}`
-      : p?.low != null ? `En vente dès ${eur(p.low)}${p.eur != null ? ` · cote ${eur(p.eur)}` : ''}`
+      : p?.low != null ? `Actuellement dès ${eur(p.low)}${p.eur != null ? ` · cote ${eur(p.eur)}` : ''}`
       : p?.eur != null ? `Cote ${eur(p.eur)}` : 'Pas de prix connu pour cette version';
   };
   showNow(fin);
@@ -111,29 +122,33 @@ export function openAlertSheet({ card, finishes, fin, existing = null, priceOf, 
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') DB.enableAlerts?.().catch?.(() => {});
     const w = DB.make(card, f, { min, max });
     if (existing?.key === w.key && existing.createdAt) w.createdAt = existing.createdAt;
+    // nom anglais (lien « Voir sur Cardmarket » d'Envies) : déjà connu ici, Envies n'a plus à le demander à TCGdex
+    const en = card.en || existing?.en;
+    if (en && !w.en) w.en = en;
     const p = priceOf(f);
     if (p && !p.allEditions && (p.low != null || p.eur != null)) DB.update(w, { low: p.low ?? null, trend: p.trend ?? p.eur ?? null });
     try {
       if (existing && existing.key !== w.key) await DB.del(existing.key);
       await DB.put(w);
     } catch {
-      err.textContent = 'Enregistrement impossible : le stockage du navigateur est bloqué.';
+      err.textContent = 'Enregistrement impossible : le stockage du navigateur est bloqué';
       err.hidden = false;
       return;
     }
     await s.close();
     onDone?.();
-    const msg = w.inRange ? `Déjà dans ta fourchette : dès ${eur(w.low)}` : existing ? 'Alerte modifiée' : 'Ajoutée à tes envies';
-    toast(msg, { action: 'Voir', onAction: () => openRoot('#/marche/envies') });
+    const msg = w.inRange ? `Déjà dans ta fourchette : dès ${eur(w.low)}` : existing ? 'Envie modifiée' : 'Ajoutée à tes envies';
+    // « Voir » empile Envies sur l'écran courant : ← et Retour reviennent sur la fiche
+    toast(msg, { action: 'Voir', onAction: () => go('#/marche/envies') });
   });
   return s;
 }
 
-// retire une alerte, « Annuler » la remet telle quelle
+// retire une envie, « Annuler » la remet telle quelle
 export async function remove(w, onDone) {
   const DB = W();
   if (!w || !DB) return;
-  try { await DB.del(w.key); } catch { toast('Suppression impossible : le stockage du navigateur est bloqué.'); return; }
+  try { await DB.del(w.key); } catch { toast('Suppression impossible : le stockage du navigateur est bloqué'); return; }
   onDone?.();
-  toast('Alerte retirée', { action: 'Annuler', onAction: async () => { try { await DB.put(w); } catch { /* bloqué */ } onDone?.(); } });
+  toast('Envie retirée', { action: 'Annuler', onAction: async () => { try { await DB.put(w); } catch { /* bloqué */ } onDone?.(); } });
 }

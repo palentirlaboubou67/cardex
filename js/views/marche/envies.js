@@ -1,7 +1,7 @@
 // Marché › Envies (W-T) : alertes de prix (js/state/wishes.js, IndexedDB partagée avec le service worker), état des
 // notifications avec la demande de permission, vérification des prix, lien Cardmarket et suppression (Annuler).
 import { html, setHTML, delegate } from '../../core/dom.js';
-import { eur, dateShort, timeFr, plural, cardNo } from '../../core/format.js';
+import { eur, num, dateShort, timeFr, plural, cardNo } from '../../core/format.js';
 import { icon } from '../../core/icons.js';
 import { cardHref } from '../../core/router.js';
 import { infoSheet } from '../../core/sheet.js';
@@ -12,6 +12,7 @@ import { LABEL, DOT } from '../../data/finishes.js';
 import { metaSync } from '../../data/catalog.js';
 import { gql } from '../../data/tcgdex.js';
 import { whenIdle } from '../../core/idle.js';
+import { rangeText as range } from '../carte/alert.js';
 
 const W = () => window.WishDB || null;
 let box = null, ctx = null, visible = false, dirty = true, list = [], status = null, checking = false, inRange = false;
@@ -21,8 +22,6 @@ let focusAt = null;          // après une suppression au clavier : le focus va 
 const EN = new Map(), tried = new Set();       // id -> nom anglais, pour la session
 const enOf = w => (typeof w.en === 'string' && w.en) || EN.get(w.id) || '';
 const cmUrl = w => `https://www.cardmarket.com/fr/Pokemon/Products/Search?searchString=${encodeURIComponent(enOf(w) || w.name || '')}`;
-// « ≤ 6,00 € » quand le minimum est 0, sinon « 2,00–6,00 € »
-const range = w => { const lo = Number(w.min) || 0, hi = Number(w.max); return lo > 0 ? `${eur(lo).replace(/\s€$/, '')}–${eur(hi)}` : `≤ ${eur(hi)}`; };
 
 // ---------- notifications ----------
 const NOTIF = {
@@ -30,7 +29,7 @@ const NOTIF = {
     info: ['Ce navigateur ne peut pas afficher de notifications pour Cardex.', 'Sur iPhone et iPad, ajoute d’abord Cardex à l’écran d’accueil (Partager, puis « Sur l’écran d’accueil »), puis ouvre l’appli depuis son icône.', 'En attendant, les cartes dans ta fourchette s’affichent en vert ici et l’onglet Marché porte un point.'] },
   default: { t: 'Notifications désactivées', s: 'Sois prévenu quand une carte entre dans ta fourchette',
     info: ['Choisis une carte, fixe une fourchette de prix depuis sa fiche, et Cardex te prévient quand elle est en vente dans ta fourchette sur Cardmarket.'] },
-  denied: { t: 'Notifications bloquées', s: 'Réautorise-les dans les réglages du navigateur',
+  denied: { t: 'Notifications bloquées', s: 'Réautorise-les dans le navigateur',
     info: ['Les notifications de Cardex sont bloquées par ton navigateur. Réautorise-les dans ses réglages (site, puis Notifications).', 'En attendant, les cartes dans ta fourchette s’affichent en vert ici et l’onglet Marché porte un point.'] },
   bg: { t: 'Notifications activées', s: 'Prix vérifiés environ toutes les 12 h',
     info: ['Les prix sont vérifiés en arrière-plan environ toutes les 12 h, et à chaque ouverture de l’appli.', 'Tu es prévenu quand l’offre la moins chère d’une envie entre dans ta fourchette (une seule fois, à l’entrée).'] },
@@ -63,8 +62,9 @@ function wishHTML(w) {
 function headHTML() {
   const n = list.filter(w => w.inRange).length;
   const last = Math.max(0, ...list.map(w => w.checkedAt || 0));
-  const when = last ? `vérifié le ${dateShort(last)} à ${timeFr(last)}` : 'pas encore vérifié';
-  return html`<div class="sect mk-whead"><span class="grow" aria-live="polite">${checking ? 'Vérification des prix…' : `${n ? `${plural(n, 'envie', 'envies')} dans ta fourchette` : 'Aucune envie dans ta fourchette'} · ${when}`}</span><button type="button" class="link" data-check${checking ? ' disabled' : ''}>Vérifier</button></div>`;
+  const when = last ? `vérifié le ${dateShort(last)} à ${timeFr(last)}` : 'jamais vérifié';
+  // deux morceaux insécables : à l'étroit, la date passe à la ligne au lieu d'être coupée
+  return html`<div class="sect mk-whead"><span class="grow" aria-live="polite">${checking ? 'Vérification des prix…' : html`<span>${n ? `${num(n)} dans ta fourchette` : 'Aucune dans ta fourchette'}</span> <span>· ${when}</span>`}</span><button type="button" class="link" data-check${checking ? ' disabled' : ''}>Vérifier</button></div>`;
 }
 
 function render() {
@@ -76,7 +76,7 @@ function render() {
   const sorted = list.slice().sort((a, b) => (b.inRange - a.inRange) || ((b.createdAt || 0) - (a.createdAt || 0)));
   const body = sorted.length
     ? html`${headHTML()}<div class="group mk-list mk-wlist">${sorted.map(wishHTML)}</div><p class="caption mk-credit">Prix : offre la moins chère en vente sur Cardmarket, toutes langues et états.</p>`
-    : html`<div class="empty"><span class="ic">${icon('bell')}</span><b>Aucune envie pour l’instant</b><p>Ouvre une carte (scan, recherche ou série) et crée une alerte prix depuis sa fiche.</p><a class="btn" href="#/series">Parcourir les séries</a></div>`;
+    : html`<div class="empty"><span class="ic">${icon('bell')}</span><b>Aucune envie pour l’instant</b><p>Ouvre une carte (scan, recherche ou série) et crée une alerte prix depuis sa fiche.</p><a class="btn" href="#/series" data-push>Parcourir les séries</a></div>`;
   setHTML(box, html`<div class="mk-nbox" data-content>${notifHTML()}</div>${body}`);
   fetchEn();
   if (focusAt != null) {

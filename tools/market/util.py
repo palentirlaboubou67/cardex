@@ -60,6 +60,11 @@ def straight(s):
             .replace("–", "-").replace("—", "-").replace("‑", "-").replace(" ", " "))
 
 
+def typo(s):
+    """Apostrophe typographique dans un nom affiché (« Coffret Dresseur d’Élite », comme l'interface)."""
+    return s.replace("'", "’") if isinstance(s, str) else s
+
+
 def norm_words(s):
     """Clé de comparaison souple : minuscules ASCII, mots séparés par une espace."""
     s = ascii_fold(straight(s)).lower()

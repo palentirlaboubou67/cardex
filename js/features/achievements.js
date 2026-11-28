@@ -7,8 +7,7 @@ import * as col from '../state/collection.js';
 import * as prices from '../data/prices.js';
 import { pokedex, dexNums } from '../data/dex.js';
 import { sets as catalogSets, goalOf } from '../data/catalog.js';
-import { data } from '../core/net.js';
-import { norm } from '../core/format.js';
+import * as decks from '../data/decks.js';
 import { whenIdle } from '../core/idle.js';
 import { toast } from '../core/toast.js';
 import * as router from '../core/router.js';
@@ -20,7 +19,7 @@ const KANTO = range(1, 151);
 const EEVEE = [133, 134, 135, 136, 196, 197, 470, 471, 700];
 
 let unlocked = null;          // { id: ms (0 = date inconnue) }
-let SETS = null, DECKS = null, decksP = null;
+let SETS = null;
 let started = false, timer = 0, silent = false;
 // collection déjà là sans liste de succès (premier lancement, liste v1 reprise) : calculs sans toast et sans date
 // (0 = inconnue) jusqu'au premier calcul complet : Pokédex, séries, cotes chargés et finitions v1 revues par main.js
@@ -58,41 +57,17 @@ function save() {
 }
 
 // ---------- données ----------
-// decks de la méta (data/decks.json) : lignes [clé du nom, nombre, énergie de base] par deck
-function loadDecks() {
-  if (DECKS) return Promise.resolve(DECKS);
-  decksP ??= data('data/decks.json').then(d => {
-    const out = [];
-    for (const p of d?.periods || []) {
-      for (const k of p?.decks || []) {
-        if (!Array.isArray(k?.cards)) continue;
-        out.push({ name: k.name || k.en || '', rows: k.cards.map(c => [norm(c.name || c.en), c.count | 0, !!c.basicEnergy]) });
-      }
-    }
-    DECKS = out;
-    return DECKS;
-  }).catch(e => { decksP = null; throw e; });
-  return decksP;
-}
 const loadSets = () => catalogSets().then(s => { SETS = s; return s; });
-
-// Pour jouer, n'importe quelle impression convient : comparaison par nom, toutes finitions confondues.
-// Les énergies de base comptent comme possédées (même règle que l'ancienne appli).
-function deckPct(deck, owned) {
-  const used = new Map();
-  let have = 0, total = 0;
-  for (const [key, count, basic] of deck.rows) {
-    const left = basic ? Infinity : (owned.get(key) || 0) - (used.get(key) || 0);
-    const got = Math.max(0, Math.min(count, left));
-    used.set(key, (used.get(key) || 0) + got);
-    have += got; total += count;
-  }
-  return total ? have / total : 0;
-}
+// decks de la méta : la même lecture et la même règle que l'écran Decks (js/data/decks.js : comparaison par nom,
+// seules les 9 énergies de base comptent comme possédées). Chargés à la demande (écran Succès, ou collection
+// modifiée), pas à chaque démarrage : data/decks.json pèse 70 Ko.
+// quiet : lecture lancée par un import ou un autre onglet (le calcul qui suit reste sans toast, comme l'import)
+const loadDecks = (quiet = false) => decks.load().then(() => { if (deckWanted()) { if (quiet) silent = true; schedule(200); } }, () => null);
+const deckWanted = () => col.all().length > 0 && !Object.prototype.hasOwnProperty.call(load() || {}, 'deck');
 
 // Tout ce qu'il faut pour un calcul complet (écran Succès) : Pokédex, séries, decks, cotes. Ne rejette jamais.
 export function ready() {
-  return Promise.allSettled([pokedex(), loadSets(), loadDecks(), col.ensurePrices()]).then(r => { full = true; return r; });
+  return Promise.allSettled([pokedex(), loadSets(), decks.load(), col.ensurePrices()]).then(r => { full = true; return r; });
 }
 
 // ---------- calcul ----------
@@ -110,9 +85,10 @@ function compute() {
     }
   }
   let deckBest = 0, deckName = '';
-  if (DECKS && recs.length) {
-    const owned = col.ownedByName();
-    for (const d of DECKS) { const p = deckPct(d, owned); if (p > deckBest) { deckBest = p; deckName = d.name; } }
+  if (decks.loaded() && recs.length) {
+    for (const p of decks.periods()) {
+      for (const d of p.decks) { const x = decks.pctOf(d); if (x > deckBest) { deckBest = x; deckName = d.name; } }
+    }
   }
   const dups = recs.reduce((a, r) => a + Object.values(r.qty).reduce((x, n) => x + Math.max(0, n - 1), 0), 0);
   const pika = recs.reduce((a, r) => a + (dexNums(r).includes(25) ? 1 : 0), 0);
@@ -154,11 +130,39 @@ export function list() {
 export const on = fn => (subs.add(fn), () => subs.delete(fn));
 const notify = () => subs.forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
 
+// « Voir » : Succès s'ouvre par-dessus l'écran courant (← et Retour y reviennent), sans changer d'onglet
 const SUCCES = '#/collection/succes';
 function openList() {
   if (location.hash.startsWith(SUCCES)) return;
   if (router.parse()?.view === 'collection') router.go(SUCCES, { replace: true });
-  else router.openRoot(SUCCES);
+  else router.go(SUCCES);
+}
+
+// Un toast avec action (« Annuler » d'un ajout) ne doit pas être remplacé par « Succès débloqué » : le succès attend
+// qu'il soit parti (core/toast.js n'en montre qu'un). Un toast persistant (« Nouvelle version », stockage) n'est pas
+// attendu : vu depuis plus de 12 s, il ne bloque plus. Un toast sans action (« Ajout annulé », qui suit l'appui sur
+// « Annuler ») reste lisible au moins 1,5 s avant d'être remplacé.
+const seen = new WeakMap();
+function actionToastUp() {
+  const now = Date.now();
+  for (const t of document.querySelectorAll('.toast:not(.out)')) {
+    if (!seen.has(t)) seen.set(t, now);
+    if (now - seen.get(t) < (t.classList.contains('has-act') ? 12e3 : 1500)) return true;
+  }
+  return false;
+}
+let queued = [], waitT = 0;
+function announce(titles) {
+  queued.push(...titles);                         // succès débloqués pendant l'attente : un seul toast pour tous
+  clearTimeout(waitT);
+  const tryShow = () => {
+    if (!queued.length) return;
+    if (actionToastUp()) { waitT = setTimeout(tryShow, 400); return; }
+    const t = queued;
+    queued = [];
+    toast(t.length === 1 ? `Succès débloqué : ${t[0]}` : `${t.length} succès débloqués`, { action: 'Voir', onAction: openList });
+  };
+  tryShow();
 }
 
 // nouveau calcul : les succès atteints sont notés (avec la date) ; toast sauf au premier lancement ou après un import
@@ -175,14 +179,14 @@ export function check({ quiet = false } = {}) {
     if (have >= need && !Object.prototype.hasOwnProperty.call(unlocked, id)) { unlocked[id] = when; fresh.push(title); }
   }
   if (first || fresh.length) save();
-  if (fresh.length && !first && !q) {
-    toast(fresh.length === 1 ? `Succès débloqué : ${fresh[0]}` : `${fresh.length} succès débloqués`, { action: 'Voir', onAction: openList });
-  }
+  if (fresh.length && !first && !q) announce(fresh);
   if (fresh.length) notify();
   return fresh;
 }
 
 function reset() {
+  queued = [];
+  clearTimeout(waitT);
   const prev = load();
   if (prev && Object.keys(prev).length) cleared = { at: prev, until: Date.now() + UNDO };
   unlocked = {};
@@ -217,11 +221,11 @@ export function init() {
     if (reload && !col.all().length) { clearTimeout(timer); reset(); return; }   // collection vidée
     if (!reload && !evs.some(e => e.type === 'qty')) return;
     if (reload) { silent = true; if (cleared) restore(); }   // import, autre onglet, « Annuler » : sans toast
+    if (!decks.loaded() && deckWanted()) loadDecks(reload);  // decks lus au premier changement (succès « tournoi »)
     schedule();
   });
   prices.on(() => schedule(1200));
   addEventListener('storage', e => { if (e.key === KEY) { unlocked = null; load(); notify(); } });
-  // données au repos ; les decks seulement si le succès « tournoi » reste à gagner (70 Ko)
-  const needDecks = col.all().length && !Object.prototype.hasOwnProperty.call(load(), 'deck');
-  Promise.allSettled([pokedex(), loadSets(), needDecks ? loadDecks() : null, col.ensurePrices()]).then(() => { full = true; schedule(0); });
+  // données au repos ; les decks (70 Ko) attendent le premier changement de la collection ou l'écran Succès
+  Promise.allSettled([pokedex(), loadSets(), col.ensurePrices()]).then(() => { full = true; schedule(0); });
 }

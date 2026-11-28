@@ -123,14 +123,24 @@ export function _reset() { files.clear(); manifestP = null; manifestAt = 0; infl
 // ---------- Première visite ----------
 // La page a tout chargé avant que le service worker prenne la main : quand il la prend, on lui donne la liste
 // (fichiers de l'appli, données, images déjà affichées) pour qu'il en garde une copie (rechargement hors ligne).
+// Ce qui était encore en route à ce moment-là (modules d'une vue, fichiers de données) n'est ni dans cette liste ni
+// passé par le service worker : un second envoi le donne quelques secondes plus tard.
+const LATE_MS = 3000;
 try {
   const sw = globalThis.navigator?.serviceWorker;
   if (sw && !sw.controller && typeof performance?.getEntriesByType === 'function') {
     sw.addEventListener('controllerchange', () => {
+      const send = urls => {
+        try { sw.controller?.postMessage({ type: 'seen', urls: urls.filter(u => /^https?:/.test(u)) }); } catch { /* rien */ }
+      };
+      const t0 = performance.now();
+      try { send([location.href.split('#')[0], ...performance.getEntriesByType('resource').map(e => e.name)]); } catch { /* rien */ }
       try {
-        const urls = [location.href.split('#')[0], ...performance.getEntriesByType('resource').map(e => e.name)];
-        sw.controller?.postMessage({ type: 'seen', urls: urls.filter(u => /^https?:/.test(u)) });
-      } catch { /* rien */ }
+        const late = new Set();
+        const po = new PerformanceObserver(l => { for (const e of l.getEntries()) if (e.startTime <= t0) late.add(e.name); });
+        po.observe({ type: 'resource' });
+        setTimeout(() => { po.disconnect(); if (late.size) send([...late]); }, LATE_MS);
+      } catch { /* pas de PerformanceObserver : la première liste suffit presque toujours */ }
     }, { once: true });
   }
 } catch { /* pas de service worker (http local, navigation privée) */ }

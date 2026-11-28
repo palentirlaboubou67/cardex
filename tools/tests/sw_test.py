@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'f2'))
@@ -461,25 +462,39 @@ async def main():
         # ---------- 8. plafonds des caches d'images (FIFO), avec des plafonds réduits pour le test ----------
         async def t_caps():
             sw, _, _ = stamped(SITE)
-            patched = sw.replace("['cardex-img-cards', 3000]", "['cardex-img-cards', 5]").replace('< 60000) return;', '< 0) return;')
-            check(patched.count("['cardex-img-cards', 5]") == 2 and '< 0) return;' in patched, 'plafonds remplacés dans la copie de sw.js')
-            srv.pages['sw.js'] = (patched, 'text/javascript; charset=utf-8')
-            ctx3, ext3 = await new_ctx()
-            try:
-                q = await ctx3.new_page()
-                await q.goto(srv.url)
-                await q.wait_for_function(CONTROLLED, timeout=30000)
-                urls = [f'https://assets.tcgdex.net/fr/test/t/{i:03d}/low.webp' for i in range(12)]
-                for u in urls:
-                    eq(await q.evaluate(LOAD_IMG, [u, True]), 'ok', 'image')
-                await q.wait_for_timeout(800)
-                dump = await q.evaluate(DUMP)
-            finally:
-                del srv.pages['sw.js']
-                await ctx3.close()
-            kept = [x['url'] for x in dump.get('cardex-img-cards', [])]
+            # 1) plafond exact quand chaque ajout peut couper (pas d'écart minimal entre deux coupes)
+            patched = sw.replace("['cardex-img-cards', 3000]", "['cardex-img-cards', 5]").replace('TRIM_GAP = 60000', 'TRIM_GAP = 0')
+            check(patched.count("['cardex-img-cards', 5]") == 2 and 'TRIM_GAP = 0' in patched, 'plafonds remplacés dans la copie de sw.js')
+            urls = [f'https://assets.tcgdex.net/fr/test/t/{i:03d}/low.webp' for i in range(12)]
+
+            async def run(code, pause_ms):
+                srv.pages['sw.js'] = (code, 'text/javascript; charset=utf-8')
+                ctx3, ext3 = await new_ctx()
+                try:
+                    q = await ctx3.new_page()
+                    await q.goto(srv.url)
+                    await q.wait_for_function(CONTROLLED, timeout=30000)
+                    for u in urls:
+                        eq(await q.evaluate(LOAD_IMG, [u, True]), 'ok', 'image')
+                    await q.wait_for_timeout(300)
+                    burst = [x['url'] for x in (await q.evaluate(DUMP)).get('cardex-img-cards', [])]
+                    await q.wait_for_timeout(pause_ms)
+                    after = [x['url'] for x in (await q.evaluate(DUMP)).get('cardex-img-cards', [])]
+                finally:
+                    del srv.pages['sw.js']
+                    await ctx3.close()
+                return burst, after
+
+            _, kept = await run(patched, 500)
             eq(kept, urls[-5:], 'les 5 plus récentes gardées (FIFO)')
-            return f'12 images, {len(kept)} gardées'
+            # 2) une coupe par intervalle : un afflux dépasse le plafond de moins de TRIM_BURST entrées, puis la coupe
+            # prévue à la fin de l'intervalle revient au plafond même sans nouvel ajout
+            gap = sw.replace("['cardex-img-cards', 3000]", "['cardex-img-cards', 5]").replace('TRIM_GAP = 60000', 'TRIM_GAP = 2500').replace('TRIM_BURST = 20', 'TRIM_BURST = 4')
+            check('TRIM_GAP = 2500' in gap and 'TRIM_BURST = 4' in gap, 'intervalle et afflux remplacés dans la copie de sw.js')
+            burst, after = await run(gap, 3500)
+            check(5 <= len(burst) <= 5 + 3, 'afflux : au plus plafond + TRIM_BURST − 1 entrées', len(burst))
+            eq(after, urls[-5:], 'coupe prévue en fin d’intervalle : retour au plafond (FIFO)')
+            return f'12 images : {len(kept)} gardées ; afflux {len(burst)} puis {len(after)}'
 
         # ---------- 9. sw.js du dépôt (mode développement) : hors ligne après une première visite ----------
         async def t_dev():
@@ -495,10 +510,11 @@ async def main():
                 q.on('console', lambda m: errs.append(m.text) if m.type == 'error' and 'manifest.json' not in (m.location or {}).get('url', '') else None)
                 await q.goto(srv.url + '#/collection/cartes')
                 await q.wait_for_function(CONTROLLED, timeout=30000)
-                prev = -1
-                for _ in range(60):                            # copie de ce que la page a chargé avant la prise de main
+                prev, t_ctl = -1, time.monotonic()
+                for _ in range(80):                            # copie de ce que la page a chargé avant la prise de main
                     n = await q.evaluate("caches.open('cardex-app-dev').then(c => c.keys()).then(k => k.length)")
-                    if n == prev and n >= 20:
+                    # js/core/net.js envoie une seconde liste 3 s après la prise de main (fichiers encore en route)
+                    if n == prev and n >= 20 and time.monotonic() - t_ctl > 4.5:
                         break
                     prev = n
                     await asyncio.sleep(0.3)

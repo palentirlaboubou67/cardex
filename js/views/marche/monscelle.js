@@ -1,10 +1,12 @@
 // Marché › Mon scellé (W-S) : valeur actuelle, investi, plus-value et rendement des produits possédés (col.sealedSet,
-// prix d'achat à l'unité). Le scellé de l'ancienne version (identifiants TCGplayer) est relié à Cardmarket au passage.
+// prix d'achat à l'unité). Le scellé et les produits suivis de l'ancienne version (identifiants TCGplayer) sont reliés
+// à Cardmarket dès le chargement de ce module (main.js précharge le Marché au repos) et après chaque import.
 import { html, setHTML, delegate } from '../../core/dom.js';
 import { eur, eurDelta, pct, num, plural, dateFr } from '../../core/format.js';
 import { icon } from '../../core/icons.js';
 import { infoSheet } from '../../core/sheet.js';
 import { MESSAGES } from '../../core/net.js';
+import { whenIdle } from '../../core/idle.js';
 import * as col from '../../state/collection.js';
 import * as sealed from '../../data/sealed.js';
 import { pimgHTML, ready as ptileReady, changeOf } from '../ptile.js';
@@ -55,10 +57,19 @@ function render() {
 <p class="caption mk-credit">${db?.priceDate ? `Cotes Cardmarket du ${dateFr(db.priceDate)}` : ''}</p>`);
 }
 
-// relie une fois le scellé de l'ancienne version (table sealed-img.json), sans bloquer l'affichage
+// relie le scellé et les produits suivis de l'ancienne version (table sealed-img.json), sans bloquer l'affichage ;
+// ce qui n'a pas d'équivalent reste « à retrouver » (ligne ci-dessus)
 function linkLegacy() {
-  if (linking || !col.legacySealed().sealed.length && !col.legacySealed().watch.length) return;
-  linking = col.linkLegacySealed().catch(() => null);   // émet 'reload' si des produits ont été retrouvés
+  const old = col.legacySealed();
+  if (linking || (!old.sealed.length && !old.watch.length)) return;
+  // émet 'reload' si des produits ont été retrouvés ; un nouvel essai reste possible (import, hors ligne)
+  linking = col.linkLegacySealed().catch(() => null).finally(() => { linking = null; });
+}
+// une collection v1 qui suit des produits sans en posséder n'a aucune raison d'ouvrir Mon scellé : le lien se fait au
+// repos dès que le Marché est chargé, puis après un import (événement 'reload')
+if (typeof window !== 'undefined') {
+  whenIdle(linkLegacy, { timeout: 4000 });
+  col.on(evs => { if (evs.some(e => e.type === 'reload')) whenIdle(linkLegacy, { timeout: 4000 }); });
 }
 
 // catalogue chargé si besoin (squelette pendant le chargement), puis rendu ; un seul chargement à la fois

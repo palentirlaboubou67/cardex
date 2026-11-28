@@ -1,5 +1,5 @@
 // Page d'un deck (FINAL-design W-O) : cartes possédées / à acheter (par nom, toutes impressions confondues),
-// prix du deck et du reste, ajout des manquantes aux envies (alerte 10 % sous la cote, comme la fiche carte),
+// prix du deck et du reste, ajout des manquantes aux envies (alerte 10 % sous l'offre la moins chère, comme la fiche carte),
 // liste sur Limitless. Collection ou cotes changées : la page est corrigée en place (jamais refaite).
 import { setBar } from '../core/appbar.js';
 import { html, raw, setHTML, delegate } from '../core/dom.js';
@@ -13,6 +13,7 @@ import * as prices from '../data/prices.js';
 import * as catalog from '../data/catalog.js';
 import * as col from '../state/collection.js';
 import { artHTML, cardImgHTML, restText, stateIcon, infoDecks, footText, sleep } from './decks/ui.js';
+import { suggestOf } from './carte/alert.js';
 
 const GROUPS = [['pokemon', 'Pokémon'], ['trainer', 'Dresseurs'], ['energy', 'Énergies']];
 // paintedId : deck dont les lignes sont à l'écran (pas le squelette) ; painted : état de collection et de cotes affiché
@@ -182,16 +183,17 @@ async function wishButton() {
   const left = have ? todo.filter(r => !have.has(r.c.id)).length : todo.length;
   const focused = box.contains(document.activeElement);
   if (left && box.querySelector('[data-wish]')) { box.querySelector('[data-wish]').disabled = busy; }
-  else setHTML(box, left ? addBtn() : html`<a class="btn" href="#/marche/envies">${icon('check')}Manquantes dans tes envies</a>`);
+  else setHTML(box, left ? addBtn() : html`<a class="btn" href="#/marche/envies" data-push>${icon('check')}Manquantes dans tes envies</a>`);
   if (focused && !box.contains(document.activeElement)) box.querySelector('.btn')?.focus({ preventScroll: true });
   if (acts) acts.hidden = false;
 }
 
-// prix max proposé : 10 % sous la cote, arrondi au centime inférieur (même règle que l'alerte de la fiche carte)
-const maxOf = cote => Math.max(0.01, Math.floor(cote * 90) / 100);
+// prix max proposé : même règle que l'alerte de la fiche carte (10 % sous l'offre la moins chère du moment, ou sous
+// la cote si elle est plus basse) : l'envie ne naît pas déjà « dans ta fourchette », elle prévient quand ça baisse
+const maxOf = best => suggestOf(best) ?? 0.01;
 
-// une alerte par carte manquante (finition jouable la moins chère), 10 % sous sa cote : prévenu dès qu'une offre
-// passe à ce prix ou moins. Celles déjà dans la fourchette (offre moins chère en ce moment) sont comptées dans le
+// une envie par carte manquante (finition jouable la moins chère), sous l'offre la moins chère : prévenu dès qu'une
+// offre passe à ce prix ou moins. Celles déjà dans la fourchette (rare : cote sans offre connue) sont comptées dans le
 // message. « Annuler » retire les envies ajoutées.
 async function addMissing() {
   const db = W();
@@ -225,7 +227,8 @@ async function addMissing() {
       if (!best) { noPrice++; continue; }
       const meta = catalog.metaSync(card.setId);
       const w = db.make({ ...card, setName: card.setName || meta?.name || '', setTotal: card.setTotal || meta?.total || null },
-        best.f, { min: 0, max: maxOf(best.eur) });
+        best.f, { min: 0, max: maxOf(best) });
+      if (r.c.en && !w.en) w.en = r.c.en;                  // nom anglais : lien Cardmarket d'Envies sans requête
       // comme la fiche carte : offre la moins chère connue tout de suite (dans la fourchette ou non, dit dans le message)
       db.update(w, { low: best.low ?? null, trend: best.trend ?? best.eur });
       try { await db.put(w); added.push(w.key); if (w.inRange) inRange++; } catch { /* base indisponible : carte ignorée */ }

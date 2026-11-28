@@ -1,7 +1,7 @@
 // Marché › Cotes (W-P) : valeur de la collection, variation (moy. 7 j vs 30 j), cartes en hausse, en baisse, les plus
 // chères. Cotes Cardmarket des fichiers par série (js/data/prices.js) ; une ligne par carte et par finition possédée.
 import { html, setHTML, delegate } from '../../core/dom.js';
-import { eur, num, plural, cardNo, dateFr } from '../../core/format.js';
+import { eur, num, plural, cardNo, dateFr, nbsp } from '../../core/format.js';
 import { icon } from '../../core/icons.js';
 import { cardHref, setParams } from '../../core/router.js';
 import { deltaHTML } from '../../components/chart.js';
@@ -48,6 +48,11 @@ function list(d) {
   return d.rows.filter(r => r.ch != null && r.ch > 0.5).sort((a, b) => b.ch - a.ch || b.now - a.now);
 }
 
+// moyennes en abrégé (W-P) : « 7 j 1 725 € · 30 j 1 166 € », sans centimes à partir de 100 €
+const NF0 = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+const eurShort = v => (v >= 100 ? nbsp(NF0.format(Math.round(v))) : eur(v));
+const avgPart = (k, v) => `${k} j ${eurShort(v).replace(/ /g, ' ')}`;   // insécables : coupure au « · » seulement
+
 const tri = (d, n) => html`<span class="mk-tri ${d}">${icon(d, { size: 9 })}<span>${num(n)}</span><span class="sr"> ${d === 'up' ? 'en hausse' : 'en baisse'}</span></span>`;
 
 function rowHTML(r) {
@@ -55,11 +60,14 @@ function rowHTML(r) {
   const no = cardNo(rec.localId, rec.setTotal);
   const fin = f !== 'normal' ? html`<span class="mk-fin"><i class="${DOT[f] || 'fd'}" aria-hidden="true"></i>${LABEL[f] || f}</span>` : '';
   const avg = r.ae ? 'Prix toutes éditions'
-    : [r.a7 ? `moy. 7 j ${eur(r.a7)}` : '', r.a30 ? `moy. 30 j ${eur(r.a30)}` : ''].filter(Boolean).join(' · ');
+    : [r.a7 ? avgPart(7, r.a7) : '', r.a30 ? avgPart(30, r.a30) : ''].filter(Boolean).join(' · ');
   const label = [rec.name, rec.setName, no, f !== 'normal' ? LABEL[f] : '', n > 1 ? `×${n}` : '', r.ae ? `prix toutes éditions ${eur(r.now)}` : eur(r.now),
-    r.ch != null ? `${r.ch > 0 ? 'hausse' : 'baisse'} de ${Math.abs(r.ch).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %` : ''].filter(Boolean).join(', ');
-  return html`<a class="row mk-crow" href="${cardHref(rec.id, f === 'normal' ? null : f)}" data-card="${rec.id}" aria-label="${label}"><span class="thumb">${imgHTML(rec, { q: 'low' })}</span><span class="body"><span class="t">${rec.name}</span><span class="s"><span>${[rec.setName, no].filter(Boolean).join(' · ')}</span>${fin}${n > 1 ? html`<span class="mk-n">×${n}</span>` : ''}</span>${
-    avg ? html`<span class="s mk-avg"><span>${avg}</span></span>` : ''}</span><span class="end"><span class="price">${eur(r.now)}</span>${r.ch != null ? deltaHTML(r.ch) : ''}</span></a>`;
+    r.ch != null ? `${r.ch > 0 ? 'hausse' : 'baisse'} de ${Math.abs(r.ch).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %` : '',
+    r.a7 ? `moyenne sur 7 jours ${eur(r.a7)}` : '', r.a30 ? `moyenne sur 30 jours ${eur(r.a30)}` : ''].filter(Boolean).join(', ');
+  // ligne 2 : le numéro d'abord (jamais coupé), puis la série (raccourcie si besoin) ;
+  // ligne 3 : finition, quantité et moyennes, sur deux lignes plutôt que coupées
+  return html`<a class="row mk-crow" href="${cardHref(rec.id, f === 'normal' ? null : f)}" data-card="${rec.id}" aria-label="${label}"><span class="thumb">${imgHTML(rec, { q: 'low' })}</span><span class="body"><span class="t">${rec.name}</span><span class="s"><span>${[no, rec.setName].filter(Boolean).join(' · ')}</span></span>${
+    fin || n > 1 || avg ? html`<span class="s mk-avg">${fin}${n > 1 ? html`<span class="mk-n">×${n}</span>` : ''}${avg ? html`<span class="mk-avgt">${avg}</span>` : ''}</span>` : ''}</span><span class="end"><span class="price">${eur(r.now)}</span>${r.ch != null ? deltaHTML(r.ch) : ''}</span></a>`;
 }
 
 function emptyFor() {

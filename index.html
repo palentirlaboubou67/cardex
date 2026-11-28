@@ -40,13 +40,7 @@
   <link rel="preload" href="fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="css/tokens.css">
   <link rel="stylesheet" href="css/base.css">
-  <!-- styles des vues (vague 2 ; un fichier absent ne bloque rien) -->
-  <link rel="stylesheet" href="css/views/collection.css">
-  <link rel="stylesheet" href="css/views/series.css">
-  <link rel="stylesheet" href="css/views/carte.css">
-  <link rel="stylesheet" href="css/views/scanner.css">
-  <link rel="stylesheet" href="css/views/marche.css">
-  <link rel="stylesheet" href="css/views/decks.css">
+  <!-- styles des vues (css/views/*.css) : ajoutés par js/main.js à la première visite de chaque vue -->
   <!-- modules du démarrage chargés en parallèle (pas de cascade d'imports) -->
   <link rel="modulepreload" href="js/main.js">
   <link rel="modulepreload" href="js/core/router.js">
@@ -64,7 +58,6 @@
   <link rel="modulepreload" href="js/data/images.js">
   <link rel="modulepreload" href="js/data/prices.js">
   <link rel="modulepreload" href="js/data/finishes.js">
-  <link rel="modulepreload" href="js/data/tcgdex.js">
   <link rel="modulepreload" href="js/data/dex.js">
   <script src="js/state/wishes.js" defer></script>
   <script type="module" src="js/main.js" onerror="__bootFail()"></script>

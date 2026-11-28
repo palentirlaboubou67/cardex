@@ -7,6 +7,7 @@
 3. message 'navigate' du service worker -> la route demandée ;
 4. collection v1 : « normale » -> « holo » sur les cartes holo seulement (checkFinishes au repos), drapeau retiré ;
 5. ordre des blocs (grandes périodes puis McDonald's, kits, POP), drapeaux dark/special ; objectif des barres (svp : 220).
+6. sauvegarde v1 importée appli ouverte : finitions revues sans recharger ; export pendant la correction : fixFin gardé.
 """
 import argparse
 import functools
@@ -119,6 +120,52 @@ with sync_playwright() as p:
     check(r["pop"]["dark"] is True and r["pop"]["special"] is True, "bloc POP : dark + special")
     check(r["svp"] == 220 and r["mew"] == 165, "objectif : svp 220, 151 165", (r["svp"], r["mew"]))
     check(not errs, "aucune erreur console (5)", errs)
+    ctx.close()
+
+    # 6. sauvegarde v1 importée dans l'appli ouverte : finitions revues tout de suite (pas au prochain démarrage) ;
+    # exportée avant la correction (série injoignable), le fichier garde fixFin et l'appareil qui l'importe corrige
+    empty = '{"v":2,"cards":{},"sealed":{},"watch":[],"savedAt":0}'
+    STATE = """async () => { const C = await import('./js/state/collection.js');
+      return { need: C.needsFinishCheck(), n199: C.qtyOf('sv03.5-199', 'normal'), h199: C.qtyOf('sv03.5-199', 'holo'),
+               h006: C.qtyOf('sv03.5-006', 'holo'), n006: C.qtyOf('sv03.5-006', 'normal'), r006: C.qtyOf('sv03.5-006', 'reverse') }; }"""
+    FIXED = {"need": False, "n199": 0, "h199": 1, "h006": 1, "n006": 0, "r006": 1}
+    IMPORT = "async (t) => { const C = await import('./js/state/collection.js'); window.__C = C; return C.importText(t).cards; }"
+    DONE = "() => window.__C && !window.__C.needsFinishCheck()"
+
+    def wait_fixed(pg):
+        try:
+            pg.wait_for_function(DONE, timeout=10000)
+        except Exception:
+            pass
+
+    ctx, pg, errs = boot(b, "#/collection/cartes", ls=empty)
+    pg.wait_for_timeout(4500)            # tâches de fond lancées (checkFinishes au repos)
+    n = pg.evaluate(IMPORT, sample)
+    wait_fixed(pg)
+    st = pg.evaluate(STATE)
+    check(n > 0 and st == FIXED, "import v1 dans l'appli ouverte : finitions revues sans recharger", (n, st))
+    check(not errs, "aucune erreur console (6a)", errs)
+    ctx.close()
+
+    ctx, pg, errs = boot(b, "#/collection/cartes", ls=empty)
+    # série injoignable (fichier et TCGdex en direct) : correction en attente
+    ctx.route("**/data/sets/sv03.5.json*", lambda r: r.abort())
+    ctx.route("https://api.tcgdex.net/**", lambda r: r.abort())
+    pg.wait_for_timeout(4500)
+    pg.evaluate(IMPORT, sample)
+    pg.wait_for_timeout(1500)
+    pending = pg.evaluate(STATE)
+    out = pg.evaluate("async () => JSON.parse((await import('./js/state/collection.js')).exportText())")
+    check(pending["need"] and out.get("fixFin") == 1 and out["cards"]["sv03.5-199"]["qty"] == {"normal": 1},
+          "export pendant la correction : fixFin gardé dans le fichier", (pending, out.get("fixFin")))
+    ctx.close()
+    ctx, pg, errs = boot(b, "#/collection/cartes", ls=empty)
+    pg.wait_for_timeout(4500)
+    pg.evaluate(IMPORT, json.dumps(out))
+    wait_fixed(pg)
+    st = pg.evaluate(STATE)
+    check(st == FIXED, "export réimporté sur un autre appareil : finitions revues", st)
+    check(not errs, "aucune erreur console (6b)", errs)
     ctx.close()
     b.close()
 print("RESULTAT", "OK" if ok else "ECHEC")

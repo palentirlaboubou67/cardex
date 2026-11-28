@@ -1,8 +1,10 @@
 # Données et mise en ligne de Cardex (GitHub Pages, source « GitHub Actions »).
 # - chaque jour (04:15 et 10:15 UTC) : cotes Cardmarket du jour (tools/build_market.py), point d'historique du scellé ;
-# - chaque lundi (03:45 UTC) : en plus, table Cardmarket et photos (--weekly), catalogue des cartes, logos et images
-#   (tools/build_catalog.py), base du scanner (tools/build_scan.py) ;
-# - à chaque envoi sur main : les cotes sont refaites depuis le cache (pas de nouvelle requête à Cardmarket) ;
+# - chaque lundi (03:45 UTC, à la place du passage de 04:15) : en plus, table Cardmarket et photos (--weekly),
+#   catalogue des cartes, logos et images (tools/build_catalog.py), base du scanner (tools/build_scan.py) ;
+#   Cardmarket est donc lu deux fois par jour au plus (SPEC §1.7), chaque fichier une seule fois par passage ;
+# - à chaque envoi sur main, et à la main sans case cochée : les cotes sont refaites depuis le cache, jamais
+#   téléchargées ; sans copie en cache, le site n'est pas republié (le prochain passage planifié publiera ce code) ;
 # puis tools/release.py (sw.js tamponné, data/manifest.json) et mise en ligne. Les fichiers de cotes
 # (data/market/prices/, data/market/sealed.json) ne sont jamais versionnés : ils n'existent que dans le site publié.
 # Les données versionnées qui changent (historique, tables, catalogue, scanner) sont commitées par le robot ; un commit
@@ -12,13 +14,17 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "15 4 * * *"
+    - cron: "15 4 * * 0,2-6"
     - cron: "15 10 * * *"
     - cron: "45 3 * * 1"
   workflow_dispatch:
     inputs:
       weekly:
         description: "Mise à jour hebdomadaire complète (table Cardmarket, catalogue, scanner)"
+        type: boolean
+        default: false
+      download:
+        description: "Télécharger les fichiers Cardmarket du jour (compte dans les deux passages quotidiens)"
         type: boolean
         default: false
       verify:
@@ -36,6 +42,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      deploy: ${{ steps.market.outputs.deploy }}
     env:
       WEEKLY: ${{ github.event.schedule == '45 3 * * 1' || inputs.weekly == true }}
       PYTHONUTF8: "1"
@@ -75,17 +83,29 @@ jobs:
           python tools/build_scan.py --recheck 600
 
       - name: Cotes Cardmarket
+        id: market
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # envoi de code : cotes refaites depuis le cache ; sans cache, un seul téléchargement (ETag)
-            python tools/build_market.py --offline || python tools/build_market.py
-          elif [ "$WEEKLY" = "true" ]; then
+          if [ "$WEEKLY" = "true" ]; then
             python tools/build_market.py --weekly
-          else
+          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.download }}" = "true" ]; then
             python tools/build_market.py
+          else
+            # envoi de code, relance à la main : depuis le cache seulement (2 = pas de copie : rien de modifié)
+            set +e
+            python tools/build_market.py --offline
+            code=$?
+            set -e
+            if [ "$code" = "2" ]; then
+              echo "::warning::pas de copie Cardmarket en cache : site non republié, ce code partira au prochain passage planifié"
+              echo "deploy=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$code" != "0" ]; then exit "$code"; fi
           fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
 
       - name: Données versionnées
+        if: steps.market.outputs.deploy == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -98,16 +118,19 @@ jobs:
           fi
 
       - name: Site
+        if: steps.market.outputs.deploy == 'true'
         run: |
           python tools/release.py
           mkdir _site
           cp -r index.html manifest.webmanifest icon.svg icon-180.png icon-512.png sw.js css js fonts img data vendor _site/
       - uses: actions/upload-pages-artifact@v3
+        if: steps.market.outputs.deploy == 'true'
         with:
           path: _site
 
   deploy:
     needs: build
+    if: needs.build.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

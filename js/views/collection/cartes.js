@@ -48,7 +48,7 @@ export function create(box, api) {
   };
   let st = { q: '', tri: 'recentes', fin: '' };
   let keys = [], rendered = false, dirty = false, busy = false, pricesTried = false, lastKey = '', filterOpen = false;
-  let qT = 0, patchSeq = 0, headT = 0, idleStarted = false;
+  let qT = 0, patchSeq = 0, idleStarted = false;
   const hay = new WeakMap();                                // enregistrement -> texte de recherche
   const keyOf = s => `${s.q}|${s.tri}|${s.fin}`;
 
@@ -130,7 +130,7 @@ export function create(box, api) {
     }
   }
 
-  const EMPTY = () => html`<div class="empty" data-content><span class="ic">${icon('collection')}</span><b>Ta collection est vide</b><p>Scanne une carte ou ouvre une série pour l’ajouter.</p><a class="btn primary" href="#/scanner">${icon('scan')}Scanner une carte</a><a class="btn text" href="#/reglages">Importer une sauvegarde</a></div>`;
+  const EMPTY = () => html`<div class="empty" data-content><span class="ic">${icon('collection')}</span><b>Ta collection est vide</b><p>Scanne une carte ou ouvre une série pour l’ajouter.</p><a class="btn primary" href="#/scanner">${icon('scan')}Scanner une carte</a><button type="button" class="btn text" data-act="import">Importer une sauvegarde</button></div>`;
   const NONE = () => html`<div class="empty" data-content><span class="ic">${icon('filter')}</span><b>Aucune carte</b><p>Rien ne correspond au filtre.</p><button type="button" class="btn" data-act="clear">Effacer le filtre</button></div>`;
   const tileTpl = e => tileHTML(e.r, { qty: col.qtyOf(e.r.id, e.f), finish: e.f, price: tilePrice(e.r.id, e.r.setId, e.f) });
 
@@ -157,6 +157,7 @@ export function create(box, api) {
   function render() {
     dirty = false;
     rendered = true;
+    dropQueue();                                             // corrections en attente : comprises dans ce rendu
     renderRemind();
     renderSummary();
     renderChips();
@@ -223,6 +224,8 @@ export function create(box, api) {
       setParams({ q: null, finition: null });
       filterOpen = false;
       renderChips(); syncFilter(); renderGrid();
+    } else if (a === 'import') {
+      backup.pickFile();                                      // la collection importée arrive par onChange ('reload')
     } else if (a === 'export') {
       if (backup.exportNow()) renderRemind();
     } else if (a === 'snooze') {
@@ -251,9 +254,30 @@ export function create(box, api) {
     keys = ks;
   }
 
+  // Vue cachée (« + » sur une fiche ou une coche de série) : la grille est corrigée juste après, hors de l'image de
+  // l'appui (insérer une tuile trie toute la collection : plusieurs ms avec 2 000 cartes à CPU ×4). Le retour sur
+  // l'écran (resume) applique ce qui attend.
+  let queue = [], flushT = 0;
+  function dropQueue() { queue = []; clearTimeout(flushT); flushT = 0; }
+  function flush() {
+    clearTimeout(flushT);
+    flushT = 0;
+    const evs = queue;
+    queue = [];
+    if (evs.length) apply(evs);
+  }
   function onChange(evs, current) {
     if (!rendered) return;
     if (!current) { dirty = true; return; }
+    if (!api.shown()) {
+      queue.push(...evs);
+      if (!flushT) flushT = setTimeout(flush, 120);
+      return;
+    }
+    if (queue.length) { queue.push(...evs); flush(); return; }
+    apply(evs);
+  }
+  function apply(evs) {
     const reload = evs.some(e => e.type === 'reload');
     const qty = evs.filter(e => e.type === 'qty');
     if (!reload && !qty.length) return;
@@ -275,9 +299,8 @@ export function create(box, api) {
     }
     if (!keys.length) renderGrid();                          // dernière tuile du filtre retirée : état vide
     if (qty.some(e => e.added)) col.ensurePrices();          // carte d'une nouvelle série : ses cotes, puis onPrices
-    // en-tête et puces : tout de suite à l'écran ; vue cachée (fiche carte) : juste après, hors de l'appui sur « + »
-    if (api.shown()) { patchChips(); renderSummary(); }
-    else { clearTimeout(headT); headT = setTimeout(() => { patchChips(); renderSummary(); }, 60); }
+    patchChips();
+    renderSummary();
   }
 
   // cotes arrivées : en-tête et prix des tuiles de ces séries, par lots (2 000 tuiles sans longue tâche)
@@ -308,7 +331,9 @@ export function create(box, api) {
     if (rendered && !dirty && keyOf(next) === lastKey) { renderRemind(); syncFilter(); return; }
     st = next; go();
     await needs(st.tri);
-    const p = render();
+    // premier lot (18 tuiles), en-tête et puces posés : show() se termine, les lots suivants continuent à chaque image
+    // (main.js attend show() pour ses tâches de fond, dont le service worker)
+    render();
     if (!idleStarted) {
       idleStarted = true;
       whenIdle(() => {
@@ -317,12 +342,11 @@ export function create(box, api) {
         col.ensurePrices().then(() => { pricesTried = true; renderSummary(); });
       }, { timeout: 1500 });
     }
-    await p;
   }
 
   function resume() {
     if (dirty) render();
-    else { renderRemind(); syncFilter(); }
+    else { flush(); renderRemind(); syncFilter(); }
   }
 
   return { show, resume, onChange, onPrices, toggleFilter, get filterOpen() { return filterOpen; } };

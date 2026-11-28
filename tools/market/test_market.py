@@ -18,7 +18,7 @@ TOOLS = os.path.dirname(HERE)
 ROOT = os.path.dirname(TOOLS)
 sys.path.insert(0, TOOLS)
 
-from market import hist, names, prices, sealed  # noqa: E402
+from market import cmap, hist, names, prices, sealed  # noqa: E402
 
 FAILS = []
 
@@ -41,6 +41,49 @@ def test_prices():
     check(prices.card_values(g, 2)[0] == 121, "Cosmo de type holo : champs de base")
     g = {"trend": None, "avg30": 2.5, "avg7": None}
     check(prices.card_values(g, 0)[0] == 250, "sans tendance : moyenne 30 j")
+    st = prices.sane_trend
+    check(st(1124.38, 9.99, 77.32, 571.18) == 77.32,
+          "tendance confirmée par la seule moyenne 30 j, contredite par la veille et la semaine : médiane (ex5-94)")
+    check(st(4.08, 0.05, 0.17, 2.27) == 0.17, "commune à 4,08 € de tendance, 0,17 € sur 7 j : 0,17 € (bw1-63)")
+    check(st(100, 95, 15, 110) == 100, "une vente bon marché sur 7 jours ne remplace pas une tendance confirmée")
+    check(st(5, None, 1, None) == 5, "une seule moyenne qui confirme : tendance gardée")
+    g = {"trend": 3096.21, "avg7": 2900, "avg30": 3000}
+    out, _ = prices.build({"cards": {"base1": {"4": {"holo": [1, 0], "firstEdition": [2, 2, 1]}}}},
+                          {1: {"trend": 420.64}, 2: g}, "2026-11-26")
+    e = out["base1"]["c"]["4"]
+    check(len(e["holo"]) == 5 and e["firstEdition"][5:] == [1],
+          "1re édition sur un produit qui sert aussi l'impression sans tampon : 6e valeur 1 (prix toutes éditions)")
+
+
+def test_cmap():
+    print("table Cardmarket : finitions et noms")
+
+    def card(variants, rarity="Rare"):
+        return {"variants": variants, "top": None, "rarity": rarity, "en": "X", "local": "1", "stage": None}
+
+    def v(t, cm, foil=None, stamp=None):
+        e = {"type": t, "thirdParty": {"cardmarket": cm}}
+        if foil:
+            e["foil"] = foil
+        if stamp:
+            e["stamp"] = stamp
+        return e
+    _, _, plan = cmap.plan_card(card([v("holo", 10), v("reverse", 11, "friendball"), v("reverse", 12, "energy")]))
+    check(plan.get("reverse", [None])[0] == 12, "reverse : la reverse Énergie, pas la Copain Ball (me02.5-153)")
+    _, _, plan = cmap.plan_card(card([v("holo", 20), v("normal", 21, stamp=["gym-challenge"])]))
+    check("normal" not in plan, "normale qui n'existe que tamponnée : pas de prix « normale » (sv03-022)")
+    _, _, plan = cmap.plan_card(card([v("normal", 30, stamp=["mcdonalds"]), v("holo", 31, stamp=["mcdonalds"])]))
+    check(plan.get("normal", [None])[0] == 30 and plan.get("holo", [None])[0] == 31,
+          "tampon commun à toute la série (McDonald's) : normale et holo cotées")
+    _, _, plan = cmap.plan_card(card([v("normal", 40), v("reverse", 41, "pokeball")]))
+    check("reverse" not in plan, "reverses seulement Poké Ball : pas de reverse simple inventée")
+    check(cmap.card_key(cmap.tcgdex_name({"en": "Unit Energy GrassFireWater", "local": "137"}))
+          in cmap.cm_keys("Unit Energy [GRW]"), "« Unit Energy GrassFireWater » = « Unit Energy [GRW] »")
+    check(cmap.card_key(cmap.tcgdex_name({"en": "Fairy Charm Lightning", "local": "172"}))
+          in cmap.cm_keys("Fairy Charm [L]"), "« Fairy Charm Lightning » = « Fairy Charm [L] »")
+    check(cmap.card_key("Nidoran♀") in cmap.cm_keys("Nidoran &female; [Call for Family | Scratch]"),
+          "Cardmarket « Nidoran &female; » = Nidoran♀")
+    check(cmap.card_key("δ Rainbow Energy") in cmap.cm_keys("Rainbow Energy Delta"), "« δ Rainbow Energy »")
 
 
 def test_sealed():
@@ -270,6 +313,43 @@ def test_end_to_end():
                         b = c[loc].get("normal" if "normal" in fins and fins["normal"] == base else "holo")
                         bad_same += c[loc][f] != b
         check(same > 100 and not bad_same, f"1re édition sans produit à part : tableau identique à la carte de base ({same})")
+        # produits jumeaux : pas un idProduct pour deux numéros d'une série quand un produit libre du même nom (de la
+        # même époque) existe
+        prods = {r["idProduct"]: r for r in json.load(open(os.path.join(cache, "cm", "products_singles_6.json"),
+                                                           encoding="utf8"))["products"]}
+        use = {}
+        for sid, cards in cmj["cards"].items():
+            for loc, fins in cards.items():
+                for f, link in fins.items():
+                    if f not in ("firstEdition", "stamp"):
+                        use.setdefault(link[0], set()).add((sid, loc))
+        twins = {}
+        for i, pr in prods.items():
+            twins.setdefault((pr["idExpansion"], pr["name"]), []).append(i)
+        bad = []
+        for prod, who in use.items():
+            if len(who) < 2 or len({s for s, _ in who}) != 1 or prod not in prods:
+                continue
+            pr = prods[prod]
+            free = [i for i in twins[(pr["idExpansion"], pr["name"])] if i != prod and i not in use
+                    and cmap._close(cmap._added(pr), cmap._added(prods[i]))]
+            if free:
+                bad.append((sorted(who), prod, free))
+        check(not bad, f"aucun produit partagé par deux numéros d'une série quand un jumeau libre existe {bad[:3]}")
+        for cid, want in (("xy2-100", 281583), ("sm10-205", 372487), ("ecard1-40", 274915), ("sm12-237", 398524),
+                          ("sm12-29", 407794), ("xya-24a", 297894), ("sm5-170", 316094)):
+            sid, loc = cid.rsplit("-", 1)
+            got = [x[0] for x in (cmj["cards"].get(sid) or {}).get(loc, {}).values()]
+            check(want in got and len(set(got)) == 1, f"{cid} -> produit {want} ({got})")
+        b1 = cmj["cards"]["base1"]["4"]["firstEdition"]
+        pb1 = json.load(open(os.path.join(out, "prices", "base1.json"), encoding="utf8"))["c"]["4"]["firstEdition"]
+        check(b1[2:] == [1] and pb1[5:] == [1], "base1-4 : 1re édition « Shadowless » marquée prix toutes éditions")
+        b2 = cmj["cards"]["base2"]["17"]
+        check(b2["firstEdition"] == b2["normal"], "base2-17 : 1re édition sans le produit de la holo base2-1")
+        sv = cmj["cards"]["sv03"]["022"]
+        check("normal" not in sv, "sv03-022 : pas de « normale » cotée avec le produit Gym Challenge")
+        check(not [x["fr"] for x in s["products"] if "'" in x["fr"] or "'" in (x["set"] or "")],
+              "scellé : apostrophes typographiques dans les noms")
         # carte de l'appli inconnue de la table : le quotidien refait la table
         cmj2 = dict(cmj, unlinked=[])
         with open(os.path.join(out, "cm-map.json"), "w", encoding="utf8") as f:
@@ -316,6 +396,7 @@ if __name__ == "__main__":
     except (AttributeError, ValueError):
         pass
     test_prices()
+    test_cmap()
     test_sealed()
     test_names()
     test_hist()

@@ -252,6 +252,11 @@
    "wait": 1200
   },
   {
+   "name": "mkt-produit-couverture",
+   "hash": "#/produit/903944",
+   "wait": 1200
+  },
+  {
    "name": "mkt-produit-fige",
    "hash": "#/produit/606923",
    "wait": 1200

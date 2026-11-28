@@ -120,7 +120,7 @@ TYPES = [
     (r"Battle Academy", "Académie de Combat", "deck coffret"),
     (r"Decks?", "Deck", "deck"),
     # kits
-    (r"Trainer Kit", "Kit du Dresseur", "kit deck coffret"),
+    (r"Trainer Kit", "Kit du dresseur", "kit deck coffret"),  # comme les séries (« SM Kit du dresseur »)
     (r"Battle Stadium", "Stade de combat", "kit"),
     # coffrets
     (r"Ultra[- ]Premium Collection", "Coffret Ultra-Premium", "coffret"),
@@ -161,7 +161,7 @@ TYPES = [
 ]
 DEFAULT = {"box": "Display", "halfbox": "Demi-display", "etb": "Coffret Dresseur d'Élite", "bundle": "Bundle",
            "prerelease": "Boîtier Stratégies et Combats", "tin": "Pokébox", "blister": "Blister", "booster": "Booster",
-           "deck": "Deck", "kit": "Kit du Dresseur", "coffret": "Coffret", "case": "Carton"}
+           "deck": "Deck", "kit": "Kit du dresseur", "coffret": "Coffret", "case": "Carton"}
 # une formule de type se trouve en fin de nom, ou devant « : », « ( », « [ », « - » (éventuellement suivie d'un nombre)
 _END = r"(?=\s*(?:\d{1,4}\s*)?(?:$|[:(\[]|-\s|–))"
 _TYPES = [(re.compile(r"(?<![\w'])(?:" + rx + r")(?![\w'])" + _END, re.I), fr, set(kinds.split()))

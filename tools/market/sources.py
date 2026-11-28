@@ -125,13 +125,20 @@ def head_created(body):
 
 
 def cardmarket(cache, name):
-    """-> (json, info) ; CloudFront peut servir une copie plus ancienne que celle du cache : on garde la plus récente."""
+    """-> (json, info) ; CloudFront peut servir une copie plus ancienne que celle du cache : on garde la plus récente.
+    Un fichier n'est demandé qu'une fois par exécution (l'hebdomadaire et le quotidien d'un même passage le
+    partagent)."""
+    memo = cache.__dict__.setdefault("_cm", {})
+    if name in memo:
+        return memo[name]
+
     def keep_old(old, info):
         o = head_created(old)
         return bool(o and o > created_dt(info["createdAt"]))
     _, info = cache.get(name, URLS[name], os.path.join("cm", name), _cm_validate(name), keep_old=keep_old)
     j = info.pop("json")
     info.update({k: v for k, v in (cache.index.get(name) or {}).items() if k in ("etag", "lastModified", "bytes")})
+    memo[name] = (j, info)
     return j, info
 
 

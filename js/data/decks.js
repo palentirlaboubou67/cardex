@@ -1,7 +1,7 @@
 // Decks de tournoi (data/decks.json, construit par tools/build_decks.py d'après Limitless TCG et TCGdex) :
 // lecture, prix des cartes (Cardmarket, euros) et comparaison avec la collection, par nom de carte.
 import { data } from '../core/net.js';
-import { norm } from '../core/format.js';
+import { norm, nbsp } from '../core/format.js';
 import { yieldToMain } from '../core/idle.js';
 import * as prices from './prices.js';
 import * as catalog from './catalog.js';
@@ -134,6 +134,14 @@ export function priceOf(c) {
 // ---------- comparaison avec la collection ----------
 // Pour jouer, n'importe quelle impression convient : comparaison par nom français, toutes finitions confondues.
 // Les énergies de base sont comptées comme possédées. Deux lignes du même nom se partagent les exemplaires.
+// exemplaires d'une ligne trouvés dans la collection (used : ceux déjà pris par les lignes du même nom)
+function take(c, owned, used) {
+  const left = c.basic ? Infinity : (owned.get(c.key) || 0) - (used.get(c.key) || 0);
+  const got = Math.max(0, Math.min(c.count, left));
+  if (!c.basic) used.set(c.key, (used.get(c.key) || 0) + got);
+  return got;
+}
+
 const memo = new WeakMap();
 export function status(deck, owned) {
   const key = owned ? null : `${col.rev()}|${prices.version()}`;
@@ -142,9 +150,7 @@ export function status(deck, owned) {
   const used = new Map();
   let have = 0, missing = 0, value = 0, unpriced = 0, unpricedMissing = 0, buy = 0;
   const rows = deck.cards.map(c => {
-    const left = c.basic ? Infinity : (owned.get(c.key) || 0) - (used.get(c.key) || 0);
-    const got = Math.max(0, Math.min(c.count, left));
-    if (!c.basic) used.set(c.key, (used.get(c.key) || 0) + got);
+    const got = take(c, owned, used);
     const price = priceOf(c);
     const need = c.count - got;
     have += got;
@@ -163,6 +169,20 @@ export function status(deck, owned) {
   return st;
 }
 
+// part possédée d'un deck (même règle que status(), sans les prix : léger, pour le succès « Prêt pour le tournoi »)
+const pctMemo = new WeakMap();
+export function pctOf(deck) {
+  const key = col.rev();
+  const m = pctMemo.get(deck);
+  if (m?.key === key) return m.pct;
+  const owned = col.ownedByName(), used = new Map();
+  let have = 0;
+  for (const c of deck.cards) have += take(c, owned, used);
+  const pct = deck.total ? have / deck.total : 0;
+  pctMemo.set(deck, { key, pct });
+  return pct;
+}
+
 // cartes à acheter qui ont une fiche (ajout aux envies) : une entrée par id
 export function toBuy(st) {
   const seen = new Set();
@@ -172,7 +192,21 @@ export function toBuy(st) {
 // ---------- présentation ----------
 export const placeLabel = p => (!p ? '' : p === 1 ? '1re place' : `${p}e place`);
 const NF_SHARE = new Intl.NumberFormat('fr-FR', { style: 'percent', maximumFractionDigits: 1 });
-export const shareLabel = s => (s ? `${NF_SHARE.format(s / 100)} de la méta` : '');
+export const shareLabel = s => (s ? `${nbsp(NF_SHARE.format(s / 100))} de la méta` : '');
+// forme courte de la liste (W-N) : « 36,7 % · 3e · São Paulo » ; la forme longue reste sur la page du deck
+export const shareShort = s => (s ? nbsp(NF_SHARE.format(s / 100)) : '');
+export const placeShort = p => (!p ? '' : p === 1 ? '1re' : `${p}e`);
+// ville du tournoi quand le nom la donne (« LAIC 2026–27, São Paulo », « Regional Milwaukee, WI », « Special Event
+// Bologna ») ; « World Championships 2016 » → « Mondiaux 2016 » ; sinon le nom tel quel
+export function eventShort(e) {
+  const s = str(e);
+  let m = s.match(/^(?:Regional|Special Event)\s+(.+?)(?:,\s*[A-Z]{2})?$/);
+  if (m) return m[1];
+  m = s.match(/^[A-Z]{2,5}\s+\d{4}(?:[–-]\d{2,4})?,\s*(.+)$/);
+  if (m) return m[1];
+  m = s.match(/^World Championships (\d{4})$/);
+  return m ? `Mondiaux ${m[1]}` : s;
+}
 
 // Deux cartes pour illustrer le deck : de préférence le Pokémon qui lui donne son nom (comme l'ancienne appli).
 export function art(deck) {
@@ -202,7 +236,7 @@ export async function best() {
   try { await load(); } catch { return null; }
   let out = null;
   for (const p of DATA.periods) for (const d of p.decks) {
-    const pct = status(d).pct;
+    const pct = pctOf(d);
     if (!out || pct > out.pct) out = { deck: d, pct };
   }
   return out;

@@ -35,7 +35,8 @@ export function tileHTML(card, opts = {}) {
   const label = opts.label || [base, ownText(badge, qty, missing)].filter(Boolean).join(', ');
   const link = href ?? cardHref(id, finish);                       // id encodé une fois (exu-%3F → exu-%253F)
   const b = badgeText(badge, qty);
-  const metaText = meta || [set.name, localNo(card.localId)].filter(Boolean).join(' · ') || no;
+  // numéro d'abord : la ligne est coupée à droite (prix au bout), le numéro reste lisible (« 161 · Évolutions P… »)
+  const metaText = meta || [localNo(card.localId), set.name].filter(Boolean).join(' · ') || no;
   return html`<a class="tile${missing ? ' missing' : ''}" href="${link}" data-card="${id}"${finish ? raw(` data-finish="${esc(finish)}"`) : ''} data-b="${badge}" data-q="${qty}" data-l="${base}" aria-label="${label}"><span class="tile-img">${
     imgHTML(card, { q: 'low' })}${
     fx && FX.has(finish) ? raw(`<i class="fx fx-${finish}"></i>`) : ''}${

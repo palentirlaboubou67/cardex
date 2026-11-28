@@ -61,7 +61,7 @@
 /* tablette et ordinateur : une ligne de tableau (nom et méta | progression et cartes | reste et prix) */
 @media (min-width: 720px) {
   .dk-row .body {
-    grid-template-columns: minmax(0, 1fr) minmax(120px, 220px) 150px; column-gap: 20px;
+    grid-template-columns: minmax(0, 1fr) minmax(100px, 200px) 140px; column-gap: 20px;   /* le nom et sa ligne d'abord */
     grid-template-areas: "t bar rest" "s n price";
   }
   .dk-row .dk-bar, .dk-row .dk-rest { margin-top: 0; }

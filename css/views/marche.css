@@ -34,7 +34,8 @@
 .mk-list .row .end .delta { font-size: var(--fs-cap); }
 .mk-fin { flex: none; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .mk-n { flex: none; font-weight: 600; color: var(--text); }
-.mk-avg { font-size: var(--fs-cap); line-height: var(--lh-cap); }
+.mk-avg { font-size: var(--fs-cap); line-height: var(--lh-cap); flex-wrap: wrap; column-gap: 8px; row-gap: 0; }
+.row .mk-avg > .mk-avgt { white-space: normal; overflow: visible; }
 /* ligne produit : titre sur deux lignes, notes (suivi, possédés, cote figée) en petit */
 .mk-prow { align-items: center; contain-intrinsic-block-size: auto 76px; }
 .mk-crow { contain-intrinsic-block-size: auto 72px; }
@@ -44,6 +45,9 @@
 }
 .mk-note { font-size: var(--fs-cap); line-height: var(--lh-cap); gap: 4px; }
 .mk-note > i { font-style: normal; flex: none; }
+.row .mk-note > .mk-flag, .row .mk-note > .mk-own { flex: none; overflow: visible; }
+/* très petits écrans : l'étoile seule (comme sur les tuiles), « suivi » reste dans le nom accessible de la ligne */
+@media (max-width: 359px) { .mk-flagt { display: none; } }
 .mk-flag { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); font-weight: 600; }
 .mk-flag svg { width: 12px; height: 12px; }
 .mk-nosale {
@@ -53,10 +57,24 @@
 .mk-prow .end { max-width: 42%; }
 .mk-prow .end .price { font-size: var(--fs-body); }
 .mk-still { font-style: normal; font-size: var(--fs-cap); line-height: var(--lh-cap); color: var(--text-2); }
-/* carré produit sans photo : pictogramme du type sur une surface neutre (pas un carré blanc en thème sombre) */
+/* carré produit sans photo ni série connue : pictogramme du type sur une surface neutre (pas un carré blanc en thème
+   sombre) */
 .row .sq:has(> .p-picto), .ptile-img:has(> .p-picto), .mk-pimg:has(> .p-picto) { background: var(--surface-2); box-shadow: none; }
 .row .sq > .p-picto { width: 26px; height: 26px; color: var(--text-2); }
 .ptile-img > .p-picto { width: 40%; height: 40%; color: var(--text-2); stroke-width: 1.5; }
+/* sans photo, série connue : couverture générée (logo de la série au centre, pictogramme et type dans un coin) */
+.p-gen { position: absolute; inset: 0; display: grid; place-items: center; border-radius: inherit; }
+.ptile-img:has(> .p-gen), .row .sq:has(> .p-gen), .mk-pimg:has(> .p-gen) { background: var(--surface); }
+.row .sq:has(> .p-gen) { box-shadow: inset 0 0 0 1px var(--line); }
+.p-gen > .setlogo { width: 76%; height: 34%; margin-top: -8%; }
+.p-gen-k {
+  position: absolute; left: 8px; right: 8px; bottom: 7px; display: flex; align-items: center; gap: 4px; min-width: 0;
+  font: 500 var(--fs-micro)/var(--lh-micro) var(--font); font-stretch: var(--cond); color: var(--text-2);
+}
+.p-gen-k > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-gen-k > .p-picto { width: 14px; height: 14px; }
+.row .sq > .p-gen > .setlogo { width: 84%; height: 56%; margin-top: 0; }
+.row .sq .p-gen-k { display: none; }
 
 @media (min-width: 900px) {
   /* deux colonnes de lignes sur ordinateur, filets dans chaque colonne */
@@ -119,10 +137,12 @@
 /* ---------- Envies ---------- */
 .mk-nbox { padding-top: 12px; }
 .mk-notif .row { padding-right: 0; }
+.mk-notif .s > span { white-space: normal; }        /* sous-titre sur deux lignes plutôt que coupé (320 px) */
 .mk-notif .lead.on { color: var(--accent); }
 .mk-notif .end { padding-right: 0; }
 .mk-ninfo { color: var(--text-2); }
-.mk-whead .grow { font-weight: 500; }
+.mk-whead .grow { font-weight: 500; white-space: normal; }
+.mk-whead .grow > span { white-space: nowrap; }
 .mk-whead .link:disabled { color: var(--text-3); }
 .mk-wrow { --inset: 64px; align-items: stretch; padding: 0 0 0 0; gap: 4px; }
 .mk-wlink {
@@ -155,7 +175,12 @@
 }
 .mk-pimg.sk { background: var(--fill); box-shadow: none; }
 .mk-pimg img { position: absolute; inset: 6%; width: 88%; height: 88%; object-fit: contain; }
-.mk-pimg > .p-picto { width: 72px; height: 72px; color: var(--text-2); stroke-width: 1.25; }
+.mk-pimg > .p-picto { width: 48px; height: 48px; color: var(--text-2); stroke-width: 1.25; }
+/* sans photo : une bande basse (logo de la série ou pictogramme), pas un grand carré vide */
+.mk-pimg.nophoto { height: 120px; }
+.mk-pimg .p-gen > .setlogo { width: 160px; height: 56px; max-width: 70%; margin-top: -10px; }
+.mk-pimg .p-gen-k { left: 12px; right: 12px; bottom: 10px; justify-content: center; font-size: var(--fs-cap); line-height: var(--lh-cap); }
+.mk-pimg .p-gen-k > .p-picto { width: 16px; height: 16px; }
 .mk-pmain[data-content] { padding: 16px var(--gutter) 0; }
 .mk-pmain .mk-sk-hero { margin-top: 16px; }
 .mk-phead { padding: 16px var(--gutter) 0; }
@@ -185,6 +210,9 @@
 .mk-own .end { gap: 0; }
 .mk-gain-p { font-size: var(--fs-cap); line-height: var(--lh-cap); color: var(--text-2); font-variant-numeric: tabular-nums; }
 .mk-oform .mk-fhint { font-size: var(--fs-cap); line-height: var(--lh-cap); color: var(--text-2); }
+.mk-fhintrow { display: flex; align-items: center; gap: 8px; }
+.mk-fhintrow .mk-fhint { flex: 1; min-width: 0; }
+.mk-fhintrow .mk-usecote { flex: none; margin-right: -8px; }
 .mk-oform .mk-ferr { font-size: var(--fs-sec); line-height: var(--lh-sec); color: var(--down); }
 .mk-oform input[aria-invalid="true"] { outline: 2px solid var(--down); outline-offset: 0; }
 .mk-oform .btn.danger { background: none; }
@@ -192,6 +220,8 @@
   .mk-prod .mk-pgrid { display: grid; grid-template-columns: minmax(260px, 380px) minmax(0, 1fr); gap: 8px; padding-top: 16px; }
   .mk-pside { position: sticky; top: calc(var(--top) + 16px); align-self: start; padding-left: var(--gutter); }
   .mk-pimg { height: auto; aspect-ratio: 1; margin: 0; }
+  .mk-pimg.nophoto { height: 160px; aspect-ratio: auto; }
+  .mk-pimg .p-gen > .setlogo { width: 220px; height: 76px; }
   .mk-phead { padding-top: 0; }
   .mk-pmain[data-content] { padding-top: 0; }
 }

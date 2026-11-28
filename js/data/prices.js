@@ -1,8 +1,9 @@
 // Cotes Cardmarket des cartes (euros uniquement). Fichiers par série : data/market/prices/<setId>.json (MK, chaque nuit) :
 // {"v":1,"d":"2026-11-25","c":{"025":{"normal":[trend,avg1,avg7,avg30,low],…}}} en centimes, null si absent.
 // Une finition sans cote renvoie null : jamais le prix de la normale à la place.
-import { data, NetError } from '../core/net.js';
+import { data, manifest, NetError } from '../core/net.js';
 import { foilKey } from './finishes.js';
+import { hasFiles } from './catalog.js';
 
 export const CREDIT = 'Cotes Cardmarket (tendance, toutes langues), mises à jour chaque nuit';
 
@@ -35,7 +36,15 @@ function normalize(f) {
 function loadOne(setId) {
   if (FILES.has(setId)) return Promise.resolve(false);
   if (!LOADING.has(setId)) {
-    const p = data(`data/market/prices/${setId}.json`).then(f => {
+    // Série absente du catalogue (lien tapé à la main) : pas de fichier de cotes. Déployé, net.data() ne demande déjà
+    // rien d'absent du manifest ; sans manifest (développement), data/sets.json (déjà là ou en route : vu après une
+    // microtâche, la vue demande souvent les cotes juste avant la série) dit si la série existe : pas de 404.
+    const p = Promise.resolve().then(async () => {
+      if (!(await manifest()) && (await hasFiles(setId, { wait: true })) === false) {
+        throw new NetError('notfound', 404, `data/market/prices/${setId}.json`);
+      }
+      return data(`data/market/prices/${setId}.json`);
+    }).then(f => {
       const n = normalize(f);
       FILES.set(setId, n);
       if (n.d && (!DATE || n.d > DATE)) DATE = n.d;
@@ -70,27 +79,40 @@ export async function ensure(setIds) {
 
 const c2e = v => (typeof v === 'number' && v > 0 ? v / 100 : null);
 
-// tendance gardée seulement si elle est plausible : dans [réf/5, réf×5] avec réf = avg7, sinon avg30
+// Garde de la tendance : la même règle que MK (tools/market/prices.py sane_trend), qui l'applique déjà aux fichiers de
+// cotes : la refaire ne change rien à une tendance gardée par MK (une autre règle la défaisait : smp-SM163, 233 €
+// gardés par MK, 116 € affichés) et protège la cote TCGdex en direct. Tendance gardée si la majorité des moyennes
+// présentes (1, 7 et 30 jours) la confirme (dans [m/5, m×5]), sinon la médiane de ces moyennes.
+const median = xs => { const s = [...xs].sort((a, b) => a - b), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
+export function saneTrend(t, a1, a7, a30, avg = null) {
+  const refs = [a1, a7, a30].filter(r => r);
+  if (t && refs.length && 2 * refs.filter(r => t >= r / 5 && t <= r * 5).length <= refs.length) t = median(refs);
+  return t || a7 || a30 || avg || null;
+}
 function shape(trend, avg1, avg7, avg30, low, avg = null) {
-  const ref = avg7 ?? avg30;
-  const sane = trend != null && (!ref || (trend >= ref / 5 && trend <= ref * 5));
-  const eur = sane ? trend : (avg30 ?? avg7 ?? avg1 ?? avg ?? null);
+  const eur = saneTrend(trend, avg1, avg7, avg30, avg);
   if (eur == null && low == null) return null;
   return { eur, trend, avg1, avg7, avg30, low };
 }
+const fromFile = a => shape(c2e(a[0]), c2e(a[1]), c2e(a[2]), c2e(a[3]), c2e(a[4]));
 
 // { eur, trend, avg1, avg7, avg30, low[, allEditions] } en euros, ou null (série non chargée, carte ou finition sans cote).
 // 1re édition / tampon sans produit Cardmarket à part : MK y recopie la cote de la carte de base (même tableau que la
-// normale ou la holo) -> allEditions: true, à afficher « prix toutes éditions », jamais comme une vraie cote 1re édition.
+// normale ou la holo) ; ou le produit à part sert aussi l'impression sans tampon (6e valeur 1, base1 « Shadowless ») ->
+// allEditions: true, à afficher « prix toutes éditions », jamais comme une vraie cote 1re édition.
 const sameArr = (a, b) => Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+const allEditionsOf = (row, finish) => {
+  const a = row?.[finish];
+  return !!a && (finish === 'firstEdition' || finish === 'stamp') && (a[5] === 1 || sameArr(a, row.normal) || sameArr(a, row.holo));
+};
 export function get(cardId, finish = 'normal') {
   const s = setIdOf(cardId), f = FILES.get(s);
   if (!f) return null;
   const row = f.c[String(cardId).slice(s.length + 1)];
   const a = row?.[finish];
   if (!a) return null;
-  const p = shape(c2e(a[0]), c2e(a[1]), c2e(a[2]), c2e(a[3]), c2e(a[4]));
-  if (p && (finish === 'firstEdition' || finish === 'stamp') && (sameArr(a, row.normal) || sameArr(a, row.holo))) p.allEditions = true;
+  const p = fromFile(a);
+  if (p && allEditionsOf(row, finish)) p.allEditions = true;
   return p;
 }
 
@@ -151,7 +173,10 @@ function readCm(cm, s) {
 export function liveSync(full, finish = 'normal') {
   const [cm, sfx, separate] = cmFor(full, finish);
   if (!cm) return null;
-  return readCm(cm, sfx) || (separate ? readCm(cm, sfx ? '' : '-holo') : null);
+  const p = readCm(cm, sfx) || (separate ? readCm(cm, sfx ? '' : '-holo') : null);
+  // TCGdex n'a que le produit de base : pour une 1re édition ou un tampon, c'est la cote toutes éditions (comme get())
+  if (p && (finish === 'firstEdition' || finish === 'stamp')) p.allEditions = true;
+  return p;
 }
 
 export async function live(full, finish = 'normal') {

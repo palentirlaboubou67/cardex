@@ -412,6 +412,9 @@ a.row:active, button.row:active, label.row:active { background: var(--fill); }
 
 /* ---------- Finitions brillantes : calques fixes + un seul reflet (FINAL-design §7) ---------- */
 .fx { position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: inherit; }
+/* pas de brillance sur la vignette « Pas d'illustration » (en sombre, le color-dodge en faisait un panneau arc-en-ciel) ;
+   elle revient seule quand l'image remplace la vignette (table des images arrivée en retard) */
+.card-ph ~ .fx, .cp-img:has(> .card-ph) ~ .fx, .cp-img:has(> .card-ph) ~ .cp-glare { display: none; }
 .fx-reverse {
   background: linear-gradient(115deg, transparent 30%, rgb(255 255 255 / .34) 46%, rgb(200 225 255 / .2) 54%, transparent 70%);
   mix-blend-mode: overlay;
@@ -731,6 +734,12 @@ dialog.sheet.closing::backdrop { animation: scrim-out var(--dur-2) ease-in forwa
 .errrow .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .boot-sk { max-width: var(--col); margin: 0 auto; padding-top: 12px; pointer-events: none; }
+/* styles de texte préparés avec le squelette (js/main.js TYPE_WARM) : mis en page mais jamais vus ni lus */
+.boot-sk { position: relative; }
+.type-warm {
+  position: absolute; top: 0; left: 0; width: 300px; height: 0; overflow: hidden; visibility: hidden; contain: strict;
+}
+.type-warm * { content-visibility: visible !important; }
 .boot-sk .sk-tile { display: block; min-width: 0; }
 .view.failed > :not(.view-err) { display: none !important; }
 

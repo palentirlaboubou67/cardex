@@ -27,7 +27,9 @@ export function load(onProgress) {
       logger: m => onProgress?.(m),
       errorHandler: () => {},
     });
-    await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: WHITELIST, preserve_interword_spaces: '1' });
+    // debug_file : les traces de tesseract (« Bottom=0, top=78… », « Total count=0 ») partaient en console.error
+    // à chaque ligne difficile (SPEC §12 « aucune erreur console ») ; elles vont dans /dev/null (FS du cœur wasm)
+    await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: WHITELIST, preserve_interword_spaces: '1', debug_file: '/dev/null' });
     return w;
   })();
   tess.catch(() => { tess = null; });
@@ -156,9 +158,15 @@ export function parse(text) {
   const T = ' ' + clean(text) + ' ', out = new Set();
   // n / total (cartes secrètes au-delà du total comprises)
   for (const m of T.matchAll(new RegExp(`(${D}{1,3}) ?\/ ?(${D}{2,3})`, 'g'))) {
-    const n = digits(m[1]), tot = +digits(m[2]);
-    if (!/^\d+$/.test(n) || !tot) continue;
-    for (const id of idx.byNum.get(normNum(n)) || []) if ((idx.sets[setOf(id)] || {}).t === tot) out.add(id);
+    const tot = +digits(m[2]);
+    // une lettre en tête peut être un chiffre mal lu (I, L → 1) ou le symbole de série lu comme une lettre
+    // (« L52/149 » sur sm1-52) : les deux lectures, la vérification départage ou propose un choix
+    const heads = /^[A-Z]/.test(m[1]) && m[1].length > 1 ? [m[1], m[1].slice(1)] : [m[1]];
+    for (const h of heads) {
+      const n = digits(h);
+      if (!/^\d+$/.test(n) || !tot) continue;
+      for (const id of idx.byNum.get(normNum(n)) || []) if ((idx.sets[setOf(id)] || {}).t === tot) out.add(id);
+    }
   }
   // galeries et sous-séries : TG01/TG30, GG12/GG70, SV001/SV122, RC1/RC32
   for (const m of T.matchAll(/(TG|GG|SV|RC|SL|SH|RT|AR|H) ?(\d{1,3}) ?\/ ?(?:TG|GG|SV|RC|SL)? ?(\d{1,3})/g)) {

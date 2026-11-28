@@ -3,7 +3,7 @@
 // depuis … »), premier prix et plus haut, Mon scellé (quantité, prix d'achat), suivre ☆, lien Cardmarket.
 import { setBar, updateAction } from '../core/appbar.js';
 import { html, setHTML, delegate } from '../core/dom.js';
-import { eur, eurDelta, pct, dateDay, toDate, plural } from '../core/format.js';
+import { eur, eurDelta, pct, dateDay, toDate, plural, nbsp } from '../core/format.js';
 import { icon } from '../core/icons.js';
 import { param, setParams, setHref } from '../core/router.js';
 import { openSheet } from '../core/sheet.js';
@@ -21,7 +21,7 @@ const DAY = 86400000;
 let el = null, p = null, pts = null, chart = null, range = 'tout', sig = null, histFail = false;
 
 const monthYear = d => toDate(d).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' });
-const x2 = v => v.toLocaleString('fr-FR', { maximumFractionDigits: 2 });
+const x2 = v => nbsp(v.toLocaleString('fr-FR', { maximumFractionDigits: 2 }));
 const sign = v => (v > 0.004 ? 'up' : v < -0.004 ? 'down' : 'flat');
 const cents = v => (v == null ? '' : x2(Math.round(v * 100) / 100).replace(/\s/g, ''));
 
@@ -76,7 +76,7 @@ function render() {
   const links = [html`<a class="row" href="${sealed.cmUrl(p)}" target="_blank" rel="noopener"><span class="lead">${icon('external')}</span><span class="body"><span class="t">Voir sur Cardmarket</span><span class="s"><span>${p.n || p.fr}</span></span></span></a>`];
   if (inCatalog(p.sid)) links.push(html`<a class="row" href="${setHref(p.sid)}"><span class="lead">${icon('series')}</span><span class="body"><span class="t">Voir la série</span><span class="s"><span>${p.set}</span></span></span>${icon('chevron-right', { cls: 'chev' })}</a>`);
   setHTML(el, html`<div class="mk-pgrid">
-<div class="mk-pside"><div class="mk-pimg">${pimgHTML(p, { big: true, eager: true })}</div></div>
+<div class="mk-pside"><div class="mk-pimg${p.img ? '' : ' nophoto'}">${pimgHTML(p, { big: true, eager: true })}</div></div>
 <div class="mk-pmain">
 <div class="mk-phead" data-content><h2 class="mk-ptitle">${p.fr}</h2>${meta ? html`<p class="mk-pmeta">${meta[0].toUpperCase() + meta.slice(1)}</p>` : ''}${p.n ? html`<p class="mk-pcm">Nom Cardmarket : ${p.n}</p>` : ''}</div>
 <div class="mk-pprice"><div class="mk-pline">${p.eur != null ? html`<span class="price big">${eur(p.eur)}</span>` : html`<span class="price big mk-nosale">Pas de vente récente</span>`}<span class="mk-pdelta"></span></div>
@@ -150,12 +150,15 @@ function ownSheet() {
   const prod = p, id = p.id;      // la fiche peut changer avant « Annuler » : on agit toujours sur ce produit
   const o = col.sealedGet(id);
   const today = new Date().toLocaleDateString('sv');
-  const cost = o ? cents(o.cost) : cents(prod.eur);
+  // nouveau produit : prix d'achat vide (jamais la cote du jour à la place : la plus-value serait fausse) ;
+  // la cote est rappelée dessous, avec un bouton pour la reprendre si c'est vraiment le prix payé
+  const cost = o ? cents(o.cost) : '';
   const body = html`<form class="form mk-oform" novalidate>
 <div class="two"><label class="field">Quantité<input name="qty" type="number" inputmode="numeric" min="1" max="999" step="1" value="${o?.qty || 1}" required></label>
 <label class="field">Prix d’achat à l’unité<input name="cost" type="text" inputmode="decimal" autocomplete="off" value="${cost}" placeholder="ex. 150,00" aria-describedby="mk-fhint"></label></div>
 <label class="field">Acheté le<input name="at" type="date" value="${o?.at || today}" max="${today}"></label>
-<p class="mk-fhint" id="mk-fhint">${prod.eur != null ? `Cote du jour ${eur(prod.eur)}${prod.low != null ? ` · dès ${eur(prod.low)}` : ''}. Laisse le prix vide si tu ne le connais pas.` : 'Pas de vente récente. Laisse le prix vide si tu ne le connais pas.'}</p>
+<div class="mk-fhintrow"><p class="mk-fhint" id="mk-fhint">${prod.eur != null ? `Cote du jour ${eur(prod.eur)}${prod.low != null ? ` · dès ${eur(prod.low)}` : ''}` : 'Pas de vente récente'}. Laisse le prix vide si tu ne le connais pas.</p>${
+  prod.eur != null ? html`<button type="button" class="btn text sm mk-usecote" data-cote="${cents(prod.eur)}">Utiliser la cote</button>` : ''}</div>
 <p class="mk-ferr" role="alert" hidden></p>
 <button type="submit" class="btn primary block">${o ? 'Enregistrer' : 'Ajouter à mon scellé'}</button>
 ${o ? html`<button type="button" class="btn block danger" data-remove>Retirer de mon scellé</button>` : ''}
@@ -164,6 +167,12 @@ ${o ? html`<button type="button" class="btn block danger" data-remove>Retirer de
   const form = s.el.querySelector('form');
   const err = form.querySelector('.mk-ferr');
   const fail = (msg, input) => { err.textContent = msg; err.hidden = false; input?.focus(); input?.setAttribute('aria-invalid', 'true'); };
+  form.querySelector('.mk-usecote')?.addEventListener('click', e => {
+    const c = form.elements.cost;
+    c.value = e.currentTarget.dataset.cote;
+    c.removeAttribute('aria-invalid');
+    c.focus();
+  });
   form.addEventListener('submit', async e => {
     e.preventDefault();
     const q = form.elements.qty, c = form.elements.cost, a = form.elements.at;

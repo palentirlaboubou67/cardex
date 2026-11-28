@@ -6,7 +6,8 @@ import { setBar } from '../core/appbar.js';
 import { html, raw, setHTML, delegate, selectChip } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { eur, num, plural, dateFr, localNo, norm } from '../core/format.js';
-import { renderChunked } from '../core/list.js';
+// lots rythmés par l'image (core/list.js renderChunked enchaîne plusieurs lots avant le rendu : longue tâche)
+import { renderGrid as renderChunked } from './collection/grid.js';
 import { whenIdle } from '../core/idle.js';
 import { MESSAGES } from '../core/net.js';
 import { infoSheet, openSheet, isOpen as sheetOpen } from '../core/sheet.js';
@@ -37,6 +38,8 @@ const taps = new Map();            // « id|finition » -> instant du dernier ap
 let swipe = null;
 let lastSig = null;                // signal du dernier show() / resume() : « Réessayer » s'arrête si la vue est quittée
 const noPrices = new Set();        // séries dont le fichier de cotes n'a pas pu être chargé (dernier essai)
+let setsRead = false;              // catalogue des séries lu : une série qu'il ne connaît pas n'a pas de fichier de cotes
+const noFile = new Set();          // séries hors du catalogue (découvertes en direct) : pas de fichier de cotes
 
 // ---------- données ----------
 const baseFin = c => BASE.find(f => c.finishes.includes(f)) || c.finishes[0] || 'normal';
@@ -117,6 +120,7 @@ function countsText(m, p) {
 // ligne « Valeur » de l'en-tête (une version par carte ; le détail est dans la feuille) : bouton vers la feuille
 function valueHTML() {
   const lbl = html`<span class="lbl">Valeur</span>`;
+  if (cur?.s && noFile.has(cur.id) && !prices.has(cur.id)) return html`${lbl}<span class="k">Pas de cote Cardmarket</span>`;
   if (!cur?.s || !prices.has(cur.id)) {
     // cotes absentes après un essai : la ligne reste un bouton, la feuille réessaie
     if (cur?.s && noPrices.has(cur.id)) return html`${lbl}<span class="k">Cotes indisponibles</span>${icon('chevron-right', { cls: 'chev' })}`;
@@ -127,9 +131,20 @@ function valueHTML() {
   return html`${lbl}<b>${eur(v.base.value)}</b><span class="k">${v.mine.priced ? `· tes cartes ${eur(v.mine.value)}` : ''}</span>${icon('chevron-right', { cls: 'chev' })}`;
 }
 
+// ligne de progression en attente (cartes de la série pas encore là) : même hauteur que la vraie, rien ne saute
+const progSk = label => html`<div class="prog sh-psk" aria-hidden="true"><span class="lbl">${label}</span><span class="sk sk-v"></span></div>`;
+
 function dynHTML() {
   const m = cur.meta, p = progressOf(m);
-  return html`${progRow('Cartes', p)}${cur.s && masterKnown() ? progRow('Master set', masterProg()) : ''}<button type="button" class="prog sh-val" data-value>${valueHTML()}</button>`;
+  // master set : connu avec les cartes de la série ; place gardée pendant leur chargement (série du catalogue)
+  const master = cur.s ? (masterKnown() ? progRow('Master set', masterProg()) : '') : progSk('Master set');
+  return html`${progRow('Cartes', p)}${master}<button type="button" class="prog sh-val" data-value>${valueHTML()}</button>`;
+}
+
+// en-tête en attente (ouverture à froid : catalogue des séries pas encore lu) : la hauteur de l'en-tête final (logo,
+// deux lignes, trois lignes de progression), pour que la grille ne saute pas à l'arrivée des données
+function headSkeleton() {
+  return html`<div class="sh-top" aria-hidden="true"><span class="setlogo setlogo-hero sk"></span><div class="sh-facts"><span class="sh-l1"><span class="sk sh-sk1"></span></span><span class="sh-l2"><span class="sk sh-sk2"></span></span></div></div><div class="sh-prog" aria-hidden="true">${progSk('Cartes')}${progSk('Master set')}${progSk('Valeur')}</div>`;
 }
 
 function headHTML() {
@@ -430,11 +445,12 @@ function modesSheet() {
 async function valueSheet() {
   if (!cur?.s) return;
   const id = cur.id;
-  await askPrices(id);                                  // déjà chargées : immédiat ; sinon nouvel essai
+  if (!noFile.has(id)) await askPrices(id);             // déjà chargées : immédiat ; sinon nouvel essai
   if (!cur?.s || cur.id !== id || el.hidden) return;
   const v = values(), loaded = prices.has(id);
   // fichier absent : des tirets, sans « N sans cote » (on ne sait pas lesquelles ont une cote)
-  const off = loaded ? '' : html`<p>Les cotes de cette série n’ont pas pu être chargées. Vérifie ta connexion, puis rouvre cette feuille.</p>`;
+  const off = loaded ? '' : noFile.has(id) ? html`<p>Pas de cote Cardmarket pour cette série.</p>`
+    : html`<p>Les cotes de cette série n’ont pas pu être chargées. Vérifie ta connexion, puis rouvre cette feuille.</p>`;
   // « 207 cartes cotées · 1 sans cote » (accord : une carte, une version cotée ; un exemplaire coté)
   const sub = (x, unit, adj) => (loaded ? [x.priced ? `${plural(x.priced, unit, `${unit}s`)} ${adj}${x.priced > 1 ? 's' : ''}` : '', x.unpriced ? `${num(x.unpriced)} sans cote` : ''].filter(Boolean).join(' · ') : '');
   const row = (k, x, unit, adj) => html`<div class="row dl"><span class="k">${k}</span><span class="v"><b class="price">${x.priced ? eur(x.value) : '—'}</b><small>${sub(x, unit, adj)}</small></span></div>`;
@@ -452,13 +468,18 @@ async function open(id, signal) {
   if (!same) {
     cur = { id, s: null, meta: meta0 || { id, name: id, total: 0, count: 0, legal: {} }, bloc: '' };
     bodyEl.dataset.set = '';
-    setHTML(headEl, meta0 ? headHTML() : '');
+    setHTML(headEl, meta0 ? headHTML() : headSkeleton());
     renderTools();
     setHTML(bodyEl, skeleton());
   }
-  const pricesP = askPrices(id);                        // 2e requête (cotes), en parallèle des cartes
+  // série absente d'un catalogue déjà lu (lien ancien ou tapé à la main) : pas de fichier de cotes à demander
+  // (catalog.set() essaie encore TCGdex en direct pour une sortie récente)
+  const known = !!meta0 || !setsRead;
+  if (!known) noFile.add(id);
+  const pricesP = known ? askPrices(id) : Promise.resolve();   // 2e requête (cotes), en parallèle des cartes
   let s, all;
   try { [s, all] = await Promise.all([catalog.set(id), catalog.sets().catch(() => null)]); } catch (e) {
+    catalog.sets().then(() => { setsRead = true; }, () => {});
     if (signal?.aborted) return;
     const nf = e?.kind === 'notfound';
     setHTML(headEl, '');
@@ -471,6 +492,7 @@ async function open(id, signal) {
     cur = { id, s: null, meta: meta0, bloc: '', failed: true, nf };
     return;
   }
+  if (all) setsRead = true;
   if (signal?.aborted) return;
   cur = { id, s, meta: s.meta, bloc: all?.blocs.find(b => b.id === s.meta.bloc)?.name || '' };
   // cotes : on les attend un instant (le premier rendu les a souvent), sinon elles arrivent ensuite (onPrices)
@@ -498,6 +520,7 @@ export default {
     el = section;
     el.innerHTML = '<div class="ser-head"></div><div class="ser-toolbox"></div><div class="ser-tipbox"></div><div class="ser-body"></div>';
     headEl = el.querySelector('.ser-head');
+    catalog.sets().then(() => { setsRead = true; }, () => {});
     toolsEl = el.querySelector('.ser-toolbox');
     tipEl = el.querySelector('.ser-tipbox');
     bodyEl = el.querySelector('.ser-body');
@@ -574,7 +597,7 @@ export default {
     const meta0 = catalog.metaSync(id);
     setBar({ title: meta0?.name || 'Série', subtitle: meta0?.date ? dateFr(meta0.date) : '', back: true, signal });
     if (cur?.id === id && cur.s) {                      // même série, autres paramètres : pas de nouvelle requête
-      if (!prices.has(id)) askPrices(id);               // sauf les cotes, si elles manquaient
+      if (!prices.has(id) && !noFile.has(id)) askPrices(id);   // sauf les cotes, si elles manquaient
       barFor(signal);
       await renderAll();
       return;
@@ -588,7 +611,7 @@ export default {
     lastSig = r.signal;
     if (!cur?.id) return;
     if (!cur.s) { if (!cur.nf) open(cur.id, r.signal); }
-    else if (!prices.has(cur.id)) askPrices(cur.id);
+    else if (!prices.has(cur.id) && !noFile.has(cur.id)) askPrices(cur.id);
   },
 
   hide() { swipe = null; },

@@ -55,6 +55,7 @@ function pack(r, token) {
   out.group = k.group.map(x => ({ id: db.ids[x.i], d: x.d }));
   out.rivals = dc.rivals.map(i => ({ id: db.ids[i], d: k.near.find(n => n.i === i)?.d ?? null }));
   out.twins = db.twinsOf(k.i1);
+  out.arts = (db.arts.get(k.i1) || []).map(j => db.ids[j]);    // même illustration d'après le nom : jamais acceptée sur la zone seule
   return out;
 }
 

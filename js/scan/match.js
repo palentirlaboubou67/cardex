@@ -33,6 +33,16 @@ export class ScanDB {
       (this.near.get(i) || this.near.set(i, []).get(i)).push(j);
       (this.near.get(j) || this.near.set(j, []).get(j)).push(i);
     }
+    // même illustration d'après le nom (cards.json arts : holo / non holo WOTC, réimpressions d'Évolutions…) : leurs
+    // scans de référence peuvent être très différents, la photo ressembler plus à l'autre impression. Toujours rivales
+    // (zone du numéro, sinon choix), quelle que soit leur distance.
+    this.arts = new Map();
+    for (const [a, b] of cards.arts || []) {
+      const i = this.row.get(a), j = this.row.get(b);
+      if (i === undefined || j === undefined) continue;
+      (this.arts.get(i) || this.arts.set(i, []).get(i)).push(j);
+      (this.arts.get(j) || this.arts.set(j, []).get(j)).push(i);
+    }
     // jumelles sans image (cards.json twins : carte avec image → cartes de même illustration sans image dans la base,
     // kits du dresseur, McDonald's, promos…) : une telle ligne n'est jamais acceptée sur l'image seule
     this.twins = cards.twins || {};
@@ -119,7 +129,11 @@ export class ScanDB {
     const i1 = t[0].i, grp = this.members(i1).filter(keep);
     const d1 = t[0].s / 128;
     const near = (this.near.get(i1) || []).filter(keep).map(j => ({ i: j, d: this.bits(q, j) / 128 })).sort((a, b) => a.d - b.d);
-    const rivals = near.filter(x => x.d < d1 + lookalike).slice(0, maxRivals);
+    const arts = (this.arts.get(i1) || []).filter(j => keep(j) && !grp.includes(j)).map(j => ({ i: j, d: this.bits(q, j) / 128 }));
+    const rivals = [...arts, ...near.filter(x => x.d < d1 + lookalike && !arts.some(a => a.i === x.i))]
+      .sort((a, b) => a.d - b.d).slice(0, maxRivals);
+    for (const a of arts) if (!near.some(x => x.i === a.i)) near.push(a);
+    near.sort((a, b) => a.d - b.d);
     const excl = new Set([...grp, ...rivals.map(x => x.i)]);
     let out2 = t.find(x => !excl.has(x.i));
     if (!out2) out2 = this.top(q, 48).find(x => !excl.has(x.i));

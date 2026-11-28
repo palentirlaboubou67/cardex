@@ -4,8 +4,10 @@ import { setBar } from '../core/appbar.js';
 import { html, raw, setHTML, delegate } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { num, plural, localNo } from '../core/format.js';
-import { setParams } from '../core/router.js';
-import { renderChunked, patchByKey } from '../core/list.js';
+import { setParams, depth } from '../core/router.js';
+import { patchByKey } from '../core/list.js';
+// lots rythmés par l'image (core/list.js renderChunked enchaîne plusieurs lots avant le rendu : longue tâche)
+import { renderGrid as renderChunked } from './collection/grid.js';
 import { yieldToMain } from '../core/idle.js';
 import { infoSheet } from '../core/sheet.js';
 import { MESSAGES } from '../core/net.js';
@@ -230,6 +232,18 @@ function applyMode() {
 }
 
 // ---------- vue ----------
+function bar(signal) {
+  setBar({
+    // racine ouverte par-dessus un autre écran (« Chercher par nom », état vide) : ← pour y revenir
+    title: 'Séries', back: depth() > 0, signal,
+    menu: [
+      { icon: 'info', label: 'À propos de cet écran', onClick: about },
+      { icon: 'chevron-down', label: 'Déplier tous les blocs', onClick: () => expandAll(true) },
+      { icon: 'chevron-up', label: 'Replier tous les blocs', onClick: () => expandAll(false) },
+    ],
+  });
+}
+
 function about() {
   infoSheet('Séries', [
     'Les séries sont rangées par bloc, la plus récente en haut. Touche un bloc pour le replier : Cardex s’en souvient.',
@@ -271,6 +285,9 @@ export default {
     chipsEl = el.querySelector('.ser-chips');
     statusEl = el.querySelector('[role="status"]');
     input = el.querySelector('input[name="q"]');
+    // la première frappe ne paie pas l'index des cartes : il se charge dès que le champ prend le focus
+    input.addEventListener('focus', () => catalog.warmIndex());
+    input.addEventListener('pointerdown', () => catalog.warmIndex(), { passive: true });
     delegate(el, 'input', 'input[name="q"]', () => {
       clearTimeout(timer);
       const v = input.value.trim();
@@ -300,14 +317,7 @@ export default {
 
   async show(r) {
     const { signal } = r;
-    setBar({
-      title: 'Séries', signal,
-      menu: [
-        { icon: 'info', label: 'À propos de cet écran', onClick: about },
-        { icon: 'chevron-down', label: 'Déplier tous les blocs', onClick: () => expandAll(true) },
-        { icon: 'chevron-up', label: 'Replier tous les blocs', onClick: () => expandAll(false) },
-      ],
-    });
+    bar(signal);
     clearTimeout(timer);
     const nq = (r.q.get('q') || '').trim(), nf = okFiltre(r.q.get('filtre'));
     if (nf !== filtre) listDirty = true;
@@ -316,7 +326,9 @@ export default {
     filtre = nf;
     limit = STEP;
     if (input.value.trim() !== q) input.value = q;
-    catalog.warmIndex();                                  // la première frappe ne paie plus l'index des cartes
+    // index des cartes (147 Ko) : chargé quand le champ de recherche sert (focus, frappe) ou qu'une recherche est dans
+    // l'adresse, plus à chaque ouverture de Séries
+    if (q) catalog.warmIndex();
     if (!all) { await load(signal); return; }
     listEl.hidden = !!q;
     resEl.hidden = !q;
@@ -327,8 +339,10 @@ export default {
     }
   },
 
-  // retour depuis le cache : puces toujours recomptées ; liste ou résultats refaits s'ils sont périmés
-  resume() {
+  // retour depuis le cache : puces toujours recomptées ; liste ou résultats refaits s'ils sont périmés. La barre est
+  // refaite : la même adresse peut être la racine de l'onglet ou empilée sur un autre écran (← ou pas)
+  resume(r) {
+    if (r) bar(r.signal);
     if (!all) return;
     if (!q && listDirty) { renderList({ sync: true }); return; }   // renderList recompte aussi les puces
     updateChips();

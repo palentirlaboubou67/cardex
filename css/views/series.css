@@ -66,6 +66,14 @@
 #v-set .sh-val:active { opacity: .7; }
 @media (hover: hover) { #v-set .sh-val:hover b { color: var(--accent); } }
 .sk-v { display: inline-block; flex: none; width: 120px; height: 12px; border-radius: 6px; background: var(--fill); }
+/* en-tête en attente (ouverture à froid) : mêmes hauteurs que l'en-tête final */
+#v-set .ser-head .setlogo-hero.sk { background: var(--fill); border-radius: var(--r-2); }
+#v-set .sh-sk1, #v-set .sh-sk2 { display: inline-block; height: 10px; margin: 3px 0; border-radius: 5px; vertical-align: middle; }
+#v-set .sh-sk1 { width: 72px; }
+#v-set .sh-sk2 { width: 96px; margin: 0; }
+#v-set .sh-psk { height: 18px; }
+#v-set .sh-psk:last-child { height: 24px; }        /* place de la ligne « Valeur » (bouton de 24 px) */
+#v-set .sh-psk .sk-v { flex: 1; max-width: 220px; height: 10px; }
 #v-set .sh-prog { display: grid; gap: 4px; margin-top: 12px; }
 #v-set .sh-prog .prog .lbl { min-width: 78px; }
 #v-set .sh-prog .prog b { min-width: 4.8em; }

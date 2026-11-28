@@ -8,7 +8,7 @@ coffre de collection = coffret, boutiques Pokémon Center japonaises = japonais)
 import re
 from collections import Counter, defaultdict
 
-from .util import num, straight
+from .util import num, straight, typo
 
 CAT = {52: "booster", 53: "box", 54: "deck", 1013: "kit", 1014: "tin", 1015: "coffret", 1016: "etb",
        1017: "coin", 1064: "lot", 1083: "blister", 1654: "cardset"}
@@ -195,8 +195,8 @@ def catalogue(kept, rows, cm, namer, img, hist_summary, shard_of):
         h = hist_summary(pid)
         out.append({
             "id": pid, "k": k, "l": l, "e": e, "sid": None if tk else sid,
-            "set": None if tk or not sid else namer.set_fr(sid), "rel": rel,
-            "fr": fr, "n": p["name"],
+            "set": None if tk or not sid else typo(namer.set_fr(sid)), "rel": rel,
+            "fr": typo(fr), "n": p["name"],
             "img": f"https://tcgplayer-cdn.tcgplayer.com/product/{t}_200w.jpg" if t else "",
             "eur": round(eur, 2) if eur else None, "low": round(low, 2) if low else None,
             "c7": h["c7"], "c30": h["c30"], "c90": h["c90"], "c365": h["c365"],

@@ -3,9 +3,11 @@
   python tools/build_market.py              chaque jour (04:15 et 10:15 UTC) : guide des prix + produits scellés ->
                                             data/market/prices/<série>.json, data/market/sealed.json, un point
                                             d'historique quand le guide est nouveau (date = createdAt), meta.json
-  python tools/build_market.py --weekly     chaque semaine, avant le quotidien : base TCGdex (cards-database, MIT),
-                                            liste des cartes Cardmarket, noms PokéAPI, listes TCGCSV ->
-                                            data/market/cm-map.json et data/market/sealed-img.json
+  python tools/build_market.py --weekly     chaque lundi (03:45 UTC, à la place du passage de 04:15), avec le
+                                            quotidien : base TCGdex (cards-database, MIT), liste des cartes
+                                            Cardmarket, noms PokéAPI, listes TCGCSV -> data/market/cm-map.json et
+                                            data/market/sealed-img.json ; chaque fichier Cardmarket n'est demandé
+                                            qu'une fois par passage (au plus deux passages par jour)
   python tools/build_market.py --backfill   une fois : historique du scellé reconstitué depuis les copies du guide
                                             gardées par l'Internet Archive (au moins 10 s entre deux requêtes) ;
                                             relancé (--offline) après une correction du calcul des prix, il
@@ -117,11 +119,14 @@ def weekly(cache, out_dir, meta, report, photos=True):
     log("Hebdomadaire : base TCGdex, cartes Cardmarket, noms PokéAPI" + (", photos TCGplayer" if photos else ""))
     singles, si = sources.cardmarket(cache, "products_singles_6.json")
     nonsingles, ni = sources.cardmarket(cache, "products_nonsingles_6.json")
+    guide, _ = sources.cardmarket(cache, "price_guide_6.json")  # repris tel quel par le quotidien (une requête)
     zpath, zi = sources.cards_db(cache)
     species = sources.species(cache)
     app = app_cards(ROOT)
     log(f"  appli : {len(app)} cartes dans data/sets/")
-    cm, audit, db = cmap.build(zpath, singles["products"], nonsingles["products"], species, app_cards=app, log=log)
+    rows = {r["idProduct"]: r for r in guide["priceGuides"] if isinstance(r, dict) and isinstance(r.get("idProduct"), int)}
+    cm, audit, db = cmap.build(zpath, singles["products"], nonsingles["products"], species, app_cards=app, log=log,
+                               guide=rows)
     cm["built"] = datetime.now(timezone.utc).date().isoformat()
     cm["unlinked"] = unlinked(cm, app)  # cartes de l'appli vues sans lien (le quotidien ne refait pas la table pour elles)
     log("  " + json.dumps(cm["stats"], ensure_ascii=False))
@@ -323,8 +328,10 @@ def write_all(out_dir, res, cm=None, img=None, meta=None):
     res["sealed_written"] = not same
     if cm is not None:
         write_text(os.path.join(out_dir, "cm-map.json"), dumps(cm, sort=False) + "\n")
-    if img is not None:
-        write_text(os.path.join(out_dir, "sealed-img.json"), dumps(img, sort=False) + "\n")
+    if img is not None:  # même table de photos : fichier gardé (seule sa date changerait)
+        old_img = read_json(os.path.join(out_dir, "sealed-img.json")) or {}
+        if old_img.get("img") != img.get("img"):
+            write_text(os.path.join(out_dir, "sealed-img.json"), dumps(img, sort=False) + "\n")
     if meta is not None:
         old = read_json(os.path.join(out_dir, "meta.json"))
         if old != meta:

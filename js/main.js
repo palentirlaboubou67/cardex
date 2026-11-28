@@ -4,7 +4,7 @@ import * as router from './core/router.js';
 import { setBar, getBar, focusTitle, barSignal, barOf } from './core/appbar.js';
 import * as sheet from './core/sheet.js';
 import { toast } from './core/toast.js';
-import { whenIdle } from './core/idle.js';
+import { whenIdle, nextPaint } from './core/idle.js';
 import { html, enhance } from './core/dom.js';
 import { icon, injectSprite } from './core/icons.js';
 import * as collection from './state/collection.js';
@@ -60,8 +60,19 @@ function bootSkeleton(view) {
     ? '<span class="sk-tile"><span class="sk-img"></span><span class="sk-l1"></span><span class="sk-l2"></span></span>'
     : '<span class="row sk-row"><span class="sk-a"></span><span class="body"><span class="sk-t"></span><span class="sk-s"></span></span></span>';
   const body = item.repeat(n);
-  return `<div class="boot-sk" aria-busy="true" aria-label="Chargement">${GRID_VIEWS.has(view) ? `<div class="grid">${body}</div>` : `<div class="group">${body}</div>`}</div>`;
+  return `<div class="boot-sk" aria-busy="true" aria-label="Chargement">${TYPE_WARM}${GRID_VIEWS.has(view) ? `<div class="grid">${body}</div>` : `<div class="group">${body}</div>`}</div>`;
 }
+// Styles de texte des composants les plus courants, invisibles, mis en page avec le squelette : la première mise en
+// page d'un style (taille, graisse, largeur de la police variable) coûte 2 à 5 ms à CPU ×4, et le premier écran d'une
+// vue en demande une dizaine d'un coup. Préparés dans l'image du squelette (légère), ils ne pèsent plus sur la
+// première image du contenu (SPEC §12 : aucune tâche de plus de 50 ms au démarrage).
+const TYPE_WARM = '<div class="type-warm" aria-hidden="true">'
+  + '<div class="summary"><span class="hero num">1 234,56 €</span><span class="meta">12 cartes · 3 séries</span></div>'
+  + '<span class="cap"><b>Pikachu</b><span><i>025 · 151</i><em>1,23 €</em></span></span>'
+  + '<div class="row"><span class="body"><span class="t">Écarlate et Violet</span><span class="s"><span>12 / 165 · 7 %</span></span></span><span class="end"><b class="price">12,34 €</b></span></div>'
+  + '<div class="sect">Séries</div><span class="chip">Toutes <span class="n">12</span></span>'
+  + '<nav class="ptabs"><a aria-current="page">Cartes</a><a>Pokédex</a></nav><span class="seg"><a aria-current="page">Toutes</a><a>Possédées</a></span>'
+  + '<span class="fin">Holo</span><span class="caption">Mise à jour 25 nov.</span></div>';
 const dropSkeleton = () => outlet?.querySelector(':scope > .boot-sk')?.remove();
 
 function section(name) {
@@ -77,6 +88,35 @@ function section(name) {
     views.set(name, v);
   }
   return v;
+}
+
+// Feuille de style d'une vue (css/views/<fichier>.css) : ajoutée à sa première visite, pas au démarrage (les six
+// feuilles font ~16 Ko gzip avant le premier écran, SPEC §12 : 180 Ko). Chargée en même temps que le module de la vue ;
+// show() attend les deux (jamais d'écran sans style). Les vues d'un même onglet partagent leur feuille.
+const CSS_OF = {
+  collection: 'collection', poke: 'collection', settings: 'collection', sets: 'series', set: 'series', card: 'carte',
+  scan: 'scanner', market: 'marche', product: 'marche', decks: 'decks', deck: 'decks',
+};
+const sheets = new Map();           // fichier -> promesse (rejetée si la feuille n'a pas pu être chargée)
+function viewCss(name) {
+  const f = CSS_OF[name];
+  if (!f) return null;
+  if (!sheets.has(f)) {
+    const href = `css/views/${f}.css`;
+    sheets.set(f, new Promise((res, rej) => {
+      const old = document.querySelector(`link[rel="stylesheet"][href="${href}"]`);
+      if (old?.sheet) { res(); return; }
+      const link = old || Object.assign(document.createElement('link'), { rel: 'stylesheet', href });
+      link.addEventListener('load', () => res(), { once: true });
+      link.addEventListener('error', () => {      // hors ligne sans copie : on réessaiera (bouton « Réessayer »)
+        sheets.delete(f);
+        link.remove();
+        rej(new Error(`Feuille de style introuvable : ${href}`));
+      }, { once: true });
+      if (!old) document.head.appendChild(link);
+    }));
+  }
+  return sheets.get(f);
 }
 
 function loadView(name) {
@@ -103,7 +143,7 @@ function failView(v, r, e, kind) {
   const box = html`<div class="empty view-err" data-content><span class="ic">${icon('alert')}</span><b>Écran indisponible</b><p>${msg}</p><button type="button" class="btn" data-retry>Réessayer</button></div>`;
   // module absent : la section est vide ; erreur de la vue : sa structure (posée par mount) reste, masquée
   v.el.querySelector(':scope > .view-err')?.remove();
-  if (kind === 'load') v.el.innerHTML = String(box);
+  if (kind === 'load' && !v.mod) v.el.innerHTML = String(box);
   else { v.el.insertAdjacentHTML('afterbegin', String(box)); v.el.classList.add('failed'); }
   v.el.querySelector('[data-retry]')?.addEventListener('click', () => {
     v.el.querySelector(':scope > .view-err')?.remove();
@@ -155,7 +195,7 @@ async function renderRoute(r, tab, info = {}) {
       v.ok = false;
       let mod;
       try {
-        [mod] = await Promise.all([loadView(r.view), IMG_VIEWS.has(r.view) ? imgSoon() : null]);
+        [mod] = await Promise.all([loadView(r.view), IMG_VIEWS.has(r.view) ? imgSoon() : null, viewCss(r.view)]);
       } catch (e) { if (my === token) failView(v, r, e, 'load'); return; }
       if (my !== token) return;
       dropSkeleton();
@@ -233,7 +273,7 @@ async function maybeCheckWishes() {
     try { const reg = await navigator.serviceWorker?.getRegistration?.(); if (reg) await W.notify(reg, hits); } catch {}
   }
   toast(hits.length === 1 ? `${hits[0].name} est dans ta fourchette` : `${hits.length} cartes sont dans ta fourchette`,
-    { action: 'Voir', onAction: () => router.openRoot('#/marche/envies') });
+    { action: 'Voir', onAction: () => router.go('#/marche/envies') });
 }
 
 // ---------- Enregistrement de la collection en échec : toast persistant (« Exporter ») ----------
@@ -285,7 +325,12 @@ function registerSW() {
     location.reload();
   });
   sw.register('sw.js').then(reg => {
-    const offer = w => toast('Nouvelle version disponible', { action: 'Recharger', ms: 0, onAction: () => w.postMessage('activate-now') });
+    // « Recharger » : la version en place arrête son travail de fond (la nouvelle n'est activée qu'après), puis la
+    // nouvelle prend la main (controllerchange -> rechargement)
+    const offer = w => toast('Nouvelle version disponible', { action: 'Recharger', ms: 0, onAction: () => {
+      try { sw.controller?.postMessage({ type: 'yield' }); } catch { /* rien */ }
+      w.postMessage('activate-now');
+    } });
     if (reg.waiting && sw.controller) offer(reg.waiting);
     reg.addEventListener('updatefound', () => {
       const w = reg.installing;
@@ -306,6 +351,9 @@ function onCollection(events) {
     if (v.mod.onChange) safe(() => v.mod.onChange(events));
     else v.stale = true;
   }
+  // sauvegarde de la v1 importée (ou collection v1 venue d'un autre onglet) : finitions revues tout de suite,
+  // pas seulement au prochain démarrage
+  if (idleStarted && events.some(e => e.type === 'reload')) checkFinishesSoon();
 }
 
 const hasCards = () => {
@@ -327,9 +375,17 @@ async function checkFinishes() {
   }
   if (complete) collection.finishCheckDone();
 }
+// une seule vérification à la fois (repairFinishes émet lui-même un 'reload') ; hors ligne : reprise au retour du réseau
+let finishRun = null, idleStarted = false;
+function checkFinishesSoon() {
+  if (finishRun || !safe(() => collection.needsFinishCheck?.())) return;
+  finishRun = checkFinishes().catch(e => console.error(e)).finally(() => { finishRun = null; });
+}
 
 function idleTasks() {
-  checkFinishes().catch(e => console.error(e));
+  idleStarted = true;
+  checkFinishesSoon();
+  addEventListener('online', checkFinishesSoon);
   import('./features/achievements.js').then(m => safe(() => m.init())).catch(e => console.error(e));
   import('./features/valuehistory.js').then(m => safe(() => m.init())).catch(e => console.error(e));
   // stockage persistant : seulement pour l'appli installée (Firefox afficherait une demande à chaque visite)
@@ -340,14 +396,20 @@ function idleTasks() {
   refreshMarketBadge().then(() => maybeCheckWishes());
   registerSW();
   // les racines des onglets se chargent d'avance : changer d'onglet est immédiat
-  whenIdle(() => { for (const n of ['collection', 'sets', 'scan', 'market', 'decks']) import(`./views/${FILES[n]}.js`).catch(() => {}); });
+  whenIdle(() => {
+    for (const n of ['collection', 'sets', 'scan', 'market', 'decks']) {
+      import(`./views/${FILES[n]}.js`).catch(() => {});
+      viewCss(n)?.catch(() => {});
+    }
+  });
 }
 
 // ---------- Tests (Playwright) ----------
+let routing = false;                       // router.start() appelé (le démarrage a passé ses premières tâches)
 const settled = async () => {
   for (let i = 0; i < 200; i++) {
     await new Promise(r => setTimeout(r, 25));
-    if (!router.isBusy() && !rendering) break;
+    if (routing && !router.isBusy() && !rendering) break;
   }
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 };
@@ -376,12 +438,18 @@ async function boot() {
   window.__cardex = { router, sheet, toast, views, log, settled, open, applyTheme, refreshMarketBadge, version: 2 };
   // squelette tout de suite ; le module de la première vue se charge pendant que la table des images arrive
   const first = router.parse() || router.parse(router.LEGACY[location.hash] || '');
-  outlet.insertAdjacentHTML('afterbegin', bootSkeleton(first?.view || (hasCards() ? 'collection' : 'scan')));
-  if (first) import(`./views/${FILES[first.view]}.js`).catch(() => {});
+  outlet.insertAdjacentHTML('afterbegin', bootSkeleton(first?.view || (safe(() => collection.peekHasCards()) ? 'collection' : 'scan')));
+  if (first) { import(`./views/${FILES[first.view]}.js`).catch(() => {}); viewCss(first.view)?.catch(() => {}); }
   images.ready.then(() => {
     imgReady = true;
     if (outlet.querySelector('.tile .card-ph')) import('./components/tile.js').then(m => m.refreshImages(outlet)).catch(e => console.error(e));
   });
+  // SPEC §12 (aucune tâche de plus de 50 ms au démarrage) : la suite dans d'autres tâches. Le squelette est peint
+  // d'abord (la coque est mise en page une fois pour toutes), puis la collection est lue (~20 ms avec 2 000 cartes à
+  // CPU ×4), puis la première route est rendue.
+  await nextPaint();
+  safe(() => collection.warm?.());
+  routing = true;
   await router.start(renderRoute, {
     hasCards,
     isSheetOpen: sheet.isOpen,

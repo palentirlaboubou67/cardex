@@ -2,6 +2,7 @@
 // Une section par onglet, gardée dans le DOM : changer d'onglet ne redessine que ce qui a changé.
 // Pastille : main.js publie l'état « une envie est dans sa fourchette » (événement cardex:badge) ; point sur Envies.
 import { setBar, primaryTabs } from '../core/appbar.js';
+import { depth } from '../core/router.js';
 import { html, setHTML } from '../core/dom.js';
 import { infoSheet } from '../core/sheet.js';
 import cotes from './marche/cotes.js';
@@ -52,7 +53,9 @@ function tabs() {
 function bar(r) {
   const s = SECS[sec];
   const info = { icon: 'info', label: 'À propos de cet écran', onClick: () => { const i = s.info(); infoSheet(i.title, i.body); } };
-  setBar({ title: 'Marché', signal: r.signal, actions: [...(s.actions?.() || []), info] });
+  // racine ouverte par-dessus un autre écran (toast « Voir » d'une envie, page d'un deck) : ← pour y revenir
+  const d = depth() - (history.state?.sheet ? 1 : 0);          // une feuille ouverte a sa propre entrée
+  setBar({ title: 'Marché', back: d > 0, signal: r.signal, actions: [...(s.actions?.() || []), info] });
 }
 
 // donné aux sections : redessiner les onglets (pastille) ou la barre d'app (état d'une action)
@@ -87,6 +90,7 @@ export default {
   resume(r) {
     lastR = r;
     visible = true;
+    bar(r);                     // la même adresse peut être la racine de l'onglet ou empilée (← ou pas)
     tabs();
     SECS[sec]?.resume?.(r);
   },

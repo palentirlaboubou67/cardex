@@ -12,13 +12,13 @@ export const KIND_ORDER = ['box', 'halfbox', 'etb', 'bundle', 'coffret', 'tin', 
 export const KIND = {
   box: 'Display', halfbox: 'Demi-display', etb: 'Coffret Dresseur d’Élite', bundle: 'Bundle', coffret: 'Coffret',
   tin: 'Pokébox', blister: 'Blister', booster: 'Booster', deck: 'Deck', prerelease: 'Stratégies et Combats',
-  kit: 'Kit du Dresseur', case: 'Carton',
+  kit: 'Kit du dresseur', case: 'Carton',
 };
 // puces du catalogue (une famille de produits)
 export const CHIP = {
   box: 'Display', halfbox: 'Demi-display', etb: 'Coffret Dresseur d’Élite', bundle: 'Bundle', coffret: 'Coffret',
   tin: 'Pokébox et tins', blister: 'Blister', booster: 'Booster', deck: 'Deck', prerelease: 'Avant-première',
-  kit: 'Kit du Dresseur', case: 'Carton et présentoir',
+  kit: 'Kit du dresseur', case: 'Carton et présentoir',
 };
 
 // ---------- périodes de variation ----------

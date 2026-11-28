@@ -1,16 +1,23 @@
 // Identification d'une carte dans une image (sans DOM) : utilisée par le worker et par le banc d'essai.
-// guidé (caméra) : options de côtés autour du guide → descente choisie par la base (detect.search)
-//                   → si le résultat est faible : options « porte-carte » et guide réduit ×0,8 (carte trop loin)
-// sans guide (photo importée) : quadrilatères candidats (detect.proposals) → raffinement guidé → meilleur.
-import { describe, warpRegion, rotate180, CW, CH } from './describe.js';
+// guidé (caméra) : options de côtés autour du guide → descente choisie par la base (detect.search), départs
+//                   géométriques compris (detect.seedCombos) → si le résultat est faible : options « porte-carte »
+//                   et guide réduit ×0,8 (carte trop loin) → recentrage autour du meilleur quad
+// sans guide (photo importée) : guides candidats (detect.proposals + guides centrés de 4 tailles, portrait et
+//                   paysage) examinés comme des guides de caméra → recherche complète sur les meilleurs.
+import { describe, warpRegion, rotate180, CW, CH, RATIO } from './describe.js';
 import {
   smallImage, sideOptions, search, rectQuad, toSmall, fromSmall, GUIDE_H, proposals, rotations, displayQuad, guideHeight,
+  seedCombos,
 } from './detect.js';
+
+// Réglages du détecteur (le banc d'essai peut les changer) : seeds = départs géométriques de la recherche
+export const DETECT = { seeds: 6, recentre: 1.35, recentrePeaks: 3 };
 
 // Seuils de décision (FINAL-scanner §5.4) ; calibrés avec tools/scan_bench.py calib (synthèse 750 photos,
 // carte absente 450, 21 photos réelles) : « normale » d1 ≤ 1,10 et d2 − d1 ≥ 0,30 garde 100 % de précision partout
 // et accepte 19/21 photos réelles ; plus strict ne fait guère baisser les fausses acceptations « carte absente »
-// (paires de même illustration), mais beaucoup les acceptations réelles.
+// (paires de même illustration), mais beaucoup les acceptations réelles. Revérifié sur 709 photos réelles (QA-SCAN,
+// tools/scan_bench.py photos) : aucune fausse acceptation ; assouplir (1,20 / 0,25) n'ajoute que 0,5–1 point.
 export const T = {
   strong: 0.60, strongRatio: 0.60,     // acceptation sur une seule image
   normal: 1.10, margin: 0.30,          // acceptation confirmée par 2 des 3 dernières images
@@ -81,7 +88,7 @@ export function identifyGuided(db, frame, guide, { small = null, retry = true } 
   const so = sideOptions(img, g0);
 
   // carte à l'envers ? on compare les deux sens sur les quads de départ
-  const seeds = [[0, 0, 0, 0], so.sides.map(s => Math.min(1, s.opts.length - 1))];
+  const seeds = [[0, 0, 0, 0], so.sides.map(s => Math.min(1, s.opts.length - 1)), ...seedCombos(so, { k: DETECT.seeds })];
   let best = search(so, obj, { seeds });
   if (best.score > T.strong) {
     state.rot = true;
@@ -105,7 +112,7 @@ export function identifyGuided(db, frame, guide, { small = null, retry = true } 
         return bi;
       }));
     }
-    const r2 = search(so2, obj, { seeds: [...seeds, ...inward] });
+    const r2 = search(so2, obj, { seeds: [...seeds.slice(0, 2), ...inward, ...seedCombos(so2, { k: DETECT.seeds })] });
     if (r2.score < best.score) { best = { ...r2, rot: best.rot }; stage = 'porte-carte'; }
     // carte tenue trop loin : guide réduit ×0,8
     if (best.score > T.retry) {
@@ -115,7 +122,21 @@ export function identifyGuided(db, frame, guide, { small = null, retry = true } 
     }
     state.rot = false;
   }
+  best = recentre(img, obj, state, best);
   return finish(db, wk, img, best, state, stage, t0);
+}
+
+// Recentrage : options recalculées autour du meilleur quad trouvé (profils perpendiculaires à ses côtés, sur toute
+// leur longueur) puis nouvelle descente. Rattrape un côté resté sur le bord d'un étui, d'un cadre ou de l'illustration
+// quand les trois autres sont justes (photos réelles : la vraie droite n'était pas parmi les pics du guide).
+// Seulement entre « forte » et DETECT.recentre (au-delà, le quad n'a rien de commun avec une carte de la base).
+function recentre(img, obj, state, best) {
+  if (!DETECT.recentre || !best.quad || !(best.score > T.strong) || !(best.score < DETECT.recentre)) return best;
+  state.rot = !!best.rot;
+  const so = sideOptions(img, best.quad, { peaks: DETECT.recentrePeaks });
+  const r = search(so, obj, { seeds: [[0, 0, 0, 0], so.sides.map(s => Math.min(1, s.opts.length - 1)), ...seedCombos(so, { k: DETECT.seeds })] });
+  state.rot = false;
+  return r.quad && r.score < best.score ? { ...r, rot: best.rot } : best;
 }
 
 function finish(db, wk, img, best, state, stage, t0) {
@@ -150,57 +171,75 @@ export function detectOnly(frame, guide, { small = null } = {}) {
 // ---------------------------------------------------------------------------------------------------------
 // Photo importée : pas de guide.
 
+// Guides candidats : propositions du détecteur global, plus des guides centrés portrait et paysage de plusieurs
+// tailles. Chacun est examiné comme un guide de caméra (options de côtés, quelques départs évalués par la base, dans
+// les deux sens), puis les meilleurs ont la recherche complète. Photos réelles (QA-SCAN) : la vraie carte n'était
+// parmi les propositions que pour 247 photos sur 505 (moitiés de carte prises pour des cartes couchées, bords de la
+// photo ou de la table), et le tri sur le quad brut ne voyait pas une carte à 3 % près.
+export const UNGUIDED = { scales: [0.92, 0.75, 0.6, 0.48], seeds: 4, refine: 3, levelPx: 1.2e6 };
+
 export function identifyUnguided(db, frame, { maxProps = 8 } = {}) {
   const t0 = performance.now();
   const { data, width: W, height: H } = frame;
   const k0 = Math.min(1, 640 / Math.max(W, H));
   const over = smallImage(data, W, H, k0);
-  let cands = proposals(over, { max: maxProps }).map(q => q.map(p => fromSmall(over, p)));
-  // repli : guides centrés (la carte remplit la photo), portrait et paysage
-  for (const s of [0.92, 0.75]) {
-    const h = s * Math.min(H, W / 0.716), w = h * 0.716;
+  const cands = proposals(over, { max: maxProps }).map(q => q.map(p => fromSmall(over, p)));
+  for (const s of UNGUIDED.scales) {
+    const h = s * Math.min(H, W / RATIO), w = h * RATIO;
     cands.push(rectQuad((W - w) / 2, (H - h) / 2, w, h));
-    const h2 = s * Math.min(W, H / 0.716), w2 = h2 * 0.716;
-    const q = rectQuad((W - h2) / 2, (H - w2) / 2, h2, w2);
-    cands.push(q);
+    const h2 = s * Math.min(W, H / RATIO), w2 = h2 * RATIO;
+    cands.push(rectQuad((W - h2) / 2, (H - w2) / 2, h2, w2));
   }
-  // tri rapide : distance sur le quad brut, dans les deux sens possibles
   const fw = Math.max(1, Math.floor(Math.max(W, H) / 2000));
   const wk = workGray(data, W, H, [0, 0, W, H], fw);
-  let n = 0;
-  const scored = [];
+  // images de détection partagées, une par demi-octave de hauteur de guide (≈ 420 px de guide), de 1,2 Mpx au plus ;
+  // au-delà (petite carte dans une grande photo), image limitée à la zone du candidat : mémoire du worker bornée
+  const levels = new Map();
+  const levelFor = q => {
+    const gh = guideHeight(q);
+    const e = Math.round(Math.log2(GUIDE_H / gh) * 2) / 2;
+    const k = Math.min(2, 2 ** e);
+    if (W * H * k * k <= UNGUIDED.levelPx) {
+      if (!levels.has(k)) levels.set(k, smallImage(data, W, H, k));
+      return levels.get(k);
+    }
+    const xs = q.map(p => p[0]), ys = q.map(p => p[1]), mm = 0.3 * gh;
+    return smallImage(data, W, H, k, clampRoi(Math.min(...xs) - mm, Math.min(...ys) - mm, Math.max(...xs) + mm, Math.max(...ys) + mm, W, H));
+  };
+  const state = { n: 0, rot: false };
+  const screened = [];
   for (const q of cands) {
-    for (const r of rotations(q)) {
-      const d = descOf(wk, r, false);
-      n++;
-      if (d) scored.push({ q: r, s: db.best(d).s / 128 });
+    const r0 = rotations(q)[0];
+    const img = levelFor(r0);
+    const obj = makeObjective(db, wk, img, state);
+    const g = r0.map(p => toSmall(img, p));
+    const so = sideOptions(img, g);
+    const seeds = [[0, 0, 0, 0], so.sides.map(s => Math.min(1, s.opts.length - 1)), ...seedCombos(so, { k: UNGUIDED.seeds })];
+    for (const rot of [false, true]) {
+      state.rot = rot;
+      const cache = new Map();
+      const s0 = search(so, obj, { seeds, passes: 0, cache });
+      screened.push({ img, obj, g, so, seeds, cache, rot, s: s0.score });
     }
   }
-  scored.sort((a, b) => a.s - b.s);
-  // raffinement guidé des 3 meilleurs
+  state.rot = false;
+  screened.sort((a, b) => a.s - b.s);
   let best = null;
-  for (const c of scored.slice(0, 3)) {
-    const gh = guideHeight(c.q);
-    const xs = c.q.map(p => p[0]), ys = c.q.map(p => p[1]), mm = 0.3 * gh;
-    const roi = clampRoi(Math.min(...xs) - mm, Math.min(...ys) - mm, Math.max(...xs) + mm, Math.max(...ys) + mm, W, H);
-    const img = smallImage(data, W, H, GUIDE_H / gh, roi);
-    const f = gh >= 900 ? 2 : 1;
-    const wk2 = workGray(data, W, H, roi, f);
-    const state = { n: 0, rot: false };
-    const obj = makeObjective(db, wk2, img, state);
-    const so = sideOptions(img, c.q.map(p => toSmall(img, p)));
-    let r = search(so, obj);
+  for (const c of screened.slice(0, UNGUIDED.refine)) {
+    state.rot = c.rot;
+    let r = search(c.so, c.obj, { seeds: c.seeds, cache: c.cache });
     if (r.score > T.retry) {
-      const r2 = search(sideOptions(img, c.q.map(p => toSmall(img, p)), { extra: true }), obj);
+      const so2 = sideOptions(c.img, c.g, { extra: true });
+      const r2 = search(so2, c.obj, { seeds: [...c.seeds.slice(0, 2), ...seedCombos(so2, { k: DETECT.seeds })] });
       if (r2.score < r.score) r = r2;
     }
-    n += state.n;
-    const cand = r.quad && r.score < c.s ? { r, img, wk: wk2 } : { r: { quad: c.q.map(p => toSmall(img, p)), score: c.s }, img, wk: wk2 };
-    if (!best || cand.r.score < best.r.score) best = cand;
+    state.rot = false;
+    r = recentre(c.img, c.obj, state, { ...r, rot: c.rot });
+    if (r.quad && (!best || r.score < best.r.score)) best = { r, img: c.img };
+    if (best && best.r.score <= T.strong) break;
   }
-  if (!best) return { quad: null, rank: null, nev: n, ms: performance.now() - t0, stage: 'import' };
-  const res = finish(db, best.wk, best.img, best.r, { n }, 'import', t0);
-  return res;
+  if (!best) return { quad: null, rank: null, nev: state.n, ms: performance.now() - t0, stage: 'import' };
+  return finish(db, wk, best.img, best.r, state, 'import', t0);
 }
 
 // ---------------------------------------------------------------------------------------------------------

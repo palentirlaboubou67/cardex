@@ -3,6 +3,7 @@
 // Sections dans js/views/collection/ (Cartes chargée avec la vue ; les autres à la demande, préchargées au repos).
 // Collection modifiée : la section affichée corrige son DOM en place ; les autres sont refaites à leur prochain affichage.
 import { setBar, primaryTabs, updateAction, setProgress } from '../core/appbar.js';
+import { depth } from '../core/router.js';
 import { setHTML } from '../core/dom.js';
 import { infoSheet } from '../core/sheet.js';
 import { whenIdle } from '../core/idle.js';
@@ -51,7 +52,8 @@ function bar(key, r) {
     const [title, paras] = m.INFO[key];
     infoSheet(title, key === 'cartes' ? [...paras, prices.creditText()] : paras);
   }) };
-  const cfg = { title: 'Collection', signal: r.signal, menu: [info] };
+  // racine ouverte par-dessus un autre écran (toast « Voir » d'un succès) : ← pour y revenir
+  const cfg = { title: 'Collection', back: depth() > 0, signal: r.signal, menu: [info] };
   if (key === 'cartes') {
     cfg.actions = [{ icon: 'filter', label: 'Filtrer mes cartes', pressed: !!secs.cartes?.filterOpen || !!r.q.get('q'), disabled: !col.all().length, onClick: () => secs.cartes?.toggleFilter() }];
   }
@@ -94,6 +96,8 @@ export default {
 
   resume(r) {
     signal = r.signal;
+    // barre gardée par main.js : refaite, la même adresse peut être une racine (onglet) ou empilée (← ou pas)
+    bar(cur, r);
     try { secs[cur]?.resume?.(); } catch (e) { console.error(e); }
   },
 

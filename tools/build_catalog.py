@@ -93,6 +93,19 @@ def gz(data):
     return len(gzip.compress(data, 9))
 
 
+def load_db(offline, log):
+    """Cartes de l'archive TCGdex cards-database (MIT), celle que tools/build_market.py garde dans .cache/mk
+    (téléchargée avec son ETag si besoin) -> {cardId: carte de market.cmap.read_db}, ou None si indisponible."""
+    try:
+        from market import sources as MS
+        from market.cmap import read_db
+        path, _ = MS.cards_db(MS.Cache(os.path.join(ROOT, '.cache', 'mk'), offline=offline, log=log))
+        return read_db(path)[1]
+    except Exception as e:  # SourceError, zip illisible, hors ligne sans copie
+        log(f'  ! cards-database indisponible ({e}) : finitions complétées reprises de la sortie précédente')
+        return None
+
+
 def to_catalog(files):
     """{setId: fichier data/sets/<id>.json} -> {setId: {'serie', 'cards': [{'id', 'l', 'n', 'img'}]}} (img = base FR ou '')."""
     out = collections.OrderedDict()
@@ -231,6 +244,11 @@ def main():
         except Exception as ex2:
             rep['problems'].append((sid, f'détail EN : {ex2}'))
 
+    # cards-database (archive TCGdex de tools/build_market.py) : variantes que l'API ne donne pas, impressions
+    # tamponnées (cards.finishes)
+    dbcards = load_db(args.offline, log)
+    rep['cardsDb'] = dbcards is not None
+
     # ---------- 3. lignes compactes par série ----------
     visible, hidden = [], []
     set_files, legal_of = {}, {}
@@ -242,6 +260,8 @@ def main():
         if sid in failed:
             old = read_json(os.path.join(prev_dir, f'{sid}.json'))
             if old and old.get('cards'):
+                for c in old['cards']:
+                    c['n'] = T.typo(c.get('n'))
                 set_files[sid] = old
                 visible.append(sid)
                 log(f'  ! {sid} : source en échec, fichier précédent conservé')
@@ -253,6 +273,8 @@ def main():
             continue
         serie = T.EXTRA_SETS[sid]['serie'] if extra else d['serie']['id']
         brief_img = {c['id']: c.get('image') or '' for c in d.get('cards') or []}
+        prev_f = {c['l']: c.get('f') for c in (prev_files.get(sid) or {}).get('cards') or []}
+        era = C.era_finishes if T.ERA_RULE.match(sid) else None
         recs, n_std, n_exp, n_legal, n_mark = [], 0, 0, 0, 0
         seen = set()
         for c in cs:
@@ -274,8 +296,10 @@ def main():
                 stats['imageExplicit'] += 1
             rar = c.get('rarity')
             rar = '' if rar in (None, 'None') else rar
-            recs.append({'l': lid, 'n': c.get('name') or '', 'i': i, 'r': rar, 'c': cat,
-                         'd': C.dex_ids(c, cat, dex, stats), 'f': C.finishes(c, fin_stats)})
+            recs.append({'l': lid, 'n': T.typo(c.get('name') or ''), 'i': i, 'r': rar, 'c': cat,
+                         'd': C.dex_ids(c, cat, dex, stats),
+                         'f': C.finishes(c, fin_stats, db=dbcards.get(c['id']) if dbcards is not None else False,
+                                         sid=sid, prev=prev_f.get(lid), era_rule=era)})
             lg = c.get('legal') or {}
             if lg:
                 n_legal += 1
@@ -342,7 +366,7 @@ def main():
         old = prev_meta.get(sid) or {}
         # code : abbreviation.official de TCGdex (FR, sinon EN), sinon la table faite main
         ab = (d.get('abbreviation') or {}).get('official') or (e_meta.get('abbreviation') or {}).get('official')
-        name = T.NAME_FIX.get(sid) or (T.EXTRA_SETS.get(sid) or {}).get('name') or d.get('name') or old.get('name') or sid
+        name = T.typo(T.NAME_FIX.get(sid) or (T.EXTRA_SETS.get(sid) or {}).get('name') or d.get('name') or old.get('name') or sid)
         # légalité : celle des cartes ; série en échec (cartes non relues) : celle de la sortie précédente
         # (jamais celle de la série chez TCGdex, figée à standard=false)
         lg = legal_of.get(sid) or (old.get('legal') if (sid in failed or not src) else None) \
@@ -370,8 +394,8 @@ def main():
     art = None
     rep['artKept'] = []
 
-    def file_ok(p):  # adresse liée (Scrydex) ou fichier encore présent
-        return not p or not p.startswith('img/') or os.path.exists(os.path.join(ROOT, p))
+    def file_ok(p):  # rien, ou fichier auto-hébergé encore présent (jamais une adresse liée : SPEC §6.1)
+        return not p or (p.startswith('img/') and os.path.exists(os.path.join(ROOT, p)))
 
     if args.skip_logos:
         for m in metas:
@@ -401,7 +425,6 @@ def main():
                 rep['artKept'].append('bloc:' + bid)
         rep['art'] = {sid: {k: x[k] for k in ('logoSrc', 'symSrc', 'metrics', 'dark', 'logoSure', 'symSure')}
                       for sid, x in info.items()}
-        rep['hotlinks'] = sorted(set(art.hotlinks))
         rep['artFails'] = art.fails
         rep['artUnsure'] = sorted(set(art.unsure))
         rep['artMatted'] = art.matted
@@ -416,7 +439,7 @@ def main():
     for b, first in sorted(firsts.items(), key=lambda kv: (kv[0] not in T.SPECIAL_BLOCS, kv[1]), reverse=True):
         s = series.get(b) or {}
         ba = bloc_art.get(b) or {}
-        blocs.append({'id': b, 'name': s.get('name') or (prev_blocs.get(b) or {}).get('name') or b,
+        blocs.append({'id': b, 'name': T.typo(s.get('name') or (prev_blocs.get(b) or {}).get('name') or b),
                       'logo': ba.get('logo'), 'first': first, 'dark': bool(ba.get('dark')),
                       'special': b in T.SPECIAL_BLOCS})
 
@@ -445,7 +468,7 @@ def main():
         changed.append('data/cardimg.json')
     if art is not None:
         keep_img = {p for p in [m['logo'] for m in metas] + [m['sym'] for m in metas] + [b['logo'] for b in blocs]
-                    if p and p.startswith('img/')}   # les adresses Scrydex liées ne sont pas des fichiers
+                    if p and p.startswith('img/')}
         art.files = {p: d for p, d in art.files.items() if p in keep_img}
         w, r = art.write(keep_img)
         rep['imgWritten'], rep['imgRemoved'] = w, r
@@ -464,6 +487,8 @@ def main():
         why.append('tirage Scrydex : trop d\'échecs (dos de carte ?)')
     if rep.get('artUnsure'):
         why.append(f'{len(rep["artUnsure"])} sources de logos/symboles en échec passager (choix précédent gardé)')
+    if not rep.get('cardsDb'):
+        why.append('cards-database indisponible (finitions complétées de la sortie précédente)')
     if failed:
         why.append(f'{len(failed)} séries en échec (fichier précédent gardé)')
     rep['exit'] = EXIT_UNSURE if why else 0
@@ -481,6 +506,8 @@ def summary(rep, metas, hidden, set_files, blocs):
     log(f'Cartes : {n_cards} · via {rep.get("cardsVia")} · @locale fr : {"ok" if rep.get("locale") else "ÉCHEC"}')
     cs = rep.get('cardStats') or {}
     log(f'Numéros de Pokédex devinés : {cs.get("guessed", 0)} cartes · Pokémon sans numéro : {cs.get("noDex", 0)}')
+    fs = rep.get('finishStats') or {}
+    log('Finitions (cartes) : ' + (', '.join(f'{k} {v}' for k, v in sorted(fs.items()) if not k.startswith('foil:')) or 'API telle quelle'))
     im = rep.get('images') or {}
     if im:
         tot = im.get('total', 0) or 1
@@ -509,8 +536,8 @@ def summary(rep, metas, hidden, set_files, blocs):
     hl = [m['id'] for m in metas if m['logo'] and not m['logo'].startswith('img/')]
     hs = [m['id'] for m in metas if m['sym'] and not m['sym'].startswith('img/')]
     log(f'Logos : {len(metas) - len(nl)} / {len(metas)} (FR {sum(1 for m in metas if m["logoLang"] == "fr")}, '
-        f'liés chez Scrydex : {", ".join(hl) or "aucun"} ; couverture générée : {", ".join(nl) or "aucune"})')
-    log(f'Symboles : {sum(1 for m in metas if m["sym"])} / {len(metas)} (liés chez Scrydex : {len(hs)} ; '
+        f'adresses externes : {", ".join(hl) or "aucune"} ; couverture générée : {", ".join(nl) or "aucune"})')
+    log(f'Symboles : {sum(1 for m in metas if m["sym"])} / {len(metas)} (adresses externes : {len(hs)} ; '
         f'sans : {", ".join(m["id"] for m in metas if not m["sym"]) or "aucun"}) · '
         f'plaque claire en thème sombre : {", ".join(m["id"] for m in metas if m["dark"]) or "aucune"}')
     log(f'Blocs : {", ".join(b["id"] + ("*" if b["special"] else "") + ("(plaque)" if b["dark"] else "") for b in blocs)} '

@@ -97,7 +97,8 @@ function heroHTML(s) {
   const imgs = has
     ? html`${imgHTML(c, { q: 'low', eager: true, cls: 'cp-lo' })}${imgHTML(c, { q: 'high', eager: true, cls: 'cp-hi' })}`
     : imgHTML(c, { q: 'low' });
-  const inner = html`<span class="cp-img">${imgs}</span><i class="${fx}" aria-hidden="true"></i><i class="cp-glare" aria-hidden="true"></i>${enBadge(c)}`;
+  // pastille « EN » / « ≈ » : dans la légende sous l'image, jamais sur l'illustration (elle cachait le nom imprimé)
+  const inner = html`<span class="cp-img">${imgs}</span><i class="${fx}" aria-hidden="true"></i><i class="cp-glare" aria-hidden="true"></i>`;
   const box = has
     ? html`<button type="button" class="cp-card" aria-label="${`Agrandir l’illustration de ${c.name}`}">${inner}</button>`
     : html`<div class="cp-card">${inner}</div>`;
@@ -105,7 +106,8 @@ function heroHTML(s) {
   const text = imgCaption(c);
   const ref = cardImg(c).ref;
   const cap = !text ? '' : ref && ref !== c.id && ID_RE.test(ref) ? html`<a href="${cardHref(ref)}">${text}</a>` : text;
-  return html`<div class="cp-hero${cap ? ' has-cap' : ''}">${box}</div>${cap ? html`<p class="cp-cap">${cap}</p>` : ''}`;
+  const pill = has ? enBadge(c) : '';
+  return html`<div class="cp-hero${cap ? ' has-cap' : ''}">${box}</div>${cap ? html`<p class="cp-cap">${pill ? html`<span class="cp-capill" aria-hidden="true">${pill}</span>` : ''}${cap}</p>` : ''}`;
 }
 
 function headHTML(s) {
@@ -175,7 +177,7 @@ function priceHTML(s) {
 // ----- alerte prix -----
 function alertsHTML(s) {
   const head = html`<div class="sect"><span class="grow">Alerte prix</span></div>`;
-  if (s.wishErr) return html`${head}<div class="errrow">${icon('alert')}<span class="grow">Alertes indisponibles : le stockage du navigateur est bloqué.</span></div>`;
+  if (s.wishErr) return html`${head}<div class="errrow">${icon('alert')}<span class="grow">Alertes indisponibles : le stockage du navigateur est bloqué</span></div>`;
   if (!s.wishes) return html`${head}<div class="group">${raw(SK_ROW)}</div>`;
   const fin = alertFin(s);
   return html`${head}${alerts.rowsHTML(s.wishes, {
@@ -381,13 +383,13 @@ function step(b) {
 function openAlert(key) {
   const s = S;
   if (!s?.card) return;
-  if (!alerts.available() || s.wishErr) { toast('Alertes indisponibles : le stockage du navigateur est bloqué.'); return; }
+  if (!alerts.available() || s.wishErr) { toast('Alertes indisponibles : le stockage du navigateur est bloqué'); return; }
   const list = s.wishes || [], fin = alertFin(s);
   const existing = key ? list.find(w => w.key === key) || null
     : list.find(w => w.variant === s.fin) || list.find(w => w.variant === fin) || null;
   const fins = sortFinishes([...cardFinishes(s), ...(existing ? [existing.variant] : [])]);
   alerts.openAlertSheet({
-    card: { ...s.card, setName: setNameOf(s), setTotal: totalOf(s) },
+    card: { ...s.card, setName: setNameOf(s), setTotal: totalOf(s), en: s.en || '' },
     finishes: fins, fin: existing?.variant || fin, existing,
     priceOf: f => priceOf(f, s) || null,
     onDone: () => loadWishes(s),
@@ -474,7 +476,7 @@ function reload() {
 // ---------- états vides ----------
 function notFound(s) {
   setBar({ title: 'Carte introuvable', back: true, signal: s.sig });
-  setHTML(el, html`<div class="empty" data-content><span class="ic">${icon('alert')}</span><b>Carte introuvable</b><p>Cette carte n’est pas dans le catalogue de Cardex.</p><a class="btn" href="#/series">Chercher une carte</a></div>`);
+  setHTML(el, html`<div class="empty" data-content><span class="ic">${icon('alert')}</span><b>Carte introuvable</b><p>Cette carte n’est pas dans le catalogue de Cardex.</p><a class="btn" href="#/series" data-push>Chercher une carte</a></div>`);
 }
 function failed(s, e) {
   setBar({ title: 'Carte', back: true, signal: s.sig });

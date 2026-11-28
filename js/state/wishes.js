@@ -1,7 +1,8 @@
 // Liste d'envies + alertes de prix. Script classique (global self.WishDB) : utilisé par la page (window.WishDB)
 // ET par le service worker (importScripts), qui n'a pas accès au localStorage, d'où IndexedDB.
 // Enregistrements (IndexedDB 'cardex' / 'wishes', clé 'key' = « id|finition », comme l'ancienne appli) :
-// { key, id, name, setName, setId, localId, image, variant, min, max, low, trend, checkedAt, inRange, createdAt, v: 2 }
+// { key, id, name, en, setName, setId, localId, image, variant, min, max, low, trend, checkedAt, inRange, createdAt, v: 2 }
+// (en : nom anglais, '' si inconnu ; absent des envies plus anciennes)
 // Prix : data/market/prices/<setId>.json (hash via data/manifest.json), sinon TCGdex /v2/fr/cards/:id avec cmFor().
 // Alerte = « low » (offre la moins chère) dans [min, max] ; on ne prévient qu'à l'entrée dans la fourchette.
 (function (g) {
@@ -125,9 +126,15 @@
   // ---------- prix ----------
   const pos = v => (typeof v === 'number' && v > 0 ? v : null);
   const c2e = v => (typeof v === 'number' && v > 0 ? v / 100 : null);
-  function saneTrend(trend, a7, a30) {
-    const ref = a7 || a30;
-    return trend && ref && !(trend >= ref / 5 && trend <= ref * 5) ? ref : (trend || a30 || a7 || null);
+  // même règle que js/data/prices.js et tools/market/prices.py : tendance gardée si la majorité des moyennes présentes
+  // (1, 7, 30 jours) la confirme (dans [m/5, m×5]), sinon leur médiane
+  function saneTrend(t, a1, a7, a30, avg) {
+    const refs = [a1, a7, a30].filter(r => r);
+    if (t && refs.length && 2 * refs.filter(r => t >= r / 5 && t <= r * 5).length <= refs.length) {
+      const s = refs.slice().sort((a, b) => a - b), n = s.length;
+      t = n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+    }
+    return t || a7 || a30 || avg || null;
   }
 
   // ----- correspondance Cardmarket des fiches TCGdex (même règle que js/data/prices.js cmFor) -----
@@ -164,7 +171,7 @@
   }
   function readCm(cm, s) {
     const n = k => pos(cm && cm[k + s]);
-    const low = n('low'), trend = saneTrend(n('trend') || n('avg'), n('avg7'), n('avg30'));
+    const low = n('low'), trend = saneTrend(n('trend'), n('avg1'), n('avg7'), n('avg30'), n('avg'));
     return low != null || trend != null ? { low, trend } : null;
   }
   // { low, trend } d'une fiche TCGdex complète (fiche carte : alerte proposée), ou { low: null, trend: null }
@@ -174,22 +181,41 @@
     return r || { low: null, trend: null };
   }
 
+  // 1re édition / tampon : Cardmarket n'a souvent pas de produit à part. MK recopie alors la cote de la carte de base
+  // (même tableau que la normale ou la holo) et TCGdex ne donne que le produit de base : ce n'est pas un prix de cette
+  // édition (même règle que allEditions de js/data/prices.js). L'offre la moins chère serait celle de n'importe quelle
+  // édition : jamais dans la fourchette, jamais de notification.
+  const EDITION = v => v === 'firstEdition' || v === 'stamp';
+  const sameArr = (a, b) => Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]);
+
   // Prix d'une envie : fichier de cotes du jour, sinon TCGdex en direct.
-  // -> { low, trend, source, date } ; rejette seulement si aucune source n'a répondu (hors ligne).
+  // -> { low, trend, source, date[, allEditions] } ; rejette seulement si aucune source n'a répondu (hors ligne).
   async function priceFor(w, ctx) {
     ctx = ctx || context();
     const setId = w.setId || setIdOf(w.id);
     const lid = String(w.id).slice(setId.length + 1);
+    const edition = EDITION(w.variant);
     let answered = false;
     try {
       const f = await priceFile(ctx, setId);
       answered = true;
-      const a = f && f.c && f.c[lid] && f.c[lid][w.variant];
+      const row = f && f.c && f.c[lid];
+      const a = row && row[w.variant];
+      // 6e valeur 1 : le produit sert aussi l'impression sans tampon (base1 « Shadowless ») -> toutes éditions aussi
+      if (a && edition && (a[5] === 1 || sameArr(a, row.normal) || sameArr(a, row.holo))) {
+        return { low: null, trend: null, source: 'cardmarket', date: f.d || null, allEditions: true };
+      }
       if (a) {
-        const low = c2e(a[4]), trend = saneTrend(c2e(a[0]), c2e(a[2]), c2e(a[3]));
+        // même lecture que js/data/prices.js (la règle de MK ne change rien à une tendance déjà gardée)
+        const low = c2e(a[4]), trend = saneTrend(c2e(a[0]), c2e(a[1]), c2e(a[2]), c2e(a[3]));
         if (low != null || trend != null) return { low, trend, source: 'cardmarket', date: f.d || null };
       }
     } catch (e) { /* injoignable : TCGdex ci-dessous */ }
+    // TCGdex n'a que le produit de base : rien à en tirer pour une 1re édition ou un tampon
+    if (edition) {
+      if (!answered) throw new Error('Hors ligne');
+      return { low: null, trend: null, source: null, date: null };
+    }
     try {
       const full = await tcgdex(API + encodeURIComponent(w.id), { timeout: 12000 });
       answered = true;
@@ -268,12 +294,14 @@
     return hits;
   }
 
-  // nouvelle envie à partir d'une carte (brève, fiche ou entrée de collection)
-  function make(card, variant, { min = 0, max } = {}) {
+  // nouvelle envie à partir d'une carte (brève, fiche ou entrée de collection) ; en = nom anglais (lien « Voir sur
+  // Cardmarket » des Envies, qui cherche le nom anglais) quand l'écran qui crée l'envie le connaît déjà
+  function make(card, variant, { min = 0, max, en } = {}) {
     const setId = card.setId || (card.set && card.set.id) || setIdOf(card.id);
+    const enName = typeof en === 'string' ? en : typeof card.en === 'string' ? card.en : '';
     return {
       key: keyOf(card.id, variant), id: card.id, v: 2,
-      name: card.name || '', setName: card.setName || (card.set && card.set.name) || '',
+      name: card.name || '', en: enName.trim().slice(0, 200), setName: card.setName || (card.set && card.set.name) || '',
       setId, localId: String(card.localId || String(card.id).slice(setId.length + 1)),
       setTotal: card.setTotal || (card.set && card.set.cardCount && card.set.cardCount.official) || null,
       image: card.image || '', variant, min: Number(min) || 0, max: Number(max),

@@ -1,18 +1,24 @@
 // Mise en forme fr-FR (FINAL-design §5.4) : euros, pourcentages, dates, numéros de carte. Signe moins typographique (U+2212).
-const MINUS = s => s.replace('-', '−');
-const NF_EUR = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
-const NF_EUR_D = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', signDisplay: 'exceptZero' });
-const NF_PCT = new Intl.NumberFormat('fr-FR', { style: 'percent', signDisplay: 'exceptZero', maximumFractionDigits: 1 });
-const NF_NUM = new Intl.NumberFormat('fr-FR');
-const RTF = new Intl.RelativeTimeFormat('fr', { numeric: 'auto' });
+// Intl sépare les milliers (et met avant « % ») une espace fine insécable U+202F, absente d'Instrument Sans : le glyphe de
+// secours fait 1 px aux petites tailles (« 1666,62 € » au lieu de « 1 666,62 € »). On met l'espace insécable U+00A0,
+// présente dans la police. nbsp() sert aussi aux autres modules qui appellent Intl eux-mêmes.
+export const nbsp = s => String(s).replace(/\u202f/g, '\u00a0');
+const MINUS = s => nbsp(s).replace('-', '−');
+// formateurs créés au premier usage (pas pendant l'évaluation des modules du démarrage)
+const lazy = make => { let f = null; return () => (f ??= make()); };
+const NF_EUR = lazy(() => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }));
+const NF_EUR_D = lazy(() => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', signDisplay: 'exceptZero' }));
+const NF_PCT = lazy(() => new Intl.NumberFormat('fr-FR', { style: 'percent', signDisplay: 'exceptZero', maximumFractionDigits: 1 }));
+const NF_NUM = lazy(() => new Intl.NumberFormat('fr-FR'));
+const RTF = lazy(() => new Intl.RelativeTimeFormat('fr', { numeric: 'auto' }));
 const ok = v => typeof v === 'number' && Number.isFinite(v);
 
-export const eur = v => (ok(v) ? MINUS(NF_EUR.format(v)) : '—');                 // 1 430,00 €
+export const eur = v => (ok(v) ? MINUS(NF_EUR().format(v)) : '—');               // 1 430,00 € (espaces U+00A0)
 export const eurC = cents => (ok(cents) ? eur(cents / 100) : '—');
-export const eurDelta = v => (ok(v) ? MINUS(NF_EUR_D.format(v)) : '—');          // +12,30 €
-export const pct = v => (ok(v) ? MINUS(NF_PCT.format(v / 100)) : '—');           // v en points : 41.2 → +41,2 %
+export const eurDelta = v => (ok(v) ? MINUS(NF_EUR_D().format(v)) : '—');        // +12,30 €
+export const pct = v => (ok(v) ? MINUS(NF_PCT().format(v / 100)) : '—');         // v en points : 41.2 → +41,2 %
 export const dir = v => (!ok(v) ? 'flat' : v > 0.5 ? 'up' : v < -0.5 ? 'down' : 'flat');   // seuil ±0,5 %
-export const num = n => (ok(n) ? MINUS(NF_NUM.format(n)) : '—');                 // 1 234
+export const num = n => (ok(n) ? MINUS(NF_NUM().format(n)) : '—');               // 1 234
 export const plural = (n, one, many) => `${num(n)} ${Math.abs(n) > 1 ? many : one}`;
 
 // 'YYYY-MM-DD', millisecondes ou Date → Date (une date seule est lue à midi, heure locale)
@@ -34,9 +40,9 @@ export function relDay(d, now = new Date()) {
   if (!valid(x)) return '—';
   const day = t => Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()) / 86400000;
   const days = Math.round(day(x) - day(now));
-  if (Math.abs(days) < 30) return RTF.format(days, 'day');
-  if (Math.abs(days) < 365) return RTF.format(Math.round(days / 30.44), 'month');
-  return RTF.format(Math.round(days / 365.25), 'year');
+  if (Math.abs(days) < 30) return RTF().format(days, 'day');
+  if (Math.abs(days) < 365) return RTF().format(Math.round(days / 30.44), 'month');
+  return RTF().format(Math.round(days / 365.25), 'year');
 }
 
 // clé de recherche : sans accents ni casse, ligatures dépliées, apostrophes droites, espaces réduits

@@ -1,7 +1,6 @@
 // Catalogue : fichiers statiques de CA (data/sets.json, data/sets/<id>.json, data/cards-index.json) lus par net.data(),
 // avec TCGdex en direct en secours (séries absentes des fichiers, découvertes en arrière-plan).
 import { data, cached, NetError } from '../core/net.js';
-import * as tcgdex from './tcgdex.js';
 import { words } from './dex.js';
 import { registerSets, cardImg, ready as imagesReady } from './images.js';
 
@@ -11,7 +10,9 @@ export const localIdOf = cardId => String(cardId).slice(setIdOf(cardId).length +
 const CAT = { P: 'Pokémon', D: 'Dresseur', E: 'Énergie' };
 const ASSETS = 'https://assets.tcgdex.net/fr/';
 const DAY = 86400000;
-const isPocket = tcgdex.isPocket;
+// TCGdex en direct (secours) : chargé seulement quand il sert (pas sur le chemin du premier écran)
+const live = () => import('./tcgdex.js');
+const isPocket = id => /^(A\d|B\d|P-A)/.test(String(id || ''));   // même règle que tcgdex.isPocket (séries Pocket)
 
 // ---------- séries ----------
 let SETS = null;            // { blocs, sets, byId, hidden }
@@ -81,6 +82,7 @@ async function fetchSets() {
   try { st = await data('data/sets.json'); } catch (e) { err = e; }
   if (st && Array.isArray(st.sets) && st.sets.length) {
     SETS = build(st.blocs, st.sets, st.hidden);
+    SETS.fromFile = true;
     mergeLive();                                      // en arrière-plan, sans bloquer
     return SETS;
   }
@@ -96,6 +98,7 @@ async function fetchSets() {
 // Toutes les séries FR en une requête GraphQL (@locale), sinon REST liste + détail. Gardées 1 jour.
 async function liveSets() {
   return cached('cardex.cache.livesets', DAY, async () => {
+    const tcgdex = await live();
     try {
       const d = await tcgdex.gql('{ sets @locale(lang:"fr") { id name releaseDate abbreviation { official } cardCount { total official } logo symbol legal { standard expanded } serie { id name } } }');
       const list = (d?.sets || []).filter(s => s?.id && !isPocket(s.id) && s.serie?.id !== 'tcgp' && (s.cardCount?.total || 0) > 0);
@@ -112,10 +115,11 @@ async function mergeLive() {
   liveMerged = true;
   try {
     const list = await cached('cardex.cache.setlist', DAY, async () =>
-      (await tcgdex.setList()).map(s => ({ id: s.id, n: s.cardCount?.total || 0 })));
+      (await (await live()).setList()).map(s => ({ id: s.id, n: s.cardCount?.total || 0 })));
     const missing = list.filter(s => s.id && s.n > 0 && !isPocket(s.id) && !SETS.byId.has(s.id) && !SETS.hidden.has(s.id));
     if (!missing.length) return;
     const metas = [];
+    const tcgdex = await live();
     for (const s of missing.slice(0, 8)) {
       try {
         metas.push(await cached(`cardex.cache.setinfo.${s.id}`, DAY, async () => tcgdex.toMeta(await tcgdex.setInfo(s.id))));
@@ -124,13 +128,34 @@ async function mergeLive() {
     if (!metas.length) return;
     const blocs = SETS.blocs.map(b => ({ id: b.id, name: b.name, logo: b.logo, first: b.first, dark: b.dark, special: b.special }));
     SETS = build(blocs, [...SETS.byId.values(), ...metas], [...SETS.hidden]);
+    SETS.fromFile = true;
     subs.forEach(fn => { try { fn(SETS); } catch (e) { console.error(e); } });
   } catch { /* hors ligne : on garde le fichier statique */ }
+}
+
+// La liste des séries de TCGdex (gardée un jour par mergeLive) connaît-elle cette série ? -> true | false | null (pas de
+// liste récente). Un lien vers une série qui n'existe nulle part (« #/serie/zz-nope ») ne fait alors aucune requête.
+function liveListHas(id) {
+  try {
+    const c = JSON.parse(localStorage.getItem('cardex.cache.setlist'));
+    if (!c || !Array.isArray(c.d) || !(Date.now() - c.t < DAY)) return null;
+    return c.d.some(s => s?.id === id);
+  } catch { return null; }
 }
 
 // métadonnées d'une série si elles sont chargées (synchrone, pour les autres modules)
 export const metaSync = id => SETS?.byId.get(id) || LIVE_META.get(id) || null;
 const LIVE_META = new Map();
+
+// La série a-t-elle des fichiers statiques (data/sets/<id>.json, data/market/prices/<id>.json) ? Le catalogue de CA
+// (data/sets.json) les liste toutes : une série absente de ce fichier (lien tapé à la main, série sortie depuis) n'en a
+// pas, inutile de les demander (deux 404). -> true | false | null (data/sets.json pas encore là : on ne sait pas).
+// wait : attendre data/sets.json s'il est déjà en route (jamais de requête en plus).
+export function hasFiles(id, { wait = false } = {}) {
+  const answer = () => (SETS?.fromFile ? !!SETS.byId.get(id) && !SETS.byId.get(id).live : null);
+  if (SETS || !wait || !setsP) return wait ? Promise.resolve(answer()) : answer();
+  return setsP.then(answer, () => null);
+}
 
 // Objectif d'une barre de progression : le total imprimé (« 165 » pour 151), sauf quand le catalogue français a
 // moins de cartes que lui (promos, kits : svp, swshp, dpp… n'atteindraient jamais leur total officiel) : alors count.
@@ -170,17 +195,23 @@ async function loadSet(id) {
   let meta = all?.byId.get(id) || LIVE_META.get(id) || null;
   let staticErr;
   try {
+    if (hasFiles(id) === false) {                    // pas dans le catalogue : pas de fichier, TCGdex en direct
+      const err = new NetError('notfound', 404, `data/sets/${id}.json`);
+      if (liveListHas(id) === false) throw Object.assign(err, { final: true });   // TCGdex ne la connaît pas non plus
+      throw err;
+    }
     const f = await data(`data/sets/${id}.json`);
     const serie = f.serie || meta?.serie || meta?.bloc || '';
     const list = Array.isArray(f.cards) ? f.cards : [];
     meta ??= meta0({ id, name: id, serie, bloc: serie, count: list.length });
     return pack(meta, list.map(c => brief(id, serie, c, meta)));
   } catch (e) { staticErr = e; }
+  if (staticErr?.final) throw staticErr;
   try {
-    const live = await tcgdex.setLive(id);
-    if (!meta) { meta = meta0(live.meta); LIVE_META.set(id, meta); registerSets([meta]); }
-    for (const c of live.cards) { c.setName = meta.name; c.setTotal = meta.total; }
-    return pack(meta, live.cards, { live: true, finishesKnown: live.finishesKnown });
+    const got = await (await live()).setLive(id);
+    if (!meta) { meta = meta0(got.meta); LIVE_META.set(id, meta); registerSets([meta]); }
+    for (const c of got.cards) { c.setName = meta.name; c.setTotal = meta.total; }
+    return pack(meta, got.cards, { live: true, finishesKnown: got.finishesKnown });
   } catch (e) {
     // l'erreur la plus parlante : celle du fichier statique, sauf s'il n'existe simplement pas
     throw staticErr instanceof NetError && staticErr.kind !== 'notfound' ? staticErr : e;

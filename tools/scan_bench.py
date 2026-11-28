@@ -4,6 +4,8 @@
   python -P tools/scan_bench.py bitexact [--n 50]                     describe() JS == hashes.bin Python
   python -P tools/scan_bench.py synth [--preset standard|hard|wide] [--n 300] [--seed 1] [--cpu 1,4] [--absent]
   python -P tools/scan_bench.py real --real DIR                       photos réelles (non versionnées)
+  python -P tools/scan_bench.py photos --labels L --work DIR          jeu étiqueté (labels.json) : import, caméra
+                                                                      (guide simulé), oracle ; DIR hors du dépôt
   python -P tools/scan_bench.py live                                  fausse caméra (clip y4m) et boucle complète
   python -P tools/scan_bench.py loop                                  scénarios de la boucle (hors ligne, destroy,
                                                                       déclencheur, netteté, base indisponible, OCR)
@@ -344,6 +346,7 @@ def corner_err(quad, corners):
 
 
 REGION_MARGIN = 0.01    # js/scan/loop.js LOOP.regionMargin
+ART_MARGIN = float("inf")   # js/scan/loop.js LOOP.artMargin : même illustration d'après le nom (cards.json arts) → choix
 SELF_MIN = None         # contrôle de la zone de la seule carte n° 1 : mesuré (--self), non appliqué (voir loop.js)
 
 
@@ -364,7 +367,8 @@ def settle_py(r, margin=REGION_MARGIN, self_min=SELF_MIN, offline=False):
             return "choose", top1                       # versions non comparables : jamais acceptées
         best = regs[0][0]
         m = regs[0][1] - regs[1][1] if len(regs) > 1 else 1
-        if twins or m < margin or (self_min is not None and regs[0][1] < self_min):
+        art = any(x in fam for x in r.get("arts") or [])
+        if twins or m < (max(margin, ART_MARGIN) if art else margin) or (self_min is not None and regs[0][1] < self_min):
             return "choose", best
         return "accept", best
     if twins:
@@ -746,6 +750,290 @@ def cmd_real(a, br=None):
 
 
 # ----------------------------------------------------------------------------------------------------------
+# photos : le jeu de photos réelles étiquetées (labels.json, 709 photos), voir tools/scanbench/photos.py.
+# Mesures : import (sans guide), caméra (guide simulé autour de la vraie carte), oracle (empreinte au vrai quad).
+
+def low_index():
+    out = []
+    for lang in ("fr", "en"):
+        for p in glob.glob(os.path.join(IMG, f"img_{lang}_low", "*", "*.webp")):
+            out.append(os.path.relpath(p, IMG).replace(os.sep, "/"))
+    return out
+
+
+def photo_metrics(items, grp, mode):
+    """items : [(label, rec)] d'une catégorie ; mode positive | absent."""
+    n = len(items)
+    m = {"n": n}
+    if not n:
+        return m
+    if mode == "positive":
+        t1 = t1s = t5 = acc = ok = oks = cho = choin = none = 0
+        ds = []
+        for L, r in items:
+            cid = L["id"]
+            g = grp.get(cid, {cid})
+            top = [x[0] for x in r.get("top") or []]
+            t1 += bool(top) and top[0] in g
+            t1s += bool(top) and top[0] == cid
+            t5 += any(x in g for x in top)
+            dec, fid = r.get("_dec", (None, None))
+            if dec == "accept":
+                acc += 1
+                ok += fid in g
+                oks += fid == cid
+            elif dec == "choose":
+                cho += 1
+                choin += any(x in g for x in (r.get("_cands") or [])[:3])
+            else:
+                none += 1
+            if top and top[0] in g:
+                ds.append(r["d1"])
+        m.update(top1=pct(t1, n), strict=pct(t1s, n), top5=pct(t5, n), acc=pct(acc, n), prec=pct(ok, acc),
+                 prec_strict=pct(oks, acc), wrong=acc - ok, wrong_print=ok - oks, choose=pct(cho, n), choose_ok=pct(choin, cho),
+                 none=pct(none, n), d_med=statistics.median(ds) if ds else float("nan"))
+    else:
+        acc = cho = 0
+        for L, r in items:
+            dec, _ = r.get("_dec", (None, None))
+            acc += dec == "accept"
+            cho += dec == "choose"
+        m.update(fa=pct(acc, n), fa_n=acc, choose=pct(cho, n))
+    return m
+
+
+def photo_decision(r, grp):
+    """Décision finale sur une seule image (comme settle(single) : vote 2 sur 3 supposé acquis sur une photo fixe)
+    et candidats montrés (le choix montre le top 3 de l'image, ou les versions départagées en tête)."""
+    dec, fid = settle_py(r)
+    top = [x[0] for x in r.get("top") or []]
+    lead = []
+    if r.get("regions"):
+        lead = [x[0] for x in r["regions"]]
+    elif dec == "choose" and top:
+        lead = list(dict.fromkeys([top[0]] + (r.get("group") or []) + (r.get("rivals") or []) + (r.get("twins") or [])))
+    cands = list(dict.fromkeys(([fid] if fid else []) + lead + top))
+    return (dec, fid), cands
+
+
+def cmd_photos(a, br=None):
+    import photos as P
+    cards = load_cards()
+    grp = groups_of(cards)
+    if not a.labels or not a.work:
+        print("photos : --labels <labels.json> et --work <dossier hors du dépôt> sont nécessaires")
+        return {}
+    work = os.path.abspath(a.work)
+    if os.path.commonpath([work.lower(), ROOT.lower()]) == ROOT.lower():
+        print("photos : --work doit être hors du dépôt (les photos ne sont jamais copiées dans le dépôt)")
+        return {}
+    labels, truth, guided = P.prepare(a.labels, work, IMG, cards)
+    Handler.real_dir = work
+    tag = a.tag or "run"
+    resp = os.path.join(work, f"res_{tag}.json")
+    what = a.what.split(",")
+    R = json.load(open(resp)) if os.path.exists(resp) else {"import": {}, "camera": {}, "oracle": {}, "detect": {}}
+    if not a.rescore:
+        imp = [{"url": f"/__real/prep/{os.path.splitext(L['file'])[0]}.jpg", "id": L.get("id") or (L.get("ids") or ["none"])[0], "guide": None}
+               for L in labels]
+        cam, orc, keys, okeys = [], [], [], []
+        for L in labels:
+            name = os.path.splitext(L["file"])[0] + ".jpg"
+            for cid, g in truth[name]["gt"].items():
+                if not g["ok"]:
+                    continue
+                gd = guided[f"{name}|{cid}"]
+                cam.append({"url": f"/__real/guided/{gd['file']}", "id": cid, "guide": gd["guide"]})
+                orc.append({"url": f"/__real/prep/{name}", "id": cid, "quad": g["quad"]})
+                keys.append(f"{name}|{cid}")
+                okeys.append(f"{name}|{cid}")
+        # caméra pour les cartes sans vérité terrain (absentes, négatifs) : guide centré, hauteur ≈ cardFill
+        for L in labels:
+            name = os.path.splitext(L["file"])[0] + ".jpg"
+            if any(g["ok"] for g in truth[name]["gt"].values()):
+                continue
+            W, H = truth[name]["w"], truth[name]["h"]
+            fill = L["conditions"].get("cardFill") or 0.7
+            gh = min(fill * H, 0.95 * W / 0.716, 0.95 * H)
+            gw = gh * 0.716
+            cam.append({"url": f"/__real/prep/{name}", "id": L.get("id") or "none", "guide": [(W - gw) / 2, (H - gh) / 2, gw, gh]})
+            keys.append(f"{name}|{L.get('id') or 'none'}")
+        own = br is None
+        br = br or Browser()
+        try:
+            br.ev("bench.init()")
+            br.ev("([h, l]) => bench.setLocal(h, l)", [sorted(set(high_index().values())), low_index()])
+            if a.detect:
+                br.ev("o => bench.setDetect(o)", json.loads(a.detect))
+            # chaque mesure est enregistrée dès qu'elle est finie (--what pour n'en relancer qu'une)
+            if "oracle" in what:
+                res = run_cases_fn(br, "bench.oracleCases(c)", orc, label="oracle")
+                R["oracle"] = {k: r for k, r in zip(okeys, res)}
+                json.dump(R, open(resp, "w"))
+            if "camera" in what:
+                res = run_cases(br, cam, {"self": False}, chunk=8, label="caméra")
+                R["camera"] = {k: r for k, r in zip(keys, res)}
+                det = run_cases_fn(br, "bench.detectCases(c)", cam, label="détection")
+                R["detect"] = {k: r for k, r in zip(keys, det)}
+                json.dump(R, open(resp, "w"))
+            if "import" in what:
+                # navigateur neuf toutes les 120 photos (une longue série de grandes photos finit par casser la page :
+                # « Failed to fetch » sur toutes les suivantes), puis un nouvel essai des cas en erreur
+                names = [os.path.splitext(L["file"])[0] + ".jpg" for L in labels]
+                res = [None] * len(imp)
+                for attempt in range(2):
+                    todo = [i for i in range(len(imp)) if res[i] is None or res[i].get("error")]
+                    for s0 in range(0, len(todo), 120):
+                        part = todo[s0:s0 + 120]
+                        if s0 or attempt:
+                            br.close()
+                            br = Browser()
+                            br.ev("bench.init()")
+                            br.ev("([h, l]) => bench.setLocal(h, l)", [sorted(set(high_index().values())), low_index()])
+                            if a.detect:
+                                br.ev("o => bench.setDetect(o)", json.loads(a.detect))
+                        out_part = run_cases(br, [imp[i] for i in part], {"unguided": True}, chunk=6, label=f"import {s0}+")
+                        for i, r in zip(part, out_part):
+                            res[i] = r
+                R["import"] = dict(zip(names, res))
+                json.dump(R, open(resp, "w"))
+            if br.errors:
+                print("erreurs console :", br.errors[:5])
+        finally:
+            if own:
+                br.close()
+    errs = [k for m in ("import", "camera") for k, r in R.get(m, {}).items() if r.get("error")]
+    if errs:
+        print(f"erreurs sur {len(errs)} cas :", errs[:8])
+    return report_photos(labels, truth, guided, R, grp)
+
+
+def run_cases_fn(br, fn, cases, chunk=10, label=""):
+    res = []
+    t0 = time.time()
+    for s in range(0, len(cases), chunk):
+        res += br.ev(f"c => {fn}", cases[s:s + chunk])
+        if label and (s // chunk) % 10 == 0:
+            print(f"  {label} {min(len(cases), s + chunk)}/{len(cases)} ({time.time() - t0:.0f} s)", flush=True)
+    return res
+
+
+def photo_rows(labels, R, grp, mode):
+    import photos as P
+    rows = {"positive": [], "probable": [], "absent": [], "negative": [], "multi": []}
+    for L in labels:
+        name = os.path.splitext(L["file"])[0] + ".jpg"
+        cat = P.category(L)
+        if mode == "import":
+            r = R["import"].get(name)
+            if r is None:
+                continue
+            r = dict(r)
+            r["_dec"], r["_cands"] = photo_decision(r, grp)
+            r["_key"] = name
+            if cat == "multi":
+                ids = set(L.get("ids") or [L.get("id")])
+                r["_multi_ok"] = r["_dec"][0] == "accept" and any(r["_dec"][1] in grp.get(i, {i}) for i in ids)
+                r["_multi_bad"] = r["_dec"][0] == "accept" and not r["_multi_ok"]
+            rows[cat].append((L, r))
+        else:
+            for k in [k for k in R["camera"] if k.split("|")[0] == name]:
+                r = dict(R["camera"][k])
+                r["_dec"], r["_cands"] = photo_decision(r, grp)
+                r["_det"] = R["detect"].get(k, {})
+                r["_key"] = k
+                if cat == "multi":
+                    # chaque carte d'une scène (vérité terrain) : un cas caméra positif
+                    rows["positive"].append((dict(L, id=k.split("|")[1]), r))
+                else:
+                    rows[cat].append((L, r))
+    return rows
+
+
+def report_photos(labels, truth, guided, R, grp):
+    import photos as P
+    out = {}
+    era = lambda L: L["conditions"].get("era") or "?"
+    cols = ["n", "top1", "strict", "top5", "acc", "prec", "prec_strict", "wrong", "wrong_print", "choose", "choose_ok", "none", "d_med"]
+    colsa = ["n", "fa", "fa_n", "choose"]
+    for mode in ("import", "camera"):
+        if not R.get(mode):
+            continue
+        rows = photo_rows(labels, R, grp, mode)
+        print(f"\n=== {mode} ===")
+        m = photo_metrics(rows["positive"], grp, "positive")
+        print(P.fmt_row("positives (vérifiées)", m, cols))
+        out[mode] = {"positive": m}
+        mp = photo_metrics(rows["probable"], grp, "positive")
+        print(P.fmt_row("probables", mp, cols))
+        for c in ("absent", "negative"):
+            mm = photo_metrics(rows[c], grp, "absent")
+            out[mode][c] = mm
+            print(P.fmt_row(c, mm, colsa))
+        if mode == "import" and rows["multi"]:
+            ok = sum(1 for _, r in rows["multi"] if r.get("_multi_ok"))
+            bad = sum(1 for _, r in rows["multi"] if r.get("_multi_bad"))
+            print(f"  multi (scènes)         n={len(rows['multi'])} acceptée une des cartes={ok} fausse={bad}")
+            out[mode]["multi"] = {"n": len(rows["multi"]), "ok": ok, "bad": bad}
+        pos = rows["positive"]
+        if mode == "camera":
+            seen = sum(1 for _, r in pos if r["_det"].get("present"))
+            print(f"  détection de la boucle : carte vue {seen}/{len(pos)} ({pct(seen, len(pos)):.1f} %)")
+            out[mode]["seen"] = pct(seen, len(pos))
+            errs = [P.corner_err(r.get("quad"), (guided.get(r["_key"]) or {}).get("quad")) for _, r in pos]
+        else:
+            errs = []
+            for L, r in pos:
+                g = truth[r["_key"]]["gt"].get(L["id"])
+                if g and g["ok"]:
+                    errs.append(P.corner_err(r.get("quad"), g["quad"]))
+        errs = [e for e in errs if e is not None]
+        if errs:
+            good = sum(1 for e in errs if e < 0.03)
+            print(f"  coins : p50 {q(errs, 0.5) * 100:.1f} %  p90 {q(errs, 0.9) * 100:.1f} %  < 3 % : {good}/{len(errs)}")
+            out[mode]["corners_ok"] = pct(good, len(errs))
+        for title, key in (("support", lambda L, r: L["conditions"].get("holder")),
+                           ("ère", lambda L, r: era(L)),
+                           ("langue", lambda L, r: L.get("lang")),
+                           ("finition", lambda L, r: L["conditions"].get("finish")),
+                           ("reflets", lambda L, r: L["conditions"].get("glare")),
+                           ("angle", lambda L, r: L["conditions"].get("angle")),
+                           ("lumière", lambda L, r: L["conditions"].get("light")),
+                           ("remplissage", lambda L, r: P.bucket_fill(L["conditions"].get("cardFill"))),
+                           ("source", lambda L, r: L["src"])):
+            print(f"  par {title} :")
+            bd = P.breakdown(pos, key, lambda v: photo_metrics(v, grp, "positive"))
+            out[mode].setdefault("by", {})[title] = bd
+            for k, mm in bd.items():
+                print(P.fmt_row(str(k), mm, ["n", "top1", "top5", "acc", "prec", "wrong", "choose", "choose_ok", "none"]))
+    if R.get("oracle"):
+        lab = {os.path.splitext(L["file"])[0] + ".jpg": L for L in labels}
+        ok1 = ok5 = n = 0
+        dts, lv, by_h = [], {}, {}
+        for k, r in R["oracle"].items():
+            if r.get("error"):
+                continue
+            name, cid = k.split("|")
+            g = grp.get(cid, {cid})
+            top = [x[0] for x in r["top"]]
+            n += 1
+            ok1 += bool(top) and top[0] in g
+            ok5 += any(x in g for x in top)
+            dts.append(r["dTrue"])
+            lv[r["level"]] = lv.get(r["level"], 0) + 1
+            s = by_h.setdefault(lab[name]["conditions"].get("holder"), [0, 0, []])
+            s[0] += 1
+            s[1] += bool(top) and top[0] in g
+            s[2].append(r["dTrue"])
+        print(f"\n=== oracle (empreinte au vrai quad) ===\n  n={n} top1={pct(ok1, n):.1f} % top5={pct(ok5, n):.1f} % "
+              f"d vraie carte p50 {q(dts, 0.5):.3f} p90 {q(dts, 0.9):.3f} ; niveaux {lv}")
+        for h, s in sorted(by_h.items(), key=lambda kv: -kv[1][0]):
+            print(f"  {str(h):<10} n={s[0]} top1={pct(s[1], s[0]):.1f} % d p50 {q(s[2], 0.5):.3f} p90 {q(s[2], 0.9):.3f}")
+        out["oracle"] = {"n": n, "top1": pct(ok1, n), "top5": pct(ok5, n), "d_p50": q(dts, 0.5)}
+    return out
+
+
+# ----------------------------------------------------------------------------------------------------------
 # live : fausse caméra (clip y4m) → vraie API js/scan/index.js (camera, worker, boucle) dans tools/scanbench/live.html
 
 def cmd_live(a, br=None):
@@ -813,11 +1101,14 @@ def cmd_live(a, br=None):
             stop_t = bounds[i] + s0 / FPS * 1000
             delay = [round(e["t"] - stop_t) for e in pa]
             if tw:
-                # jumelle sans image : un choix (image) qui la liste, dans les 2 s après l'arrêt, aucune acceptation
+                # jumelle sans image : un choix (image) qui la liste, dans les 2 s après l'arrêt ; aucune acceptation sur
+                # l'image seule (une lecture OCR du numéro peut ensuite confirmer la bonne carte : sv03.5-025
+                # « MEW 025/165 », jumelle McDonald's 2024sv-2)
                 pc = [e for e in cho if pass_of(e["t"]) == i]
                 listed = all(tw & {c["id"] for c in e["candidates"]} for e in pc)
                 delay = [round(e["t"] - stop_t) for e in pc]
-                ok = not pa and bool(pc) and listed and pc[0]["f"] >= s0 and pc[0]["f"] <= s0 + 2 * FPS
+                ocr_ok = all(e.get("source") == "ocr" and e["best"]["id"] in grp.get(cid, {cid}) and pc and e["t"] > pc[0]["t"] for e in pa)
+                ok = ocr_ok and bool(pc) and listed and pc[0]["f"] >= s0 and pc[0]["f"] <= s0 + 2 * FPS
             else:
                 ok = len(pa) == 1 and len(good) == 1 and not early and not late
             ok_pass += ok
@@ -1310,7 +1601,7 @@ def cmd_all(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["prep", "bitexact", "synth", "rescore", "real", "live", "loop", "ocr", "calib", "api", "all"])
+    ap.add_argument("cmd", choices=["prep", "bitexact", "synth", "rescore", "real", "photos", "live", "loop", "ocr", "calib", "api", "all"])
     ap.add_argument("--seed", action="append", default=[], help="(prep) dossier de téléchargements existants")
     ap.add_argument("--fetch", type=int, default=0, help="(prep) images high.webp supplémentaires à télécharger")
     ap.add_argument("--preset", default="standard", choices=["standard", "hard", "wide"])
@@ -1328,6 +1619,12 @@ def main():
     ap.add_argument("--self", action="store_true", help="(synth, real) mesure la corrélation de la zone du numéro avec la carte n° 1")
     ap.add_argument("--no-offscreen", action="store_true", help="(api) page sans OffscreenCanvas (repli du fil principal)")
     ap.add_argument("--port", type=int, default=None, help="port du serveur local (défaut 8775 ou CARDEX_SCAN_PORT)")
+    ap.add_argument("--labels", default=None, help="(photos) labels.json du jeu de photos réelles")
+    ap.add_argument("--work", default=None, help="(photos) dossier de travail hors du dépôt (photos préparées, résultats)")
+    ap.add_argument("--what", default="import,camera,oracle", help="(photos) mesures : import, camera, oracle")
+    ap.add_argument("--tag", default=None, help="(photos) nom des résultats (res_<tag>.json dans --work)")
+    ap.add_argument("--detect", default=None, help="(photos) réglages du détecteur, JSON (identify.js DETECT)")
+    ap.add_argument("--rescore", action="store_true", help="(photos) relit res_<tag>.json sans relancer le navigateur")
     a = ap.parse_args()
     global PORT, BASE
     if a.port:
@@ -1335,7 +1632,7 @@ def main():
     if a.cmd != "prep":
         a.seed = a.seed_val
     # serveur local seulement pour les commandes qui lancent Chromium (un seul banc à la fois sur le port 8775)
-    srv = serve() if a.cmd not in ("prep", "rescore", "calib") else None
+    srv = serve() if a.cmd not in ("prep", "rescore", "calib") and not (a.cmd == "photos" and a.rescore) else None
     Handler.real_dir = a.real
     try:
         if a.cmd == "prep":
@@ -1351,6 +1648,8 @@ def main():
             cmd_calib(a)
         elif a.cmd == "real":
             cmd_real(a)
+        elif a.cmd == "photos":
+            cmd_photos(a)
         elif a.cmd == "live":
             cmd_live(a)
         elif a.cmd == "ocr":

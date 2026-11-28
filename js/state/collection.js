@@ -117,9 +117,25 @@ export function migrate(d, { strict = false } = {}) {
 // ---------- état ----------
 const state = { readOnly: false, corrupt: null, corruptRaw: null, error: null, notice: null, failures: 0, alert: false, lastKind: null };
 const BACKUP = `${KEY}.corrupt.`;
-let data = load();
+// La collection est lue et validée au premier usage, pas pendant l'évaluation des modules : avec 2 000 cartes, lire
+// et migrer ~500 Ko de JSON coûte ~20 ms à CPU ×4, et main.js le fait dans une tâche à part (SPEC §12, pas de longue
+// tâche au démarrage). Un problème de lecture est signalé juste après (main.js écoute déjà 'cardex:storage').
+let DATA = null;
 let REV = 0, queue = null, dirty = false;
 const subs = new Set(), memo = new Map();
+function D() {
+  if (DATA) return DATA;
+  DATA = load();
+  if (typeof window !== 'undefined') setTimeout(startupSignal, 0);
+  return DATA;
+}
+// lecture faite maintenant (main.js : dans sa propre tâche, avant le premier écran) -> nombre de cartes
+export const warm = () => Object.keys(D().cards).length;
+// la sauvegarde contient-elle au moins une carte ? Sans la lire (squelette du démarrage, avant warm())
+export function peekHasCards() {
+  if (DATA) return Object.keys(DATA.cards).length > 0;
+  try { return /"cards"\s*:\s*\{\s*"/.test(localStorage.getItem(KEY) || ''); } catch { return false; }
+}
 
 function readRaw() {
   try { return { raw: localStorage.getItem(KEY) }; } catch (e) { return { raw: null, blocked: e }; }
@@ -209,8 +225,8 @@ function saved() {
 function persist() {
   if (state.readOnly) return failed('readonly');
   if (state.error === 'blocked') return failed('blocked');
-  data.savedAt = Date.now();
-  const s = JSON.stringify(data);
+  D().savedAt = Date.now();
+  const s = JSON.stringify(D());
   try { localStorage.setItem(KEY, s); return saved(); }
   catch (e) {
     if (isQuota(e) && evictCaches()) {
@@ -220,14 +236,14 @@ function persist() {
   }
 }
 
-// Démarrage : problème de lecture signalé (après l'évaluation des modules, pour que main.js écoute déjà),
-// puis ménage des caches de l'ancienne appli quand la page est au repos.
+// Démarrage : problème de lecture signalé juste après la première lecture (D()), puis ménage des caches de l'ancienne
+// appli quand la page est au repos.
+function startupSignal() {
+  if (state.readOnly) signal('readonly');
+  else if (state.error === 'blocked') signal('blocked');
+  else if (state.notice) signal(state.notice);
+}
 if (typeof window !== 'undefined') {
-  setTimeout(() => {
-    if (state.readOnly) signal('readonly');
-    else if (state.error === 'blocked') signal('blocked');
-    else if (state.notice) signal(state.notice);
-  }, 0);
   const idle = window.requestIdleCallback || (fn => setTimeout(fn, 2000));
   idle(() => cleanLegacyCaches(), { timeout: 10000 });
 }
@@ -256,12 +272,13 @@ function emitNow(ev) {
 // fn(events) une fois par microtâche ; renvoie la fonction de désabonnement
 export const on = fn => (subs.add(fn), () => subs.delete(fn));
 export const rev = () => REV;
-export const lastSave = () => data.savedAt || 0;
-export const lastExport = () => data.exportedAt || 0;
+export const lastSave = () => D().savedAt || 0;
+export const lastExport = () => D().exportedAt || 0;
 // Pour Réglages et le toast de main.js : { readOnly, error ('quota'|'unknown'|'readonly'|'blocked'|null),
 // notice ('corrupt' : copie faite à ce démarrage | null), message (texte à afficher, '' si tout va bien),
 // corrupt (clé de cette copie), backups: [{ key, at (ms), size (caractères) }], hasCorruptText, bytes }
 export function storageState() {
+  D();                                   // la lecture dit s'il y a un problème
   const backups = [];
   let bytes = 0;
   try {
@@ -274,6 +291,7 @@ export function storageState() {
 }
 // texte d'une copie de secours (à proposer au téléchargement) ; sans clé : le texte illisible gardé en mémoire
 export function corruptText(key) {
+  D();
   if (key == null) return state.corruptRaw;
   if (typeof key !== 'string' || !key.startsWith(BACKUP)) return null;
   try { return localStorage.getItem(key); } catch { return null; }
@@ -298,7 +316,7 @@ if (typeof addEventListener === 'function') {
     let raw = e.key === null ? readRaw().raw : e.newValue;
     let d = null;
     try { d = raw ? JSON.parse(raw) : null; } catch { return; }   // écriture illisible : on garde la nôtre
-    data = d && d.cards ? migrate(d) : empty();
+    DATA = d && d.cards ? migrate(d) : empty();
     state.readOnly = false; state.corruptRaw = null;
     emit({ type: 'reload' }, false);
   });
@@ -307,11 +325,11 @@ if (typeof addEventListener === 'function') {
 // ---------- lecture ----------
 const memoize = (name, fn) => { if (!memo.has(name)) memo.set(name, fn()); return memo.get(name); };
 export const total = rec => (rec ? Object.values(rec.qty).reduce((a, b) => a + b, 0) : 0);
-export const all = () => memoize('all', () => Object.values(data.cards));   // enregistrements (lecture seule)
-export const get = id => data.cards[id];
-export const has = id => !!data.cards[id];
+export const all = () => memoize('all', () => Object.values(D().cards));   // enregistrements (lecture seule)
+export const get = id => D().cards[id];
+export const has = id => !!D().cards[id];
 export const qtyOf = (id, finish) => {
-  const r = data.cards[id];
+  const r = D().cards[id];
   if (!r) return 0;
   return finish ? r.qty[finish] || 0 : total(r);
 };
@@ -402,17 +420,17 @@ export function setQty(card, finish, n) {
   const id = card?.id;
   if (typeof id !== 'string' || !ID_RE.test(id)) throw new TypeError('Carte invalide');
   n = Math.max(0, Math.min(999, Math.floor(Number(n) || 0)));
-  let rec = data.cards[id];
+  let rec = D().cards[id];
   const before = rec?.qty[finish] || 0;
   if (n === before) { if (rec) updateMeta(card); return; }      // rien à compter : seulement les infos, sans événement
   let added = false;
   if (!rec) {
-    rec = data.cards[id] = { id, qty: {}, addedAt: Date.now(), ...metaFrom(card, null) };
+    rec = D().cards[id] = { id, qty: {}, addedAt: Date.now(), ...metaFrom(card, null) };
     added = true;
   } else Object.assign(rec, metaFrom(card, rec));
   if (n) rec.qty[finish] = n; else delete rec.qty[finish];
   const removed = !Object.keys(rec.qty).length;
-  if (removed) delete data.cards[id];
+  if (removed) delete D().cards[id];
   emit({ type: 'qty', id, finish, before, after: n, added, removed });
 }
 
@@ -422,7 +440,7 @@ export function add(card, finish, n = 1) {
 
 // complète les infos d'une carte possédée (ex. dexId des anciennes sauvegardes), sans événement
 export function updateMeta(card) {
-  const rec = data.cards[card?.id];
+  const rec = D().cards[card?.id];
   if (!rec) return false;
   const before = JSON.stringify(rec);
   Object.assign(rec, metaFrom(card, rec));
@@ -436,15 +454,18 @@ export function updateMeta(card) {
 // L'ancien scanner enregistrait la finition préréglée (« Normale ») même sur une carte qui n'existe qu'en holo
 // (Dracaufeu-ex 151 : f = ['holo']) ; Cardmarket ne la cote qu'en « holo » (le produit de base EST la holo).
 // main.js charge les séries possédées au repos puis appelle repairFinishes(cartes de la série) : « normale » devient
-// « holo » sur ces cartes (quantités additionnées). Rien d'autre n'est deviné. -> nombre de cartes corrigées
-export const needsFinishCheck = () => data.fixFin === 1;
+// « holo » sur ces cartes (quantités additionnées) ; sur une carte qui n'existe qu'en Cosmo (promos SWSH / SV / ME : ni
+// normale ni holo), elle devient « cosmos ». Rien d'autre n'est deviné. -> nombre de cartes corrigées
+export const needsFinishCheck = () => D().fixFin === 1;
 export function repairFinishes(cards) {
   let n = 0;
   for (const c of cards || []) {
-    const rec = data.cards[c?.id];
+    const rec = D().cards[c?.id];
     const f = Array.isArray(c?.finishes) ? c.finishes : null;
-    if (!rec?.qty.normal || !f?.length || f.includes('normal') || !f.includes('holo')) continue;
-    rec.qty.holo = Math.min(999, (rec.qty.holo || 0) + rec.qty.normal);
+    if (!rec?.qty.normal || !f?.length || f.includes('normal')) continue;
+    const to = f.includes('holo') ? 'holo' : f.includes('cosmos') ? 'cosmos' : null;
+    if (!to) continue;
+    rec.qty[to] = Math.min(999, (rec.qty[to] || 0) + rec.qty.normal);
     delete rec.qty.normal;
     n++;
   }
@@ -452,40 +473,40 @@ export function repairFinishes(cards) {
   return n;
 }
 export function finishCheckDone() {
-  if (data.fixFin !== 1) return;
-  delete data.fixFin;
+  if (D().fixFin !== 1) return;
+  delete D().fixFin;
   persist();
 }
 
 // ---------- produits scellés : possédés (prix d'achat) et suivis — comme l'ancienne appli ----------
-export const sealedAll = () => Object.values(data.sealed);
-export const sealedGet = id => data.sealed[String(id)];
+export const sealedAll = () => Object.values(D().sealed);
+export const sealedGet = id => D().sealed[String(id)];
 export function sealedSet(id, entry) {
   const k = String(id);
   const e = entry && cleanSealed(k, { ...entry, id });
-  if (e) data.sealed[k] = e;
-  else if (data.sealed[k]) delete data.sealed[k];
+  if (e) D().sealed[k] = e;
+  else if (D().sealed[k]) delete D().sealed[k];
   else return;
   emit({ type: 'sealed', id });
 }
-export const watching = id => data.watch.some(w => String(w) === String(id));
+export const watching = id => D().watch.some(w => String(w) === String(id));
 export function toggleWatch(id) {
-  const i = data.watch.findIndex(w => String(w) === String(id));
-  if (i >= 0) data.watch.splice(i, 1);
-  else { const c = cleanWatchId(id); if (c === null) return false; data.watch.push(c); }
+  const i = D().watch.findIndex(w => String(w) === String(id));
+  if (i >= 0) D().watch.splice(i, 1);
+  else { const c = cleanWatchId(id); if (c === null) return false; D().watch.push(c); }
   emit({ type: 'watch', id });
   return i < 0;
 }
-export const watchList = () => [...data.watch];
+export const watchList = () => [...D().watch];
 
 // Scellé de l'ancienne version (identifiants TCGplayer) pas encore relié à Cardmarket : { sealed: [entrée…], watch: [id…] }
-export const legacySealed = () => ({ sealed: Object.values(data.tcg?.sealed || {}), watch: [...(data.tcg?.watch || [])] });
+export const legacySealed = () => ({ sealed: Object.values(D().tcg?.sealed || {}), watch: [...(D().tcg?.watch || [])] });
 
 // Relie le scellé de l'ancienne version à Cardmarket. map : Map ou objet { idTCGplayer: idCardmarket } ; sans map, la
 // table data/market/sealed-img.json (idCardmarket -> idTCGplayer) est lue et inversée. Ce qui n'a pas de correspondance
 // reste de côté (affiché comme « à retrouver », exporté dans les sauvegardes). -> { linked, left }
 export async function linkLegacySealed(map) {
-  const count = () => Object.keys(data.tcg?.sealed || {}).length + (data.tcg?.watch?.length || 0);
+  const count = () => Object.keys(D().tcg?.sealed || {}).length + (D().tcg?.watch?.length || 0);
   if (!count()) return { linked: 0, left: 0 };
   let inv = map instanceof Map ? map : map && typeof map === 'object' ? new Map(Object.entries(map)) : null;
   if (!inv) {
@@ -493,22 +514,22 @@ export async function linkLegacySealed(map) {
   }
   const to = k => { const v = inv.get(String(k)) ?? inv.get(k); const id = cleanWatchId(typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v); return id; };
   let linked = 0;
-  const tcg = data.tcg;
+  const tcg = D().tcg;
   for (const [k, e] of Object.entries(tcg.sealed)) {
     const id = to(k);
     if (id === null) continue;
-    if (!data.sealed[String(id)]) data.sealed[String(id)] = { ...e, id };
+    if (!D().sealed[String(id)]) D().sealed[String(id)] = { ...e, id };
     delete tcg.sealed[k];
     linked++;
   }
   tcg.watch = tcg.watch.filter(w => {
     const id = to(w);
     if (id === null) return true;
-    if (!watching(id)) data.watch.push(id);
+    if (!watching(id)) D().watch.push(id);
     linked++;
     return false;
   });
-  if (!count()) delete data.tcg;
+  if (!count()) delete D().tcg;
   if (linked) emit({ type: 'reload' });
   return { linked, left: count() };
 }
@@ -527,9 +548,13 @@ function invertImgMap(d) {
 }
 
 // ---------- sauvegarde fichier ----------
+// fixFin : finitions de la v1 pas encore revues (séries injoignables) ; gardé dans le fichier, l'appareil qui
+// l'importe fera la correction (sinon une carte holo seule resterait « Normale » pour de bon)
 export function exportText() {
+  const d = D();
   return JSON.stringify({ v: 2, app: 'cardex', exportedAt: new Date().toISOString(),
-    cards: data.cards, sealed: data.sealed, watch: data.watch, ...(data.tcg ? { tcg: data.tcg } : {}), savedAt: data.savedAt }, null, 1);
+    cards: d.cards, sealed: d.sealed, watch: d.watch, ...(d.tcg ? { tcg: d.tcg } : {}), ...(d.fixFin === 1 ? { fixFin: 1 } : {}),
+    savedAt: d.savedAt }, null, 1);
 }
 
 export function exportFile() {
@@ -542,7 +567,7 @@ export function exportFile() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
-  data.exportedAt = Date.now();
+  D().exportedAt = Date.now();
   persist();
   return { name, size: text.length };
 }
@@ -556,8 +581,8 @@ export function importText(text) {
   const inc = migrate(d, { strict: true });
   let cards = 0, updated = 0, sealed = 0, watch = 0;
   for (const r of Object.values(inc.cards)) {
-    const cur = data.cards[r.id];
-    if (!cur) { data.cards[r.id] = r; cards++; continue; }
+    const cur = D().cards[r.id];
+    if (!cur) { D().cards[r.id] = r; cards++; continue; }
     let up = false;
     for (const [f, n] of Object.entries(r.qty)) if (n > (cur.qty[f] || 0)) { cur.qty[f] = n; up = true; }
     for (const k of ['name', 'localId', 'setName', 'rarity', 'category', 'image']) if (!cur[k] && r[k]) cur[k] = r[k];
@@ -565,12 +590,12 @@ export function importText(text) {
     if (!cur.dexId?.length && r.dexId.length) cur.dexId = r.dexId;
     if (up) updated++;
   }
-  if (inc.fixFin && (cards || updated)) data.fixFin = 1;
-  for (const [k, s] of Object.entries(inc.sealed)) if (!data.sealed[k]) { data.sealed[k] = s; sealed++; }
-  for (const w of inc.watch) if (!watching(w)) { data.watch.push(w); watch++; }
+  if (inc.fixFin && (cards || updated)) D().fixFin = 1;
+  for (const [k, s] of Object.entries(inc.sealed)) if (!D().sealed[k]) { D().sealed[k] = s; sealed++; }
+  for (const w of inc.watch) if (!watching(w)) { D().watch.push(w); watch++; }
   // scellé de l'ancienne version (identifiants TCGplayer) : gardé à part, sans doublon
   if (inc.tcg) {
-    const tcg = (data.tcg ??= { sealed: {}, watch: [] });
+    const tcg = (D().tcg ??= { sealed: {}, watch: [] });
     for (const [k, s] of Object.entries(inc.tcg.sealed)) if (!tcg.sealed[k]) { tcg.sealed[k] = s; sealed++; }
     for (const w of inc.tcg.watch) if (!tcg.watch.some(x => String(x) === String(w))) { tcg.watch.push(w); watch++; }
   }
@@ -581,12 +606,12 @@ export function importText(text) {
 
 // -> true si la collection vide est enregistrée
 export function clearAll() {
-  const exportedAt = data.exportedAt;
-  data = empty();
-  if (exportedAt) data.exportedAt = exportedAt;
+  const exportedAt = D().exportedAt;
+  DATA = empty();
+  if (exportedAt) D().exportedAt = exportedAt;
   state.readOnly = false; state.corruptRaw = null;
   return emitNow({ type: 'reload' });
 }
 
 // Pour les tests (ne pas utiliser dans l'appli)
-export const _debug = { reload() { Object.assign(state, { readOnly: false, corrupt: null, corruptRaw: null, error: null, notice: null, failures: 0, alert: false, lastKind: null }); data = load(); REV++; memo.clear(); }, data: () => data };
+export const _debug = { reload() { Object.assign(state, { readOnly: false, corrupt: null, corruptRaw: null, error: null, notice: null, failures: 0, alert: false, lastKind: null }); DATA = load(); REV++; memo.clear(); }, data: () => D() };

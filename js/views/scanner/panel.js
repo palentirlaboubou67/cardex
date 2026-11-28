@@ -49,11 +49,11 @@ export function resultHTML(v) {
   <div class="chips scn-fins" role="group" aria-label="Ajouter à ta collection">${v.finishes.map(f => html`<button type="button" class="chip scn-fin${f === v.pref ? ' pref' : ''}" data-add="${f}" aria-label="${`Ajouter en ${LABEL[f] || f}`}">${icon('plus', { size: 16 })}<i class="${DOT[f] || 'dot'}"></i>${SHORT[f] || f}</button>`)}</div>
   <div class="scn-links"><a href="${cardHref(c.id)}">Voir la fiche${chev()}</a>${v.dex ? html`<a href="${`#/pokemon/${v.dex}`}">Voir dans le Pokédex${chev()}</a>` : ''}</div>
   ${v.group.length > 1 ? html`<div class="scn-grp">
-    <p class="scn-lbl">Même illustration dans plusieurs séries</p>
-    <div class="chips scn-alts" role="group" aria-label="Choisis la série de ta carte">${v.group.map(g => html`<button type="button" class="chip" data-pick="${g.id}" aria-pressed="${g.id === c.id ? 'true' : 'false'}" aria-label="${labelOf(g)}">${where(g) || g.id}</button>`)}</div>
+    <p class="scn-lbl">Même illustration, autres versions</p>
+    <div class="chips scn-alts" role="group" aria-label="Choisis la version de ta carte">${v.group.map(g => html`<button type="button" class="chip" data-pick="${g.id}" aria-pressed="${g.id === c.id ? 'true' : 'false'}" aria-label="${labelOf(g)}">${where(g) || g.id}</button>`)}</div>
   </div>` : ''}
   <div class="scn-more">
-    <div class="scn-more-h"><span>Pas la bonne ?</span><a href="${searchHref(v.q)}">Chercher par nom${chev()}</a></div>
+    <div class="scn-more-h"><span>Pas la bonne ?</span><a href="${searchHref(v.q)}" data-push>Chercher par nom${chev()}</a></div>
     ${v.thumbs.length > 1 ? html`<div class="scn-thumbs" role="group" aria-label="Autres cartes possibles">${v.thumbs.map(t => html`<button type="button" class="scn-thumb" data-pick="${t.id}"${t.id === c.id ? html` aria-current="true"` : ''} aria-label="${labelOf(t)}">${art(t)}</button>`)}</div>` : ''}
   </div>`;
 }
@@ -62,9 +62,9 @@ export function resultHTML(v) {
 export function chooserHTML(v) {
   return html`<div class="scn-choose">
     <h2 class="scn-ttl" tabindex="-1">Laquelle est-ce ?</h2>
-    <p class="scn-sub">${v.same ? 'Même illustration dans plusieurs séries : compare le numéro et le symbole en bas de ta carte.' : 'Ces cartes se ressemblent : touche la bonne.'}</p>
+    <p class="scn-sub">${v.same ? 'Même illustration, plusieurs versions : compare le numéro et le symbole en bas de ta carte.' : 'Ces cartes se ressemblent : touche la bonne.'}</p>
     <div class="scn-picks">${v.picks.map(c => html`<button type="button" class="scn-pick" data-pick="${c.id}" aria-label="${labelOf(c)}">${art(c, true)}<span class="cap"><b>${c.name}</b><span><i>${[noOf(c), c.setName].filter(Boolean).join(' · ')}</i></span></span></button>`)}</div>
-    <div class="scn-more-h"><span>Aucune de celles-ci ?</span><a href="${searchHref(v.q)}">Chercher par nom${chev()}</a></div>
+    <div class="scn-more-h"><span>Aucune de celles-ci ?</span><a href="${searchHref(v.q)}" data-push>Chercher par nom${chev()}</a></div>
   </div>`;
 }
 
@@ -73,7 +73,7 @@ export function noneHTML({ title = 'Carte non reconnue', text = 'Rapproche-toi :
   return html`<div class="scn-none">
     <h2 class="scn-ttl" tabindex="-1">${title}</h2>
     <p class="scn-sub">${text}</p>
-    <div class="scn-acts">${search ? html`<a class="btn" href="${searchHref(q)}">${icon('search')}Chercher par nom</a>` : ''}<button type="button" class="btn text" data-retry>${retry}</button></div>
+    <div class="scn-acts">${search ? html`<a class="btn" href="${searchHref(q)}" data-push>${icon('search')}Chercher par nom</a>` : ''}<button type="button" class="btn text" data-retry>${retry}</button></div>
   </div>`;
 }
 

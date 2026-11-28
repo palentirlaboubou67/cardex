@@ -18,7 +18,23 @@ NAME_FIX = {
     'basep': 'Promo Wizards',            # TCGdex : « Wizards Black Star Promos » (comme « Promo DP », « Promo SWSH »)
     'svp': 'Promo SV',                   # TCGdex : « SVP Black Star Promos »
     'mep': 'Promo ME',                   # TCGdex : « MEP Black Star Promos »
+    # Kits du dresseur : un seul libellé « Kit du dresseur » (TCGdex : « Kit dresseur » pour DP et EX) et le nom
+    # français du Pokémon du kit, tel que l'écrivent ses cartes
+    'tk-sm-l': 'SM Kit du dresseur (Lougaroc)',          # TCGdex : « Lougarox »
+    'tk-xy-p': 'XY Kit du dresseur (Pikachu Catcheur)',  # TCGdex : « Pikachu Libre » (nom anglais)
+    'tk-dp-l': 'DP Kit du dresseur (Lucario)',
+    'tk-dp-m': 'DP Kit du dresseur (Manaphy)',
+    'tk-ex-latia': 'EX Kit du dresseur (Latias)',
+    'tk-ex-latio': 'EX Kit du dresseur (Latios)',
+    'tk-ex-m': 'EX Kit du dresseur (Négapi)',
+    'tk-ex-p': 'EX Kit du dresseur (Posipi)',            # TCGdex : « Positi » (Posipi, n° 311 du Pokédex)
 }
+
+
+def typo(s):
+    """Apostrophe typographique dans les noms affichés (séries, blocs, cartes) : l'interface écrit « ’ » partout ;
+    la recherche replie les deux formes (format.norm, dex.words)."""
+    return s.replace("'", '’') if isinstance(s, str) else s
 
 # Code affiché quand TCGdex n'a pas d'abbreviation.official (jamais le nom complet).
 # Promos : sur le modèle BWP / XYP / SMP / SVP / MEP ; McDonald's : sur le modèle MCD11…MCD24 ;
@@ -70,7 +86,7 @@ SHARED = {
     # « ex TRAINER KIT » (pokemontcg.io, téléchargé une fois et auto-hébergé) pour les 4 kits de l'ère EX,
     # avec le Pokémon du kit en étiquette (lignes voisines au logo identique).
     'tkex': {'source': ('url', 'https://images.pokemontcg.io/tk1a/logo.png'), 'sets': ['tk-ex-latia', 'tk-ex-latio', 'tk-ex-m', 'tk-ex-p'],
-             'lang': 'en', 'tags': {'tk-ex-latia': 'Latias', 'tk-ex-latio': 'Latios', 'tk-ex-m': 'Négapi', 'tk-ex-p': 'Positi'}},
+             'lang': 'en', 'tags': {'tk-ex-latia': 'Latias', 'tk-ex-latio': 'Latios', 'tk-ex-m': 'Négapi', 'tk-ex-p': 'Posipi'}},
 }
 
 # Logos qui n'existent que chez Scrydex : les auto-héberger serait du « mirroring » (conditions Scrydex §4).
@@ -109,6 +125,12 @@ BLOC_LOGO = {
     'mc': ('shared', 'mcd'),
     'tk': None,                 # pas de logo neutre « Trainer Kit » : couverture générée
 }
+
+# Extensions principales XY et Soleil et Lune : ni l'API ni cards-database n'ont de variantes (l'API ne dit que
+# « normale »). Toutes ont des reverses (communes, peu communes, rares) et des holos (EX, GX, ultra rares…) :
+# cards.era_finishes. Pas les séries spéciales dont l'existence des reverses n'est pas sûre (g1, dc1, det1,
+# xy0, kits, promos) : elles gardent ce que dit l'API.
+ERA_RULE = re.compile(r'^(xy([1-9]|1[0-2])|sm([1-9]|1[0-2])|sm3\.5|sm7\.5|sm115)$')
 
 # Séries absentes de /v2/fr/sets mais dont des cartes existent en français (FINAL-images §3.2).
 # pl4 (Arceus) : TCGdex FR n'a que les 9 cartes AR1–AR9 ; métadonnées prises sur la série anglaise, sauf le

@@ -10,14 +10,15 @@ worker ; une CI avec une autre version de Pillow/libwebp ne renomme rien).
 Logo, dans l'ordre : logo partagé (promos, POP, McDonald's, kits EX) ; source FR hors TCGdex (LOGO_SOURCE) ;
 TCGdex FR (.webp puis .png, y compris un logo non annoncé par l'API) ; sous-série -> logo FR de la série mère +
 étiquette ; TCGdex EN ; images.pokemontcg.io
-(licence permissive, téléchargé une fois et auto-hébergé). Jamais d'image Scrydex auto-hébergée (ce serait du
-« mirroring », conditions Scrydex §4) : en dernier recours, l'adresse Scrydex donnée par pokemontcg-data (jamais
-devinée) est liée telle quelle, après vérification (200, image, pas l'image de remplacement, CORS « * »).
-Sinon logo null : l'interface affiche une couverture générée (symbole + code).
+(licence permissive, téléchargé une fois et auto-hébergé). Sinon logo null : l'interface affiche une couverture
+générée (symbole + code).
 
-Symbole : TCGdex FR (.png puis .webp ; 77 .webp manquent), EN, images.pokemontcg.io, symbole de la série mère,
-puis Scrydex lié (adresse de pokemontcg-data, ou /<extension>-symbol/symbol vérifiée : Scrydex répond 404 pour un
-symbole inconnu).
+Symbole : TCGdex FR (.png puis .webp ; 77 .webp manquent), EN, images.pokemontcg.io, symbole de la série mère ;
+sinon pas de symbole (couverture générée réduite au code).
+
+Jamais d'image Scrydex, ni auto-hébergée (ce serait du « mirroring », conditions Scrydex §4) ni liée (SPEC §6.1 :
+logos et symboles auto-hébergés) : les 16 kits DP → SM, me05, me06, mee et les McDonald's 2023 / 2024 n'ont leur
+logo ou leur symbole que chez Scrydex (28/11/2026) ; dès que TCGdex les publie, le constructeur les prend.
 
 Échec passager (réseau, 5xx, source absente du cache hors ligne) : le choix de la série est marqué « pas sûr »
 (logoSure / symSure) et build_catalog.py garde alors le logo ou le symbole de la sortie précédente, au lieu de
@@ -30,10 +31,9 @@ import re
 import urllib.parse
 
 from .tables import (BLOC_LOGO, FR_LOGO_IS_EN, LOGO_SOURCE, NO_SYMBOL, PARENT, PARENT_SYMBOL,
-                     SCRYDEX_LOGO_PLACEHOLDER_ETAG, SCRYDEX_NONE, SCRYDEX_SET, SHARED, SYMBOL_FROM)
+                     SCRYDEX_SET, SHARED, SYMBOL_FROM)
 
 TC = 'https://assets.tcgdex.net/'
-SX = 'https://images.scrydex.com/pokemon/'
 PTCG_SETS = 'https://raw.githubusercontent.com/PokemonTCG/pokemon-tcg-data/master/sets/en.json'
 LOGO_MAX = (240, 96)
 SYM_MAX = (64, 64)
@@ -165,7 +165,6 @@ class Art:
         self.files = {}      # chemin relatif -> octets à écrire (None : fichier déjà présent, gardé tel quel)
         self.by_hash = {}    # (kind, hash) -> chemin (dédoublonnage)
         self.fails = []
-        self.hotlinks = []   # adresses Scrydex liées (pas auto-hébergées)
         self.unsure = []     # sources en échec passager (réseau, hors ligne sans copie en cache)
         self.opaque = []     # images publiées encore opaques sur fond clair (contrôle : doit rester vide)
         self.matted = []     # sources opaques détourées
@@ -221,38 +220,6 @@ class Art:
                 return u, im, sure
             sure = sure and ok
         return None, None, sure
-
-    def hotlink(self, url, logo=True):
-        """Adresse Scrydex utilisable telle quelle : 200, image, pas l'image de remplacement, CORS ouvert.
-        Renvoie (url | None, image pour la mesure de luminance | None, sûr)."""
-        if not url or host(url) != 'images.scrydex.com':
-            return None, None, True
-        m = self.c.head(url, origin='https://example.com')  # origine neutre : seule la réponse CORS compte
-        st = m.get('status')
-        if st != 200:
-            sure = st in (404, 410)
-            if not sure:
-                self.unsure.append(url)
-            return None, None, sure
-        if not (m.get('type') or '').startswith('image/'):
-            return None, None, True
-        if logo and (m.get('etag') or '').startswith(SCRYDEX_LOGO_PLACEHOLDER_ETAG):
-            return None, None, True
-        if (m.get('acao') or '') != '*':
-            self.log(f'  ! {url} : pas de CORS ouvert ({m.get("acao")}), non retenu')
-            return None, None, True
-        im, sure = None, True
-        if logo:  # une seule lecture, en cache local, pour décider de la plaque claire (rien n'est publié)
-            try:
-                st, _, data, _ = self.c.get_bytes(url, accept='image/png,image/*;q=0.8')
-            except Exception:
-                st, data = 0, None
-            im = self._open(data) if st == 200 and data else None
-            if im is None:  # plaque claire indécidable : on garde le choix précédent
-                sure = False
-                self.unsure.append(url)
-        self.hotlinks.append(url)
-        return url, im, sure
 
     # ---------- traitement ----------
     def trim(self, im, name=''):
@@ -342,9 +309,8 @@ class Art:
                 u, im, s2 = self.first(urls_en + urls_pt)
                 sure = sure and s2
                 lang = 'en'
-            sx_logo = pl if host(pl) == 'images.scrydex.com' else None   # adresse donnée par les données, jamais devinée
             own[sid] = {'url': u, 'im': im, 'lang': lang if im is not None else None, 'rest': urls_en + urls_pt,
-                        'sx': sx_logo, 'sure': sure, 'symSure': True}
+                        'sure': sure, 'symSure': True}
             # symbole (TCGdex FR, EN ; pokemontcg.io sauf si son entrée est celle de la série mère : exu -> ex10)
             if sid in NO_SYMBOL or sid in PARENT_SYMBOL:
                 continue
@@ -363,11 +329,6 @@ class Art:
             if sim is not None:
                 sym[sid] = self.save('sym', sid, sim)[0]
                 sym_src[sid] = su
-            else:
-                sx_sym = ps if host(ps) == 'images.scrydex.com' else None
-                if not sx_sym and sid not in SCRYDEX_NONE:
-                    sx_sym = f'{SX}{SCRYDEX_SET.get(sid, sid)}-symbol/symbol'   # 404 si inconnu : vérifiable
-                own[sid]['sxSym'] = sx_sym
 
         # 2. logos partagés
         shared, shared_sure = {}, {}
@@ -428,11 +389,6 @@ class Art:
                             res = self._own(sid, {'url': u2, 'im': im2, 'lang': 'en'}, saved)
                 elif o['im'] is not None:
                     res = self._own(sid, o, saved)
-            if res is None and o.get('sx'):
-                u3, im3, s3 = self.hotlink(o['sx'])
-                sure = sure and s3
-                if u3:
-                    res = {'logo': u3, 'lang': 'en', 'k': dark_metrics(im3) if im3 is not None else None, 'src': u3}
             if res:
                 info[sid] = {'logo': res['logo'], 'logoLang': res['lang'], 'dark': is_dark(res['k']), 'tag': tag,
                              'metrics': res['k'], 'logoSrc': res['src']}
@@ -448,10 +404,6 @@ class Art:
                 if m['bloc'] not in BADGE_BLOCS or (by_id.get(par) or {}).get('code') == m.get('code'):
                     s, ssrc = sym.get(par), sym_src.get(par)
                     ssure = ssure and (own.get(par) or {}).get('symSure', True)
-            if not s and o.get('sxSym'):
-                s, _, hs = self.hotlink(o['sxSym'], logo=False)
-                ssure = ssure and hs
-                ssrc = s
             info[sid]['sym'] = s
             info[sid]['symSrc'] = ssrc
             info[sid]['symSure'] = bool(ssure)

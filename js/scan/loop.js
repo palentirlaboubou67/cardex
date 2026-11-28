@@ -18,6 +18,11 @@ export const LOOP = {
   leaveN: 3,            // images sans carte : la carte est partie
   none: 1.45,           // au-delà : aucune carte plausible (en deçà, le choix montre le top 3)
   regionMargin: 0.01,   // écart minimal de corrélation entre les deux meilleures versions
+  // même illustration d'après le nom (holo / non holo WOTC, Évolutions…) : jamais acceptée sur la zone du numéro
+  // seule. Photos réelles (QA-SCAN, 147 départages) : la zone s'est trompée jusqu'à 0,45 d'écart (bandes presque
+  // identiques, scans TCGdex recadrés différemment ; une corrélation pondérée par l'écart entre candidats a fait pire,
+  // jusqu'à 1,41) → choix, et la lecture OCR du numéro peut confirmer
+  artMargin: Infinity,
   ocrMax: 2,            // lectures OCR au plus par carte présente
   smallH: 420,          // hauteur du guide dans la copie de détection
   margin: 0.3,          // marge autour du guide (fraction de sa hauteur)
@@ -93,8 +98,9 @@ export async function settle(r, { single = false, t0 = performance.now(), quad =
     const region = reg.scores, best = region[0].id;
     const margin = region.length > 1 ? region[0].score - region[1].score : 1;
     const lead = [...ids(region), ...twins];
+    const art = (r.arts || []).some(id => fam.includes(id));
     if (twins.length) return done('choose', best, { lead, alternatives: lead, region, why: 'jumelles' });
-    if (margin < LOOP.regionMargin) return done('choose', best, { lead, alternatives: lead, region, why: 'zone-marge' });
+    if (margin < (art ? LOOP.artMargin : LOOP.regionMargin)) return done('choose', best, { lead, alternatives: lead, region, why: 'zone-marge' });
     return done('accept', best, { lead, alternatives: lead, region });
   }
   if (twins.length) return done('choose', top1, { lead: [top1, ...twins], alternatives: twins, why: 'jumelles' });

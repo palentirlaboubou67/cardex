@@ -1,10 +1,12 @@
-// Produit scellé : tuile (pistes, 140 px), ligne de liste (catalogue, Mon scellé), image avec secours (pictogramme du
-// type, jamais un carré gris vide), variation ou « prix inchangé depuis … » quand la cote est figée.
+// Produit scellé : tuile (pistes, 140 px), ligne de liste (catalogue, Mon scellé), image avec secours (couverture
+// générée : logo de la série, pictogramme et type ; pictogramme seul sans série connue ; jamais un carré gris vide),
+// variation ou « prix inchangé depuis … » quand la cote est figée.
 // Photos TCGplayer (emballage anglais) : toujours crossorigin="anonymous" (le service worker ne garde que le lisible).
 import { html, raw, esc } from '../core/dom.js';
 import { eur, dateDay, dateFr } from '../core/format.js';
 import { icon } from '../core/icons.js';
 import { deltaHTML } from '../components/chart.js';
+import { setLogoHTML } from '../components/setlogo.js';
 import * as col from '../state/collection.js';
 import * as catalog from '../data/catalog.js';
 import * as sealed from '../data/sealed.js';
@@ -26,15 +28,24 @@ const PICTO = {
 };
 export const pictoHTML = (k, cls = '') => raw(`<svg class="i p-picto${cls ? ` ${esc(cls)}` : ''}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${PICTO[k] || PICTO.case}</svg>`);
 
-// <img> du produit, ou le pictogramme de son type ; big : photo 400 px (la 200 px en secours)
-export function pimgHTML(p, { big = false, eager = false } = {}) {
-  if (!p.img) return pictoHTML(p.k);
-  const src = big ? sealed.bigImg(p.img) : p.img;
-  const fb = big && src !== p.img ? p.img : '';
-  return raw(`<img class="p-img" crossorigin="anonymous" decoding="async" loading="${eager ? 'eager' : 'lazy'}"${eager ? ' fetchpriority="high"' : ''} alt="" src="${esc(src)}" data-k="${esc(p.k)}"${fb ? ` data-fb="${esc(fb)}"` : ''}>`);
+// Produit sans photo (la moitié du catalogue, tous les japonais) : couverture générée quand sa série est dans le
+// catalogue (logo de la série, pictogramme et type dans un coin, FINAL-cardmarket §3.2), sinon le pictogramme seul.
+// Le catalogue des séries est chargé par ready() avant tout rendu.
+export function genHTML(p) {
+  const m = p.sid ? catalog.metaSync(p.sid) : null;
+  if (!m) return pictoHTML(p.k);
+  return html`<span class="p-gen" aria-hidden="true">${setLogoHTML(m, { size: 'row' })}<span class="p-gen-k">${pictoHTML(p.k)}<span>${sealed.KIND[p.k] || 'Produit'}</span></span></span>`;
 }
 
-// une seule écoute (capture) : photo 400 px → 200 px → pictogramme
+// <img> du produit, ou sa couverture générée ; big : photo 400 px (la 200 px en secours)
+export function pimgHTML(p, { big = false, eager = false } = {}) {
+  if (!p.img) return genHTML(p);
+  const src = big ? sealed.bigImg(p.img) : p.img;
+  const fb = big && src !== p.img ? p.img : '';
+  return raw(`<img class="p-img" crossorigin="anonymous" decoding="async" loading="${eager ? 'eager' : 'lazy'}"${eager ? ' fetchpriority="high"' : ''} alt="" src="${esc(src)}" data-k="${esc(p.k)}"${p.sid ? ` data-sid="${esc(p.sid)}"` : ''}${fb ? ` data-fb="${esc(fb)}"` : ''}>`);
+}
+
+// une seule écoute (capture) : photo 400 px → 200 px → couverture générée (ou pictogramme)
 if (typeof document !== 'undefined' && !document.__ptileFb) {
   document.__ptileFb = true;
   document.addEventListener('error', e => {
@@ -43,7 +54,8 @@ if (typeof document !== 'undefined' && !document.__ptileFb) {
     const fb = el.getAttribute('data-fb');
     if (fb) { el.removeAttribute('data-fb'); el.src = fb; return; }
     const tpl = document.createElement('template');
-    tpl.innerHTML = String(pictoHTML(el.getAttribute('data-k') || 'case'));
+    tpl.innerHTML = String(genHTML({ k: el.getAttribute('data-k') || 'case', sid: el.getAttribute('data-sid') || null }));
+    el.closest('.mk-pimg')?.classList.add('nophoto');
     el.replaceWith(tpl.content.firstChild);
   }, true);
 }
@@ -68,6 +80,7 @@ export const priceText = p => (p.eur == null ? 'Pas de vente récente' : eur(p.e
 const ownText = o => (o ? (o.qty > 1 ? `${o.qty} possédés` : '1 possédé') : '');
 export const dayText = d => (d.slice(0, 4) === String(new Date().getFullYear()) ? dateDay(d) : dateFr(d));
 export const stillText = d => `Prix inchangé depuis le ${dayText(d)}`;
+export const shortStill = d => `inchangé depuis le ${dayText(d)}`;      // tuiles et lignes (la place manque)
 
 // variation montrée pour un produit : celle de la période demandée, sinon la plus longue connue.
 // { html, text, still } ; cote figée depuis le début de la période : still = date du dernier changement
@@ -92,7 +105,7 @@ export function ptileHTML(p, { key = null } = {}) {
   return html`<a class="ptile mk-ptile" href="#/produit/${p.id}" data-product="${p.id}" aria-label="${label(p, ch, own, watched)}"><span class="ptile-img">${pimgHTML(p)}${
     own ? html`<span class="qty">×${own.qty}</span>` : ''}${watched ? html`<span class="mk-star">${icon('star-fill', { size: 12 })}</span>` : ''}${
     sealed.isJa(p) ? html`<span class="pill-en mk-ja">JP</span>` : ''}</span><span class="cap"><span><i>${type}</i></span><b>${name}</b><span>${
-    p.eur == null ? html`<i>Pas de vente récente</i>` : html`<em>${eur(p.eur)}</em>`}${ch.html}${ch.still ? html`<i class="mk-still">${ch.text.replace('Prix inchangé', 'inchangé')}</i>` : ''}</span></span></a>`;
+    p.eur == null ? html`<i>Pas de vente récente</i>` : html`<em>${eur(p.eur)}</em>`}${ch.html}${ch.still ? html`<i class="mk-still">${shortStill(ch.still)}</i>` : ''}</span></span></a>`;
 }
 
 // ---------- ligne (catalogue) ----------
@@ -102,10 +115,12 @@ export function prowHTML(p, { key = null, sub = null } = {}) {
   const ch = changeOf(p, key);
   const bloc = blocOf(p.sid);
   const s2 = sub ?? [bloc || (p.set && !p.fr.includes(p.set) ? p.set : ''), sealed.year(p), sealed.isJa(p) ? 'Japonais' : ''].filter(Boolean).join(' · ');
-  const notes = [watched ? html`<span class="mk-flag">${icon('star-fill', { size: 12 })}suivi</span>` : '', own ? ownText(own) : '', ch.still ? ch.text : ''].filter(Boolean);
+  // notes : « suivi » et « 3 possédés » ne sont jamais coupés ; seule la date (« inchangé depuis … ») se raccourcit
+  const notes = [watched ? html`<span class="mk-flag">${icon('star-fill', { size: 12 })}<span class="mk-flagt">suivi</span></span>` : '', own ? html`<span class="mk-own">${ownText(own)}</span>` : '',
+    ch.still ? html`<span class="mk-since">${shortStill(ch.still)}</span>` : ''].filter(Boolean);
   return html`<a class="row mk-prow" href="#/produit/${p.id}" data-product="${p.id}" aria-label="${label(p, ch, own, watched)}"><span class="sq">${pimgHTML(p)}</span><span class="body"><span class="t">${p.fr}</span>${
     s2 ? html`<span class="s"><span>${s2}</span></span>` : ''}${
-    notes.length ? html`<span class="s mk-note">${notes.map((n, i) => html`${i ? html`<i aria-hidden="true">·</i>` : ''}<span>${n}</span>`)}</span>` : ''}</span><span class="end">${
+    notes.length ? html`<span class="s mk-note">${notes.map((n, i) => html`${i ? html`<i aria-hidden="true">·</i>` : ''}${n}`)}</span>` : ''}</span><span class="end">${
     p.eur == null ? html`<span class="mk-nosale">Pas de vente récente</span>` : html`<span class="price">${eur(p.eur)}</span>`}${ch.html}</span></a>`;
 }
 

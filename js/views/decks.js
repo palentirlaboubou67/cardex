@@ -4,8 +4,9 @@ import { setBar, primaryTabs, updateAction, setProgress } from '../core/appbar.j
 import { html, setHTML, delegate, selectChip } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { eur, norm, plural } from '../core/format.js';
-import { setParams } from '../core/router.js';
-import { renderChunked } from '../core/list.js';
+import { setParams, depth } from '../core/router.js';
+// lots rythmés par l'image (core/list.js renderChunked enchaîne plusieurs lots avant le rendu : longue tâche)
+import { renderGrid as renderChunked } from './collection/grid.js';
 import { MESSAGES } from '../core/net.js';
 import * as decks from '../data/decks.js';
 import * as prices from '../data/prices.js';
@@ -63,8 +64,10 @@ function syncTabs() {
 }
 
 function bar() {
+  // racine ouverte par-dessus un autre écran : ← pour y revenir (une feuille ouverte a sa propre entrée)
+  const d = depth() - (history.state?.sheet ? 1 : 0);
   setBar({
-    title: 'Decks', signal: sig, progress: pend > 0,
+    title: 'Decks', back: d > 0, signal: sig, progress: pend > 0,
     actions: [
       { icon: 'search', label: 'Rechercher un deck', pressed: searchOpen, onClick: toggleSearch },
       { icon: 'info', label: 'À propos des decks', onClick: () => infoDecks() },
@@ -131,14 +134,16 @@ function compute() {
   return { groups, counts };
 }
 
-const metaOf = (d, m) => (m.card ? `Contient ${m.card.name} ×${m.card.count}` : [decks.shareLabel(d.share), decks.placeLabel(d.placing), d.event].filter(Boolean).join(' · '));
+// ligne courte sous le nom (W-N) ; l'étiquette pour les lecteurs d'écran garde la forme longue
+const metaOf = (d, m) => (m.card ? `Contient ${m.card.name} ×${m.card.count}` : [decks.shareShort(d.share), decks.placeShort(d.placing), decks.eventShort(d.event)].filter(Boolean).join(' · '));
+const metaLong = (d, m) => (m.card ? `contient ${m.card.name} ×${m.card.count}` : [decks.shareLabel(d.share), decks.placeLabel(d.placing), d.event].filter(Boolean).join(', '));
 const pcOf = st => Math.round(st.pct * 1000) / 10;
 const labelOf = (d, st, meta) => `${d.name}, ${st.have} cartes sur ${st.total}, ${st.ready ? 'prêt à jouer' : restText(st).replace('≈', 'environ')}, deck ${eur(st.value)}${meta ? `, ${meta}` : ''}`;
 const restHTML = st => html`${st.ready ? icon('check') : ''}${restText(st)}`;
 
 function rowHTML({ d, st, m }) {
   const meta = metaOf(d, m);
-  return html`<a class="row dk-row${st.ready ? ' ready' : ''}" href="${deckHref(d.id)}" data-deck="${d.id}" aria-label="${labelOf(d, st, meta)}">${artHTML(d)}<span class="body"><span class="t">${d.name}</span><span class="s dk-meta"><span>${meta}</span></span><span class="progress wide dk-bar${st.ready ? ' done' : ''}"><i style="width:${pcOf(st)}%"></i></span><span class="dk-rest num">${restHTML(st)}</span><span class="dk-n num">${st.have} / ${st.total} cartes</span><span class="dk-price num">deck ${eur(st.value)}</span></span></a>`;
+  return html`<a class="row dk-row${st.ready ? ' ready' : ''}" href="${deckHref(d.id)}" data-deck="${d.id}" aria-label="${labelOf(d, st, metaLong(d, m))}">${artHTML(d)}<span class="body"><span class="t">${d.name}</span><span class="s dk-meta"><span>${meta}</span></span><span class="progress wide dk-bar${st.ready ? ' done' : ''}"><i style="width:${pcOf(st)}%"></i></span><span class="dk-rest num">${restHTML(st)}</span><span class="dk-n num">${st.have} / ${st.total} cartes</span><span class="dk-price num">deck ${eur(st.value)}</span></span></a>`;
 }
 function rowNode(it) {
   const t = document.createElement('template');
@@ -159,7 +164,7 @@ function patchRow(row, { d, st, m }) {
   if (rest && rest.textContent !== restText(st)) setHTML(rest, restHTML(st));
   setText(row.querySelector('.dk-n'), `${st.have} / ${st.total} cartes`);
   setText(row.querySelector('.dk-price'), `deck ${eur(st.value)}`);
-  const label = labelOf(d, st, metaOf(d, m));
+  const label = labelOf(d, st, metaLong(d, m));
   if (row.getAttribute('aria-label') !== label) row.setAttribute('aria-label', label);
 }
 
@@ -440,7 +445,7 @@ export default {
   resume(r) {
     visible = true;
     sig = r?.signal || sig;
-    setProgress(pend > 0, { signal: sig });
+    bar();                      // la même adresse peut être la racine de l'onglet ou empilée (← ou pas) ; progression
     refresh(true);
   },
 

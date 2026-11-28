@@ -534,7 +534,69 @@ class Manifest:
         write_bytes_atomic(self.path, dumps(self.d).encode("utf8"))
 
 
-TWIN_SETS = ("tk-", "cel25cc")         # kits du dresseur, Collection Classique ; McDonald's : id commençant par l'année
+TWIN_SETS = ("tk-", "cel25cc", "30th-c")   # kits du dresseur, Collections Classiques ; McDonald's : id commençant par l'année
+# séries qui reproduisent des cartes de toutes les ères (homonymes cherchés dans toute la base, pas seulement l'ère)
+ANY_ERA = ("cel25cc", "30th-c")
+
+
+def norm_name(s):
+    """Nom comparable : sans accents, casse ni ponctuation (« M-Rayquaza-EX » = « M Rayquaza EX »)."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode().lower()
+    return "".join(ch for ch in s if ch.isalnum())
+
+
+# Même illustration repérée par le nom (QA-SCAN, photos réelles) : les scans de référence de deux impressions d'une
+# même illustration peuvent être très différents (holo / non holo WOTC : jusqu'à 1,62 ; M Tortank EX XY / Évolutions
+# 1,16), si bien que la photo d'une impression ressemble parfois plus à l'autre. Ces paires ne sont jamais acceptées
+# sur l'image seule : la zone du numéro départage, sinon choix.
+#  - même série, même nom, ères WOTC (base, neo) : holo et non holo de même illustration, distance ≤ 1,75 ;
+#  - séries différentes dont l'une réimprime des illustrations (Évolutions, Légendes Ancestrales, Générations…),
+#    même nom, distance ≤ 1,25.
+# Une paire dont les deux illustrateurs sont connus et différents est écartée (Néo Genesis 80 et 81 : même nom,
+# illustrations différentes).
+ART_ERAS = ("base", "neo")
+REPRINT_SETS = ("xy12", "col1", "g1", "cel25", "sv04.5", "me02.5", "swsh4.5", "swsh12.5", "sm3.5", "sm7.5", "sm115",
+                "swsh3.5", "dc1", "det1", "pop")
+ARTS_SAME_BITS, ARTS_CROSS_BITS = 224, 160
+
+
+def arts_table(sets, ids, desc, gid, set_info, log, fetcher=None):
+    """[[id, id]] (ordre des lignes) : paires de même illustration probable (voir ci-dessus), hors groupes de
+    réimpressions (gid : ligne → groupe). fetcher : lecture des illustrateurs (cache .cache/sc/tcgdex/illus)."""
+    name = {c["id"]: norm_name(c.get("name")) for d in sets.values() for c in d.get("cards") or []}
+    by = collections.defaultdict(list)
+    for i, cid in enumerate(ids):
+        if name.get(cid):
+            by[name[cid]].append(i)
+    bits = np.unpackbits(desc, axis=1)
+    era = lambda cid: set_info.get(set_of(cid), {}).get("era")
+    out = []
+    for rows in by.values():
+        if len(rows) < 2:
+            continue
+        b = bits[rows]
+        for x in range(len(rows)):
+            dist = (b[x][None, :] != b).sum(1)
+            for y in range(x + 1, len(rows)):
+                i, j = rows[x], rows[y]
+                if i in gid and gid.get(j) == gid[i]:
+                    continue
+                a, c = ids[i], ids[j]
+                sa, sc = set_of(a), set_of(c)
+                same = sa == sc and era(a) in ART_ERAS and dist[y] <= ARTS_SAME_BITS
+                cross = sa != sc and (sa.startswith(REPRINT_SETS) or sc.startswith(REPRINT_SETS)) and dist[y] <= ARTS_CROSS_BITS
+                if same or cross:
+                    out.append((min(i, j), max(i, j)))
+    art = illustrators(fetcher, {set_of(ids[k]) for p in out for k in p}, log) if fetcher else {}
+    keep = [(i, j) for i, j in out
+            if not (_ART(art.get(ids[i])) and _ART(art.get(ids[j])) and not _same_artist(_ART(art.get(ids[i])), _ART(art.get(ids[j]))))]
+    keep.sort()
+    log(f"même illustration d'après le nom : {len(keep)} paires, {len({k for p in keep for k in p})} cartes "
+        f"({len(out) - len(keep)} écartées : illustrateurs différents)")
+    return [[ids[i], ids[j]] for i, j in keep]
+
+
 GQL = API + "/graphql"
 _ART = lambda s: "".join(ch for ch in str(s or "").lower() if ch.isalnum())   # « Ken  Sugimori. » = « ken sugimori »
 
@@ -602,7 +664,8 @@ def twins_table(sets, ids, noimg, set_info, log, fetcher=None):
             if len(parts) >= 3 and f"{parts[1]}-{parts[2]}" in idset:
                 tw[f"{parts[1]}-{parts[2]}"].add(k)
     covered = {x for v in tw.values() for x in v}
-    name = {c["id"]: c.get("name") for d in sets.values() for c in d.get("cards") or []}
+    # noms normalisés (« M-Rayquaza-EX » de la Collection Classique = « M-Rayquaza EX » de XY)
+    name = {c["id"]: norm_name(c.get("name")) for d in sets.values() for c in d.get("cards") or []}
 
     def era(cid):
         return set_info.get(set_of(cid), {}).get("era")
@@ -611,31 +674,47 @@ def twins_table(sets, ids, noimg, set_info, log, fetcher=None):
     for cid in ids:
         by_era[(name.get(cid), era(cid))].append(cid)
         by_name[name.get(cid)].append(cid)
-    cands = {}
+    cands, wide = {}, {}
     for n in noimg:
         sid = set_of(n)
         if n in covered or not name.get(n) or not (sid.startswith(TWIN_SETS) or sid[:4].isdigit()):
             continue
         m = by_era.get((name[n], era(n)), [])
-        if not m and sid == "cel25cc":       # reproduction d'une carte d'une autre ère
+        # reproduction d'une carte d'une autre ère (la Collection Classique 30th est classée dans l'ère ME, ses
+        # originaux viennent de toutes les ères : homonymes de toute la base d'abord)
+        if sid.startswith("30th-c") or (not m and sid.startswith(ANY_ERA)):
             m = by_name.get(name[n], [])
         if m:
             cands[n] = m
-    art = illustrators(fetcher, {set_of(x) for n, m in cands.items() for x in [n, *m]}, log) if fetcher else {}
-    homonyms = dropped = 0
-    for n, m in cands.items():
+        # Collections Classiques et McDonald's reprennent aussi des illustrations d'autres ères (McDonald's 2024 :
+        # Dracaufeu de Voltage Éclatant) : homonymes de toute la base, gardés seulement si l'illustrateur est connu
+        # des deux côtés et le même (sinon trop d'homonymes)
+        if sid.startswith(ANY_ERA) or sid[:4].isdigit():
+            wide[n] = by_name.get(name[n], [])
+    sids = {set_of(x) for n, m in list(cands.items()) + list(wide.items()) for x in [n, *m]}
+    art = illustrators(fetcher, sids, log) if fetcher else {}
+    homonyms = dropped = widened = 0
+    for n in set(cands) | set(wide):
+        m = cands.get(n, [])
         a = _ART(art.get(n))
         if a:                                # illustrateur connu : les homonymes dessinés par un autre sont écartés
             keep = [cid for cid in m if not _ART(art.get(cid)) or _same_artist(_ART(art.get(cid)), a)]
             dropped += len(m) - len(keep)
             m = keep
-        if 1 <= len(m) <= 3:
+        # au plus 3 homonymes, 4 quand l'illustrateur de chacun est connu et le même (M-Gardevoir EX de la
+        # Collection Classique 30th : 4 impressions XY de 5ban Graphics)
+        cap = 3
+        if not (1 <= len(m) <= 3) and a and wide.get(n):
+            m = [cid for cid in wide[n] if _ART(art.get(cid)) and _same_artist(_ART(art.get(cid)), a)]
+            cap = 4
+            widened += 1 <= len(m) <= cap
+        if 1 <= len(m) <= cap:
             homonyms += 1
             for cid in m:
                 tw[cid].add(n)
     out = {k: sorted(v) for k, v in sorted(tw.items())}
-    log(f"jumelles sans image : {len(covered)} d'après data/cardimg.json, {homonyms} homonymes "
-        f"({dropped} homonymes d'un autre illustrateur écartés) ; {len(out)} cartes de la base concernées")
+    log(f"jumelles sans image : {len(covered)} d'après data/cardimg.json, {homonyms} homonymes dont {widened} d'une autre "
+        f"ère ({dropped} homonymes d'un autre illustrateur écartés) ; {len(out)} cartes de la base concernées")
     return out
 
 
@@ -845,6 +924,7 @@ def main():
             var_exc[cid] = var
     noimg = [cid for cid, v in info.items() if not v[2]]        # (erreur réseau comprise : lue par l'OCR en attendant)
     twins = twins_table(sets, ids, noimg, set_info, log, fetcher)
+    arts = arts_table(sets, ids, desc, gid, set_info, log, fetcher)
 
     cards = {
         "v": 1,
@@ -859,6 +939,7 @@ def main():
         "sets": set_info,
         "img": dict(sorted(img_exc.items())),
         "twins": twins,
+        "arts": arts,
     }
     meta = {"v": 1, "algo": ALGO, "rows": len(ids), "var": dict(sorted(var_exc.items())),
             "sha256": hashlib.sha256(desc.tobytes()).hexdigest()}

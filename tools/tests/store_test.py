@@ -52,7 +52,8 @@ def page_with(ctx, srv, ls=None, before=''):
     pg.evaluate('([k, v]) => { localStorage.clear(); if (v !== null) localStorage.setItem(k, v); }', [KEY, ls])
     if before:
         pg.evaluate(before)
-    pg.evaluate(f'async () => {{ window.C = (await load("{COL}"))[0]; }}')
+    # la collection est lue au premier usage (main.js le fait dans sa propre tâche au démarrage) : warm() ici
+    pg.evaluate(f'async () => {{ window.C = (await load("{COL}"))[0]; C.warm(); }}')
     pg.errs = errs
     return pg
 
@@ -104,32 +105,36 @@ def main():
             # v1 : « normale » enregistrée sur une carte qui n'existe qu'en holo -> holo (intégration vague 1)
             pg = page_with(ctx, srv, SAMPLE)
             r = pg.evaluate('''async () => {
-              const q = id => ({ normal: C.qtyOf(id, 'normal'), reverse: C.qtyOf(id, 'reverse'), holo: C.qtyOf(id, 'holo') });
+              const q = id => ({ normal: C.qtyOf(id, 'normal'), reverse: C.qtyOf(id, 'reverse'), holo: C.qtyOf(id, 'holo'), cosmos: C.qtyOf(id, 'cosmos') });
               const need0 = C.needsFinishCheck(), b006 = q('sv03.5-006');
               const evs = []; C.on(e => evs.push(...e.map(x => x.type)));
               const n = C.repairFinishes([{ id: 'sv03.5-006', finishes: ['holo'] }, { id: 'sv03.5-025', finishes: ['normal', 'reverse', 'cosmos'] },
-                                          { id: 'sv03.5-150', finishes: ['reverse', 'holo'] }, { id: 'sv03.5-001', finishes: [] }]);
+                                          { id: 'sv03.5-150', finishes: ['reverse', 'holo'] }, { id: 'sv03.5-001', finishes: [] },
+                                          { id: 'sv03.5-007', finishes: ['cosmos'] }, { id: 'sv03.5-199', finishes: ['reverse', 'pokeball'] }]);
               await Promise.resolve(); await new Promise(r => setTimeout(r));
               const again = C.repairFinishes([{ id: 'sv03.5-006', finishes: ['holo'] }]);
               C.finishCheckDone();
               const saved = JSON.parse(localStorage.getItem('cardex.collection.v1'));
               const v2 = C.migrate(saved);
               return { need0, b006, n, again, a006: q('sv03.5-006'), a025: q('sv03.5-025'), a150: q('sv03.5-150'), a001: q('sv03.5-001'),
+                       a007: q('sv03.5-007'), a199: q('sv03.5-199'),
                        evs, need1: C.needsFinishCheck(), savedFix: 'fixFin' in saved, v2Fix: 'fixFin' in v2 };
             }''')
             check(r['need0'], 'données v1 : vérification des finitions demandée')
-            eq(r['b006'], {'normal': 1, 'reverse': 1, 'holo': 0}, '006 avant')
-            eq(r['n'], 1, 'une seule carte corrigée')
+            eq(r['b006'], {'normal': 1, 'reverse': 1, 'holo': 0, 'cosmos': 0}, '006 avant')
+            eq(r['n'], 2, 'deux cartes corrigées (holo seule, Cosmo seule)')
             eq(r['again'], 0, 'deuxième passage : rien')
-            eq(r['a006'], {'normal': 0, 'reverse': 1, 'holo': 1}, '006 : normale -> holo, reverse gardée')
-            eq(r['a025'], {'normal': 2, 'reverse': 0, 'holo': 0}, '025 (a une normale) intact')
-            eq(r['a150'], {'normal': 0, 'reverse': 0, 'holo': 1}, '150 intact')
-            eq(r['a001'], {'normal': 3, 'reverse': 0, 'holo': 0}, 'finitions inconnues : rien deviné')
+            eq(r['a006'], {'normal': 0, 'reverse': 1, 'holo': 1, 'cosmos': 0}, '006 : normale -> holo, reverse gardée')
+            eq(r['a025'], {'normal': 2, 'reverse': 0, 'holo': 0, 'cosmos': 0}, '025 (a une normale) intact')
+            eq(r['a150'], {'normal': 0, 'reverse': 0, 'holo': 1, 'cosmos': 0}, '150 intact')
+            eq(r['a001'], {'normal': 3, 'reverse': 0, 'holo': 0, 'cosmos': 0}, 'finitions inconnues : rien deviné')
+            eq(r['a007'], {'normal': 0, 'reverse': 0, 'holo': 0, 'cosmos': 1}, 'Cosmo seule (promos) : normale -> cosmos')
+            eq(r['a199'], {'normal': 1, 'reverse': 0, 'holo': 0, 'cosmos': 0}, 'ni holo ni Cosmo : rien deviné')
             eq(r['evs'], ['reload'], 'un événement reload')
             check(not r['need1'] and not r['savedFix'] and not r['v2Fix'], 'drapeau retiré et enregistré', r)
             check(not pg.errs, 'erreurs', pg.errs)
             pg.close()
-            return "normale -> holo sur les cartes holo seulement, une fois"
+            return "normale -> holo (holo seule) ou cosmos (Cosmo seule), une fois"
 
         def t_import_validation():
             pg = page_with(ctx, srv, None)
@@ -266,7 +271,7 @@ def main():
                 if i:
                     pg.goto(srv.url + '__f2.html')
                     pg.evaluate(listen)
-                    pg.evaluate(f'async () => {{ window.C = (await load("{COL}"))[0]; }}')
+                    pg.evaluate(f'async () => {{ window.C = (await load("{COL}"))[0]; C.warm(); }}')
                 visits.append(pg.evaluate('''async () => { await new Promise(r => setTimeout(r, 30));
                   let bytes = 0; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); bytes += k.length + localStorage.getItem(k).length; }
                   return { backups: Object.keys(localStorage).filter(k => k.includes('.corrupt.')).length, bytes,
@@ -422,13 +427,13 @@ def main():
             }''')
             check(r['before']['pending'] == r['before']['total'] and r['before']['value'] == 0, 'avant chargement : tout en attente', r['before'])
             eq(r['v025'], 0.46, 'Pikachu ×2 normale')
-            eq(r['v150'], 84.26, 'Mewtwo holo : tendance cassée → avg30')
+            eq(r['v150'], 19.9, 'Mewtwo holo : tendance cassée (aucune moyenne ne la confirme) → médiane des moyennes')
             eq(r['v004'], 0.35, 'Salamèche reverse')
             eq(r['v007'], None, 'Carapuce sans cote : null (jamais un autre prix)')
             s = r['s']
             # 025 ×2, 004 reverse, 001 ×3, 150 holo, 133 normale, me06-060 normale ; 006 (normale + reverse) : le fichier
             # n'a que la holo, donc aucune des deux n'est cotée ; 133 reverse ×2 non cotée
-            expect = round(0.23 * 2 + 0.35 + 0.10 * 3 + 84.26 + 0.30 + 0.12, 2)
+            expect = round(0.23 * 2 + 0.35 + 0.10 * 3 + 19.9 + 0.30 + 0.12, 2)
             eq(s['value'], expect, 'valeur de la collection (cotes connues seulement)')
             eq(s['priced'] + s['unpriced'] + s['pending'], s['total'], 'priced + unpriced + pending = total')
             eq(s['pending'], 0, 'toutes les séries chargées (les absentes comptent comme sans cote)')

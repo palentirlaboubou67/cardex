@@ -299,6 +299,38 @@ export function displayQuad(so) {
   return { quad, found, sharp: found ? str / found : 0, nsharp: found ? nsh / found : 0 };
 }
 
+// Départs de la recherche : sur photo réelle, l'objectif (distance à la base) est plat tant que 2 côtés ou plus sont
+// faux (≈ 1,4 pour toute combinaison) : une descente qui part de « la droite la plus forte partout » reste bloquée
+// dès que le bord d'un étui, d'un cadre ou de l'illustration l'emporte sur un côté. On classe donc toutes les
+// combinaisons de pics (une droite par côté, sans les décalages de bord) par un score géométrique : force et
+// couverture des bords, proportions d'une carte, écart au guide ; les k meilleures servent de départs.
+export function seedCombos(so, { k = 6, maxPeaks = 6, landscape = false } = {}) {
+  const per = so.sides.map(side => {
+    const seen = new Set(), list = [];
+    side.info.forEach((inf, i) => {
+      if (!inf || seen.has(inf) || list.length >= maxPeaks) return;
+      seen.add(inf);
+      list.push({ i, inf });
+    });
+    const vmax = Math.max(1e-6, ...list.map(x => x.inf.v || 0));
+    return list.map(({ i, inf }) => ({
+      i, w: (inf.v || 0) / vmax * (0.5 + 0.5 * Math.min(1, inf.cov || 0)) - 0.8 * Math.abs(side.opts[i].d) / so.h,
+    }));
+  });
+  if (per.some(p => !p.length)) return [];
+  const want = landscape ? 1 / RATIO : RATIO, out = [];
+  for (const a of per[0]) for (const b of per[1]) for (const c of per[2]) for (const d of per[3]) {
+    const ch = [a.i, b.i, c.i, d.i];
+    const q = quadFrom(ch.map((x, s) => so.sides[s].opts[x]), { landscape });
+    if (!q) continue;
+    const L = (i, j) => Math.hypot(q[j][0] - q[i][0], q[j][1] - q[i][1]);
+    const ratio = (L(0, 1) + L(3, 2)) / Math.max(1e-3, L(0, 3) + L(1, 2));
+    out.push({ ch, s: a.w + b.w + c.w + d.w - 6 * Math.abs(ratio - want) / want });
+  }
+  out.sort((x, y) => y.s - x.s);
+  return out.slice(0, k).map(x => x.ch);
+}
+
 // Recherche « analyse par synthèse » : descente par coordonnées sur les options de chaque côté,
 // objectif = distance de la meilleure carte de la base (plus petit = mieux). Les évaluations sont mises en cache.
 export function search(so, objective, { passes = 2, seeds = null, cache = new Map(), landscape = false } = {}) {

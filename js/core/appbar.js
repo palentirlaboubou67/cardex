@@ -33,8 +33,9 @@ function dom() {
       const a = b && cfg?.actions?.[+b.dataset.act];
       if (a?.onClick) { e.preventDefault(); a.onClick(e, b); }
     });
+    // pas de lecture de scrollY ici : setBar est appelé pendant le premier rendu, et lire scrollY y forcerait une mise en
+    // page (longue tâche du démarrage). Le routeur repose le défilement avec scrollTo, qui envoie l'événement.
     addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
   }
   return els;
 }

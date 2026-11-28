@@ -456,9 +456,13 @@ def main():
             t, a1, a7, a30, low = (cents(v) for v in arr)
             eq(r['g']['low'], low, 'low en euros')
             eq(r['g']['avg30'], a30, 'avg30')
-            ref = a7 or a30
-            sane = t is not None and (not ref or ref / 5 <= t <= ref * 5)
-            eq(r['g']['eur'], t if sane else (a30 or a7 or a1), 'eur = tendance plausible sinon avg30')
+            # même garde que MK (tools/market/prices.py sane_trend) : majorité des moyennes, sinon leur médiane
+            refs = sorted(x for x in (a1, a7, a30) if x)
+            want = t
+            if t and refs and 2 * sum(1 for x in refs if x / 5 <= t <= x * 5) <= len(refs):
+                want = refs[len(refs) // 2] if len(refs) % 2 else (refs[len(refs) // 2 - 1] + refs[len(refs) // 2]) / 2
+            want = want or a7 or a30
+            check(abs((r['g']['eur'] or -1) - (want or -1)) < 1e-9, 'eur = tendance gardée (règle de MK)', (r['g']['eur'], want))
             eq(r['e'], r['g']['eur'], 'eur()')
             eq(r['d'], f['d'], 'date du guide')
             check(r['has'] and r['none'] is None, 'série sans fichier : chargée, sans cote')
@@ -472,33 +476,37 @@ def main():
 
         def t_prices_all():
             # tous les fichiers de cotes : chaque entrée relue par get(), règles de forme vérifiées (centimes -> euros,
-            # tendance plausible sinon avg30, finition absente = null), temps de chargement
+            # tendance gardée par MK sinon avg30, 6e valeur = toutes éditions, finition absente = null), temps de chargement
             pdir = PRICE_DIR if REAL_PRICES else os.path.join(FIX, 'market', 'prices')
             files = {x[:-5]: jload(pdir, x) for x in sorted(os.listdir(pdir)) if x.endswith('.json')}
             q = fresh()
             r = q.evaluate('''async (files) => {
               const t = performance.now(); await PR.ensure(Object.keys(files)); const ms = performance.now() - t;
               const e2 = v => (typeof v === 'number' && v > 0 ? v / 100 : null);
-              let n = 0, bad = [], absent = 0, sum = 0;
+              let n = 0, bad = [], absent = 0, sum = 0, ed6 = 0, moved = 0;
               for (const [sid, f] of Object.entries(files)) {
                 for (const [lid, fins] of Object.entries(f.c)) {
                   const id = sid + '-' + lid;
                   for (const [fin, a] of Object.entries(fins)) {
                     n++;
-                    const g = PR.get(id, fin), [t1, a1, a7, a30, low] = a.map(e2);
-                    const ref = a7 ?? a30, sane = t1 != null && (!ref || (t1 >= ref / 5 && t1 <= ref * 5));
-                    const want = sane ? t1 : (a30 ?? a7 ?? a1);
+                    const g = PR.get(id, fin), [t1, a1, a7, a30, low] = a.slice(0, 5).map(e2);
+                    const want = PR.saneTrend(t1, a1, a7, a30);   // règle de MK (déjà appliquée : rien ne change)
+                    if (t1 != null && Math.abs(want - t1) > 1e-9) moved++;
                     if (!g ? (want != null || low != null) : (Math.abs((g.eur ?? -1) - (want ?? -1)) > 1e-9 || g.low !== low)) bad.push([id, fin, a, g]);
+                    // 6e valeur 1 (le produit sert aussi l'impression sans tampon) : prix toutes éditions
+                    if (g && a[5] === 1 && (fin === 'firstEdition' || fin === 'stamp') && !g.allEditions) bad.push([id, fin, a, 'allEditions attendu']);
+                    if (g && a[5] === 1) ed6++;
                     if (g && g.eur != null) sum += g.eur;
                   }
                   for (const fin of ['stamp', 'masterball']) if (!fins[fin]) { absent++; if (PR.get(id, fin) !== null) bad.push([id, fin, 'absente', PR.get(id, fin)]); }
                 }
               }
-              return { ms, n, bad: bad.slice(0, 5), nbad: bad.length, absent, sum, date: PR.date() };
+              return { ms, n, bad: bad.slice(0, 5), nbad: bad.length, absent, sum, ed6, moved, date: PR.date() };
             }''', files)
             q.close()
             eq(r['nbad'], 0, 'chaque entrée relue selon les règles')
-            return f"{len(files)} fichiers chargés en {r['ms']:.0f} ms, {r['n']} entrées, {r['absent']} finitions absentes = null, guide du {r['date']}"
+            eq(r['moved'], 0, 'tendances des fichiers déjà gardées par MK : la règle ne les change pas')
+            return f"{len(files)} fichiers chargés en {r['ms']:.0f} ms, {r['n']} entrées ({r['ed6']} toutes éditions), {r['absent']} finitions absentes = null, guide du {r['date']}"
 
         def t_prices_parallel():
             # ≤ 6 fichiers en parallèle : le serveur ralentit chaque réponse et compte les requêtes simultanées
@@ -552,7 +560,7 @@ def main():
             eq(r['mb'], 1.63, 'Master Ball : produit séparé, -holo')
             eq(r['pbNoProduct'], None, 'Poké Ball sans produit : pas la cote reverse')
             eq(r['cosmos'], 1.21, 'Cosmos holo : champs de base du produit séparé')
-            eq(r['broken'], 84.26, 'tendance cassée -> avg30')
+            eq(r['broken'], 52.045, 'tendance cassée -> médiane des moyennes 7 et 30 j (règle de MK)')
             eq(r['noCosmos'], None, 'finition absente')
             eq(r['normal'], 0.23, 'normale')
 
